@@ -3,18 +3,16 @@ package dev.tessera.iam.adapter.rest;
 import io.smallrye.mutiny.Uni;
 import dev.tessera.iam.adapter.rest.config.OidcDiscoveryConfig;
 import dev.tessera.iam.adapter.rest.dto.DiscoveryDto;
+import dev.tessera.iam.adapter.rest.tenancy.TenantContext;
+import dev.tessera.iam.adapter.rest.tenancy.TenantScoped;
 import dev.tessera.iam.domain.oidc.DiscoveryDocument;
 import dev.tessera.iam.domain.oidc.OidcCapabilities;
-import dev.tessera.iam.domain.tenancy.BaselineId;
 import dev.tessera.iam.domain.tenancy.RealmKey;
-import dev.tessera.iam.domain.tenancy.TenantId;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.GET;
-import jakarta.ws.rs.HeaderParam;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
-import java.util.UUID;
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.media.Content;
 import org.eclipse.microprofile.openapi.annotations.media.Schema;
@@ -36,14 +34,22 @@ import org.jboss.resteasy.reactive.RestResponse;
  * <p>Responses carry a short {@code Cache-Control} max-age, deliberately shorter than the
  * PENDING dwell, so a verifier re-fetches the JWKS and pre-trusts a {@code PENDING} key
  * before it is promoted to signing.
+ *
+ * <p>The realm is read from the request-scoped {@link TenantContext}, which the tenant
+ * resolution filter populated from the gateway-asserted ingress headers — this resource
+ * never parses the headers itself.
  */
 @Path("/.well-known/openid-configuration")
 @Produces(MediaType.APPLICATION_JSON)
+@TenantScoped
 @Tag(name = "discovery", description = "OpenID Provider metadata (OIDC Discovery).")
 public class DiscoveryResource {
 
     @Inject
     OidcDiscoveryConfig config;
+
+    @Inject
+    TenantContext tenantContext;
 
     @GET
     @Operation(
@@ -53,12 +59,11 @@ public class DiscoveryResource {
             responseCode = "200",
             description = "The OpenID Provider metadata, generated from the enforced capability set.",
             content = @Content(schema = @Schema(implementation = DiscoveryDto.class)))
-    public Uni<RestResponse<DiscoveryDto>> openIdConfiguration(
-            @HeaderParam("X-Tenant-Id") String tenantHeader,
-            @HeaderParam("X-Baseline-Id") String baselineHeader) {
-        // Realm is resolved for fail-closed tenant scoping; the issuer is server config
-        // per resolved realm (baseline tier: one configured issuer), never the Host header.
-        RealmKey realm = realm(tenantHeader, baselineHeader);
+    public Uni<RestResponse<DiscoveryDto>> openIdConfiguration() {
+        // Realm comes from the request-scoped context (resolved by the tenant filter); the
+        // issuer is server config per resolved realm (baseline tier: one configured
+        // issuer), never the Host header.
+        RealmKey realm = tenantContext.realm();
         String issuer = issuerFor(realm);
         DiscoveryDocument doc = DiscoveryDocument.forIssuer(issuer, OidcCapabilities.enforced());
         DiscoveryDto dto = DiscoveryDto.from(doc);
@@ -79,20 +84,5 @@ public class DiscoveryResource {
 
     private String cacheControl() {
         return "public, max-age=" + config.jwks().cacheTtlSeconds();
-    }
-
-    /**
-     * Resolves the realm from the tenant headers (fail-closed). {@code X-Tenant-Id} is
-     * required; {@code X-Baseline-Id} defaults to the zero baseline when absent.
-     */
-    private static RealmKey realm(String tenantHeader, String baselineHeader) {
-        if (tenantHeader == null || tenantHeader.isBlank()) {
-            throw new jakarta.ws.rs.BadRequestException("Missing X-Tenant-Id header");
-        }
-        TenantId tenant = new TenantId(UUID.fromString(tenantHeader));
-        BaselineId baseline = (baselineHeader == null || baselineHeader.isBlank())
-                ? new BaselineId(new UUID(0L, 0L))
-                : new BaselineId(UUID.fromString(baselineHeader));
-        return new RealmKey(tenant, baseline);
     }
 }
