@@ -123,6 +123,16 @@ The checkpoint interval is `iam.audit.checkpoint.interval` (a duration, default 
 set `disabled` to turn the trigger off). Chain continuity and every form of tamper
 detection are proven by unit tests.
 
+The log can grow without bound, so verification is **constant-memory**: the chain math is
+a pure per-entry fold step (`AuditChain.verifyNext`, mirroring the auth-flow reducer — no
+I/O, no framework) and the storage is an outbound port (`TenantAuditLogRepository`) that
+streams a tenant's entries as a reactive `Multi` ordered by sequence. Verification folds
+the pure step over that stream and never materializes the whole chain, so it stays O(1) in
+memory whatever the chain length; historical checkpoints are verified the same way, by
+streaming to the anchored entry. The bundled in-memory repository is the self-contained
+default; a deployment supplies a durable streaming adapter (e.g. reactive Postgres,
+`ORDER BY sequence`) without touching the chain core.
+
 ## Benchmark — startup & footprint
 
 A core goal is to be dramatically lighter than a traditional JEE-era server. Measured

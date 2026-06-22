@@ -30,19 +30,21 @@ public class CheckpointScheduler {
 
     /**
      * Checkpoints every known tenant. Skipped concurrent overlap so a slow run never
-     * stacks on the next tick.
+     * stacks on the next tick. One tenant's checkpoint failing must not stop the others,
+     * so each is recovered independently; the scheduled method blocks until the run
+     * completes (the scheduler runs it off the event loop).
      */
     @Scheduled(
             every = "{iam.audit.checkpoint.interval:1h}",
             concurrentExecution = Scheduled.ConcurrentExecution.SKIP)
     void checkpointAllTenants() {
-        var tenants = auditLog.tenants();
+        var tenants = auditLog.tenants().await().indefinitely();
         if (tenants.isEmpty()) {
             return;
         }
         for (String tenant : tenants) {
             try {
-                auditLog.checkpoint(tenant);
+                auditLog.checkpoint(tenant).await().indefinitely();
             } catch (RuntimeException e) {
                 // One tenant's checkpoint failing must not stop the others.
                 LOG.errorf(e, "Failed to checkpoint audit chain for tenant %s", tenant);
