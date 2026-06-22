@@ -12,9 +12,8 @@ import org.eclipse.microprofile.health.HealthCheckResponseBuilder;
  * the subsystem statuses up into an overall verdict according to a pluggable
  * {@link ReadinessPolicy}.
  *
- * <p>Extracted from the three near-identical readiness checks TTC, SFD and SMS
- * grew independently. A concrete subclass is annotated
- * {@code @Readiness @ApplicationScoped}, injects the registry, and supplies:</p>
+ * <p>A concrete subclass is annotated {@code @Readiness @ApplicationScoped},
+ * injects the registry, and supplies:</p>
  * <ul>
  *   <li>{@link #serviceName()} — the {@code named(...)} of the response;</li>
  *   <li>{@link #subsystems()} — the ordered catalogue of subsystems to render,

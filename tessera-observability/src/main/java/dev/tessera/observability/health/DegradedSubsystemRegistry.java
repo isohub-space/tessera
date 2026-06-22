@@ -11,11 +11,10 @@ import org.jboss.logging.Logger;
  * subsystems so the service can start <strong>degraded</strong> rather than
  * crash when one is missing.
  *
- * <p>Extracted from the per-service copies that TTC, SFD and SMS each grew
- * independently. A subsystem is identified by a free-form name (e.g.
- * {@code "kafka"}, {@code "orekit"}); the owning service declares its catalogue
- * by {@linkplain #register(String, SubsystemStatus) registering} each name once
- * at startup, then flips statuses as its probes observe the world. An
+ * <p>A subsystem is identified by a free-form name (e.g. {@code "kafka"},
+ * {@code "database"}); the owning service declares its catalogue by
+ * {@linkplain #register(String, SubsystemStatus) registering} each name once at
+ * startup, then flips statuses as its probes observe the world. An
  * {@link AbstractReadinessCheck} projects the registry into
  * {@code GET /q/health/ready}.</p>
  *

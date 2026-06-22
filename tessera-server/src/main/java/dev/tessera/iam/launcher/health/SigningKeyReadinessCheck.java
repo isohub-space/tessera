@@ -3,11 +3,14 @@ package dev.tessera.iam.launcher.health;
 import io.smallrye.mutiny.Uni;
 import dev.tessera.iam.adapter.persistence.DevTenant;
 import dev.tessera.iam.domain.signingkey.SigningKeyState;
+import dev.tessera.observability.metrics.IamMetrics;
+import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import java.time.Duration;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicLong;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.eclipse.microprofile.health.HealthCheck;
 import org.eclipse.microprofile.health.HealthCheckResponse;
@@ -40,6 +43,13 @@ import org.hibernate.reactive.mutiny.Mutiny;
  *
  * <p>The DOWN-when-empty / UP-when-ACTIVE behaviour against a real datasource is
  * proven by {@code SigningKeyReadinessIT} in {@code iam-persistence} (Testcontainers).</p>
+ *
+ * <p><strong>Metric.</strong> Each probe also publishes the observed active-signing-key
+ * count to the {@code iam.key.active} gauge (subsystem {@code key}). The gauge samples a
+ * value the check refreshes whenever it runs, so scraping it adds no datasource load of
+ * its own; an operator can alert on it dropping to zero, which is the same fail-closed
+ * condition the readiness gate enforces, and watch it move across a key rotation as a
+ * {@code PENDING} key is promoted to {@code ACTIVE}.</p>
  */
 @Readiness
 @ApplicationScoped
@@ -56,6 +66,21 @@ public class SigningKeyReadinessCheck implements HealthCheck {
 
     @Inject
     Instance<Mutiny.SessionFactory> sessionFactory;
+
+    @Inject
+    IamMetrics metrics;
+
+    /**
+     * Last active-key count observed by a probe, sampled by the {@code iam.key.active}
+     * gauge. {@code -1} until the first probe completes (distinguishing "not yet probed"
+     * from an observed zero).
+     */
+    private final AtomicLong lastActiveKeyCount = new AtomicLong(-1L);
+
+    @PostConstruct
+    void registerGauge() {
+        metrics.gauge("key", "active", lastActiveKeyCount, AtomicLong::doubleValue);
+    }
 
     @Override
     public HealthCheckResponse call() {
@@ -74,6 +99,7 @@ public class SigningKeyReadinessCheck implements HealthCheck {
                     .build();
         }
         long activeKeys = countActiveDevTenantKeys(sessionFactory.get());
+        lastActiveKeyCount.set(activeKeys);
         return HealthCheckResponse.named(NAME)
                 .withData("tenant", DevTenant.ID.toString())
                 .withData("activeSigningKeys", activeKeys)

@@ -78,6 +78,79 @@ PostgreSQL via [Testcontainers](https://testcontainers.org), so they require a
 running Docker daemon. They run in the `verify` phase; pass `-DskipITs` to skip
 them when Docker isn't available.
 
+## Observability
+
+Tessera ships first-class observability in the `tessera-observability` module; the
+composition root inherits it simply by depending on the module.
+
+- **Metrics** — Micrometer with a Prometheus registry on `GET /q/metrics`. Every
+  application meter follows one convention, `iam.<subsystem>.<metric>` (rendered by
+  Prometheus as e.g. `iam_server_started_total`), produced through a single naming
+  authority so the convention is applied in exactly one place. Wired out of the box:
+  `iam.server.started` / `iam.server.uptime` (lifecycle), `iam.key.active` (the count
+  of `ACTIVE` signing keys, refreshed by the readiness probe — alert on it reaching
+  zero, watch it move across a rotation), and `iam.audit.entry` / `iam.audit.checkpoint`
+  (see below). Standard JVM and HTTP-server binders are enabled too.
+- **Tracing** — OpenTelemetry OTLP export (endpoint and sampler configurable via the
+  usual `OTEL_*` environment variables).
+- **Health** — SmallRye Health liveness/readiness on `/q/health[/live|/ready]`, with a
+  degraded-subsystem registry so the server can start *degraded* rather than crash when
+  a non-critical dependency is missing, and fail *closed* on a critical one (e.g.
+  readiness is `DOWN` until an `ACTIVE` signing key exists).
+
+### Tamper-evident audit log
+
+Security-relevant events are recorded in a **per-tenant hash chain**: each entry hashes
+over the previous entry's hash, so altering, inserting, deleting or reordering any entry
+breaks the chain and is detected at the offending entry. Chains are strictly per-tenant —
+one tenant can neither read nor affect another's chain.
+
+Periodically the server produces a **signed checkpoint** over each chain's head. Because
+the head hash transitively covers every prior entry, a single Ed25519 (EdDSA) signature
+over it attests the whole chain up to that point: a holder of the public key can confirm
+the log has not been truncated or rewritten behind the checkpoint, which an attacker
+cannot forge without the private key. The bundled signer keeps an in-process key for
+self-contained operation; a deployment can supply a KMS/HSM-backed signer without
+touching the chain logic. Entries and checkpoints are published on an in-process
+`iam.audit.*` event channel that a deployment observes to forward to a durable,
+append-only sink (broker, object store, SIEM) — the chain core stays transport-agnostic.
+
+The checkpoint interval is `iam.audit.checkpoint.interval` (a duration, default `1h`;
+set `disabled` to turn the trigger off). Chain continuity and every form of tamper
+detection are proven by unit tests.
+
+## Benchmark — startup & footprint
+
+A core goal is to be dramatically lighter than a traditional JEE-era server. Measured
+on the assembled `tessera-server` (JDK 25, Quarkus 3.35.4) booting with the datasource
+deactivated, so the figure isolates framework/application startup:
+
+| Mode | Cold-start (to *started*) | Resident memory (RSS) |
+|------|---------------------------|------------------------|
+| **JVM** (`quarkus-run.jar`) | ~1.2–1.5 s | ~160–225 MiB |
+| **Native** (GraalVM image) | *(target: sub-100 ms; not yet measured here — see note)* | *(target: tens of MiB)* |
+
+For reference, Keycloak — a mature JVM OIDC server — typically takes several seconds to
+start and holds hundreds of MiB resident; Tessera's JVM mode already starts in roughly a
+second, and native-image is expected to bring cold-start into the tens-of-milliseconds
+range with a fraction of the memory.
+
+Build and measure the native executable with:
+
+```bash
+# Requires a GraalVM/Mandrel toolchain, or add -Dquarkus.native.container-build=true
+# to build it inside a builder image (needs Docker/Podman).
+mvn -Pnative -DskipITs -pl tessera-server -am package
+
+# Cold-start + RSS of the produced executable:
+/usr/bin/time -l ./tessera-server/target/*-runner
+```
+
+> The native numbers above are left as targets: the build host used for the current
+> measurements has neither a GraalVM/Mandrel toolchain nor a container runtime available,
+> so only JVM-mode figures are recorded. Re-run the command above on a host with the
+> toolchain to fill them in.
+
 ## Roadmap
 
 - [ ] OAuth2 `/authorize` + `/token` endpoints (authorization-code + PKCE, client-credentials)

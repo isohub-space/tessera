@@ -38,6 +38,11 @@
       <groupId>io.quarkus</groupId>
       <artifactId>quarkus-smallrye-health</artifactId>
     </dependency>
+    <!-- Drives the periodic signed-checkpoint trigger over the audit chains. -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-scheduler</artifactId>
+    </dependency>
 
     <!-- Test -->
     <dependency>
@@ -61,4 +66,28 @@
       <scope>test</scope>
     </dependency>
   </dependencies>
+
+  <build>
+    <plugins>
+      <!--
+        Bundling the scheduler (and the OpenTelemetry/Micrometer) extensions brings
+        OSGi bundle annotations onto the classpath whose definitions are not present
+        at compile time. javac emits harmless "class file not found" (classfile) lint
+        warnings for those; with the inherited -Werror they would fail the build.
+        Keep strict linting but exclude only the classfile category here.
+      -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <configuration>
+          <compilerArgs>
+            <arg>-Xlint:all</arg>
+            <arg>-Xlint:-processing</arg>
+            <arg>-Xlint:-classfile</arg>
+            <arg>-Werror</arg>
+          </compilerArgs>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
 </project>

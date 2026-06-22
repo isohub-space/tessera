@@ -39,4 +39,24 @@ class HealthAndMetricsTest {
                 // JVM binder is enabled, so a baseline JVM metric is present.
                 .body(containsString("jvm_"));
     }
+
+    @Test
+    @DisplayName("the application iam.server.* metrics are wired through the assembly")
+    void applicationServerMetricsExposed() {
+        // ServerStartupMetrics records iam.server.started on boot; Prometheus renders
+        // the dotted name with underscores.
+        given().when().get("/q/metrics").then()
+                .statusCode(200)
+                .body(containsString("iam_server_started"));
+    }
+
+    @Test
+    @DisplayName("the iam.key.active gauge is registered through the assembly")
+    void keyActiveGaugeExposed() {
+        // SigningKeyReadinessCheck registers iam.key.active at @PostConstruct, so the
+        // gauge is present even under %test where the readiness probe is config-disabled.
+        given().when().get("/q/metrics").then()
+                .statusCode(200)
+                .body(containsString("iam_key_active"));
+    }
 }

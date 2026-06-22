@@ -142,4 +142,26 @@
       </plugin>
     </plugins>
   </build>
+
+  <profiles>
+    <!--
+      Native image. `mvn -Pnative -DskipITs package` produces a GraalVM
+      native executable (a GraalVM/Mandrel toolchain must be available, or set
+      -Dquarkus.native.container-build=true to build it inside a builder image).
+      The headline cold-start / RSS benchmark in the project README is measured
+      from the artifact this profile produces.
+    -->
+    <profile>
+      <id>native</id>
+      <activation>
+        <property>
+          <name>native</name>
+        </property>
+      </activation>
+      <properties>
+        <quarkus.native.enabled>true</quarkus.native.enabled>
+        <quarkus.package.jar.enabled>false</quarkus.package.jar.enabled>
+      </properties>
+    </profile>
+  </profiles>
 </project>
