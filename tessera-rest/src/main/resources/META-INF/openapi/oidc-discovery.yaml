@@ -1,0 +1,180 @@
+openapi: 3.1.0
+info:
+  title: OIDC Discovery and JWKS API
+  version: "1.0.0"
+  description: >
+    Read-only OpenID Connect discovery surface of the authorization server. The
+    discovery document is generated from the server's enforced capability set, so it
+    never advertises a capability the server does not enforce. The JWKS publishes the
+    realm's public verification keys (PENDING + ACTIVE + RETIRING), so a verifier can
+    pre-trust a key before it signs (publish-before-sign).
+tags:
+  - name: discovery
+    description: OpenID Provider metadata (OIDC Discovery).
+  - name: jwks
+    description: Published public verification keys (JWK Set).
+paths:
+  /.well-known/openid-configuration:
+    get:
+      tags: [discovery]
+      operationId: getOpenIdConfiguration
+      summary: OpenID Provider metadata document (OIDC Discovery)
+      description: >
+        Returns the OpenID Provider metadata (OpenID Connect Discovery 1.0 / RFC 8414).
+        The issuer is server configuration for the resolved realm and is never derived
+        from the request Host header.
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/BaselineId"
+      responses:
+        "200":
+          description: The OpenID Provider metadata.
+          headers:
+            Cache-Control:
+              description: >
+                Short max-age, strictly less than the PENDING dwell, so verifiers
+                re-fetch the JWKS before a PENDING key is promoted to signing.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DiscoveryDocument"
+        "400":
+          description: Missing or malformed X-Tenant-Id header.
+  /jwks:
+    get:
+      tags: [jwks]
+      operationId: getJwks
+      summary: Published public verification keys (JWK Set)
+      description: >
+        Returns the realm's published public keys as a JWK Set (RFC 7517 section 5):
+        the PENDING, ACTIVE and RETIRING keys. No private key material is ever served.
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/BaselineId"
+      responses:
+        "200":
+          description: The realm's published public keys.
+          headers:
+            Cache-Control:
+              description: >
+                Short max-age, strictly less than the PENDING dwell, so a verifier
+                re-fetches and pre-trusts a PENDING key before it signs.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JwkSet"
+        "400":
+          description: Missing or malformed X-Tenant-Id header.
+components:
+  parameters:
+    TenantId:
+      name: X-Tenant-Id
+      in: header
+      required: true
+      description: The realm's tenant identifier (UUID). Required (fail-closed).
+      schema:
+        type: string
+        format: uuid
+    BaselineId:
+      name: X-Baseline-Id
+      in: header
+      required: false
+      description: The realm's baseline identifier (UUID); defaults to the zero baseline.
+      schema:
+        type: string
+        format: uuid
+  schemas:
+    DiscoveryDocument:
+      type: object
+      description: OpenID Provider metadata (OIDC Discovery 1.0).
+      required:
+        - issuer
+        - authorization_endpoint
+        - token_endpoint
+        - userinfo_endpoint
+        - jwks_uri
+        - response_types_supported
+        - grant_types_supported
+        - subject_types_supported
+        - id_token_signing_alg_values_supported
+        - code_challenge_methods_supported
+        - token_endpoint_auth_methods_supported
+        - scopes_supported
+        - dpop_signing_alg_values_supported
+        - tls_client_certificate_bound_access_tokens
+      properties:
+        issuer:
+          type: string
+        authorization_endpoint:
+          type: string
+        token_endpoint:
+          type: string
+        userinfo_endpoint:
+          type: string
+        jwks_uri:
+          type: string
+        response_types_supported:
+          type: array
+          items: { type: string }
+        grant_types_supported:
+          type: array
+          items: { type: string }
+        subject_types_supported:
+          type: array
+          items: { type: string }
+        id_token_signing_alg_values_supported:
+          type: array
+          items: { type: string }
+        code_challenge_methods_supported:
+          type: array
+          items: { type: string }
+        token_endpoint_auth_methods_supported:
+          type: array
+          items: { type: string }
+        scopes_supported:
+          type: array
+          items: { type: string }
+        dpop_signing_alg_values_supported:
+          type: array
+          items: { type: string }
+        tls_client_certificate_bound_access_tokens:
+          type: boolean
+    JwkSet:
+      type: object
+      description: A JWK Set (RFC 7517 section 5).
+      required: [keys]
+      properties:
+        keys:
+          type: array
+          items:
+            $ref: "#/components/schemas/Jwk"
+    Jwk:
+      type: object
+      description: A public JSON Web Key (RFC 7517 / RFC 8037).
+      required: [kty, kid, alg, use, x]
+      properties:
+        kty:
+          type: string
+          description: Key type (e.g. OKP, EC).
+        crv:
+          type: string
+          description: Curve (e.g. Ed25519, P-256).
+        x:
+          type: string
+          description: base64url public coordinate / point encoding.
+        y:
+          type: [string, "null"]
+          description: base64url Y coordinate for EC keys; absent for OKP keys.
+        kid:
+          type: string
+          description: Key identifier.
+        alg:
+          type: string
+          description: Algorithm (e.g. EdDSA, ES256).
+        use:
+          type: string
+          description: Public key use (e.g. sig).
