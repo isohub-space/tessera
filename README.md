@@ -10,10 +10,12 @@ whose whole job is issuing verifiable tokens of identity.
 > **Status: early / experimental.** The cryptographic core (signing-key lifecycle,
 > JWKS, OIDC discovery), the reactive multi-tenant persistence layer (users,
 > clients, sessions, consents and rotating refresh-token families, each behind
-> fail-closed row-level security), and the functional auth-flow domain model are in
-> place. Many authorization-server
-> surfaces (the full `/authorize` + `/token` grant pipeline, client registration,
-> consent UI) are still on the roadmap below. Not yet recommended for production.
+> fail-closed row-level security), the functional auth-flow domain model, and the
+> **Authorization Code flow with mandatory PKCE (S256)** — `/authorize` →
+> `/token`, issuing signed RFC 9068 JWT access tokens and OIDC ID tokens — are in
+> place. Other authorization-server surfaces (client registration,
+> refresh/introspection/revocation, a login/consent UI, the remaining grants) are
+> still on the roadmap below. Not yet recommended for production.
 
 ## Why
 
@@ -155,7 +157,12 @@ mvn -Pnative -DskipITs -pl tessera-server -am package
 
 ## Roadmap
 
-- [ ] OAuth2 `/authorize` + `/token` endpoints (authorization-code + PKCE, client-credentials)
+- [x] OAuth2 `/authorize` + `/token` Authorization Code flow with mandatory PKCE
+      (S256) — single-use codes, RFC 9068 JWT access tokens, RFC 9207 `iss`
+- [ ] Distributed (clustered) authorization-code store — the shipped store is
+      single-node in-memory; a shared cache is needed for a multi-node deployment
+- [ ] Remaining grants (client-credentials) and a registered-redirect-URI check
+      at `/authorize`
 - [ ] Dynamic client registration (RFC 7591)
 - [ ] Refresh tokens & token introspection/revocation (RFC 7662 / 7009)
 - [ ] Pluggable user/credential stores and a consent UI
