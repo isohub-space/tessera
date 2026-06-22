@@ -8,8 +8,10 @@ Tessera issues and signs OpenID Connect / OAuth 2.0 tokens. The name is the Roma
 whose whole job is issuing verifiable tokens of identity.
 
 > **Status: early / experimental.** The cryptographic core (signing-key lifecycle,
-> JWKS, OIDC discovery), the reactive multi-tenant persistence layer, and the
-> functional auth-flow domain model are in place. Many authorization-server
+> JWKS, OIDC discovery), the reactive multi-tenant persistence layer (users,
+> clients, sessions, consents and rotating refresh-token families, each behind
+> fail-closed row-level security), and the functional auth-flow domain model are in
+> place. Many authorization-server
 > surfaces (the full `/authorize` + `/token` grant pipeline, client registration,
 > consent UI) are still on the roadmap below. Not yet recommended for production.
 
