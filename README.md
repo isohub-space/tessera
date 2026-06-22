@@ -28,7 +28,11 @@ direction — a small, reactive, cloud-native authorization server with:
   without booting a container, with REST/persistence kept at the edges.
 - **Multi-tenancy that fails closed** — every tenant-scoped table is protected by
   PostgreSQL row-level security keyed to a per-transaction tenant id; a missing
-  tenant binding makes rows invisible rather than leaking them.
+  tenant binding makes rows invisible rather than leaking them. The caller's
+  tenant is resolved once, at the request edge, from a gateway-asserted
+  `X-Tenant-Id` header into a request-scoped tenant context (never inferred from
+  the request body); a request that carries no resolvable tenant is rejected before
+  it reaches a handler.
 - **Modern signing** — EdDSA (Ed25519) signing keys with an explicit
   `PENDING → ACTIVE → RETIRING → RETIRED` rotation lifecycle and a published JWKS.
 - **A typed, functional auth flow** — authentication steps and events modelled as
@@ -176,6 +180,9 @@ mvn -Pnative -DskipITs -pl tessera-server -am package
 - [ ] Dynamic client registration (RFC 7591)
 - [ ] Refresh tokens & token introspection/revocation (RFC 7662 / 7009)
 - [ ] Pluggable user/credential stores and a consent UI
+- [ ] Propagate the tenant onto a future message-broker consumer path (the
+      request-scoped resolver is shaped so a consumer interceptor can populate the
+      same tenant context identically once messaging is introduced)
 - [ ] Conformance against the OpenID Connect test suite
 - [ ] Re-enable static analysis gates (Checkstyle / SpotBugs) in the build
 

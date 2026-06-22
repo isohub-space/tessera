@@ -3,17 +3,15 @@ package dev.tessera.iam.adapter.rest;
 import io.smallrye.mutiny.Uni;
 import dev.tessera.iam.adapter.rest.config.OidcDiscoveryConfig;
 import dev.tessera.iam.adapter.rest.dto.JwkSetDto;
+import dev.tessera.iam.adapter.rest.tenancy.TenantContext;
+import dev.tessera.iam.adapter.rest.tenancy.TenantScoped;
 import dev.tessera.iam.application.port.out.KeyProviderPort;
-import dev.tessera.iam.domain.tenancy.BaselineId;
 import dev.tessera.iam.domain.tenancy.RealmKey;
-import dev.tessera.iam.domain.tenancy.TenantId;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.GET;
-import jakarta.ws.rs.HeaderParam;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
-import java.util.UUID;
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.media.Content;
 import org.eclipse.microprofile.openapi.annotations.media.Schema;
@@ -45,6 +43,7 @@ import org.jboss.resteasy.reactive.RestResponse;
  */
 @Path("/")
 @Produces(MediaType.APPLICATION_JSON)
+@TenantScoped
 @Tag(name = "jwks", description = "Published public verification keys (JWK Set).")
 public class JwksResource {
 
@@ -54,6 +53,9 @@ public class JwksResource {
     @Inject
     OidcDiscoveryConfig config;
 
+    @Inject
+    TenantContext tenantContext;
+
     @GET
     @Path("jwks")
     @Operation(operationId = "getJwks", summary = "Published public verification keys (JWK Set)")
@@ -61,10 +63,10 @@ public class JwksResource {
             responseCode = "200",
             description = "The realm's published (PENDING + ACTIVE + RETIRING) public keys.",
             content = @Content(schema = @Schema(implementation = JwkSetDto.class)))
-    public Uni<RestResponse<JwkSetDto>> jwks(
-            @HeaderParam("X-Tenant-Id") String tenantHeader,
-            @HeaderParam("X-Baseline-Id") String baselineHeader) {
-        RealmKey realm = realm(tenantHeader, baselineHeader);
+    public Uni<RestResponse<JwkSetDto>> jwks() {
+        // Realm comes from the request-scoped context, populated by the tenant filter from
+        // the gateway-asserted ingress headers — never parsed here, never from the body.
+        RealmKey realm = tenantContext.realm();
         return keyProvider.publishedJwks(realm)
                 .map(JwkSetDto::from)
                 .map(set -> RestResponse.ResponseBuilder.ok(set)
@@ -81,30 +83,11 @@ public class JwksResource {
             responseCode = "200",
             description = "The realm's published (PENDING + ACTIVE + RETIRING) public keys.",
             content = @Content(schema = @Schema(implementation = JwkSetDto.class)))
-    public Uni<RestResponse<JwkSetDto>> wellKnownJwks(
-            @HeaderParam("X-Tenant-Id") String tenantHeader,
-            @HeaderParam("X-Baseline-Id") String baselineHeader) {
-        return jwks(tenantHeader, baselineHeader);
+    public Uni<RestResponse<JwkSetDto>> wellKnownJwks() {
+        return jwks();
     }
 
     private String cacheControl() {
         return "public, max-age=" + config.jwks().cacheTtlSeconds();
-    }
-
-    /**
-     * Resolves the realm from the tenant headers. Full request-scoped tenant
-     * propagation (gateway → context) is handled elsewhere; here the realm is taken
-     * directly from {@code X-Tenant-Id} (and an optional {@code X-Baseline-Id}), with a
-     * zero baseline when none is supplied.
-     */
-    private static RealmKey realm(String tenantHeader, String baselineHeader) {
-        if (tenantHeader == null || tenantHeader.isBlank()) {
-            throw new jakarta.ws.rs.BadRequestException("Missing X-Tenant-Id header");
-        }
-        TenantId tenant = new TenantId(UUID.fromString(tenantHeader));
-        BaselineId baseline = (baselineHeader == null || baselineHeader.isBlank())
-                ? new BaselineId(new UUID(0L, 0L))
-                : new BaselineId(UUID.fromString(baselineHeader));
-        return new RealmKey(tenant, baseline);
     }
 }
