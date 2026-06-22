@@ -43,6 +43,16 @@
       <groupId>io.quarkus</groupId>
       <artifactId>quarkus-scheduler</artifactId>
     </dependency>
+    <!--
+      Reactive types for the streaming audit-log verification: the outbound
+      TenantAuditLogRepository port emits a Multi<AuditEntry> ordered by sequence,
+      which the audit log folds through the pure per-entry chain step so an
+      unbounded per-tenant log is verified in O(1) memory.
+    -->
+    <dependency>
+      <groupId>io.smallrye.reactive</groupId>
+      <artifactId>mutiny</artifactId>
+    </dependency>
 
     <!-- Test -->
     <dependency>

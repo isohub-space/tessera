@@ -78,7 +78,27 @@ public record AuditEntry(
     public static AuditEntry append(
             AuditEntry previous, String eventType, Instant timestamp, Map<String, String> attributes) {
         Objects.requireNonNull(previous, "previous must not be null");
-        return create(previous.sequence() + 1, previous.tenant(), eventType, timestamp, attributes, previous.hash());
+        return appendAfter(
+                previous.sequence(), previous.tenant(), previous.hash(), eventType, timestamp, attributes);
+    }
+
+    /**
+     * Appends a new entry after a known chain head identified only by its sequence and
+     * hash — the form a streaming store exposes without materializing the previous entry.
+     *
+     * @param previousSequence the head entry's sequence (the new entry takes the next one)
+     * @param tenant           the owning tenant
+     * @param previousHash     the head entry's hash, chained over by the new entry
+     * @param eventType        the new entry's event type
+     * @param timestamp        the new entry's event time
+     * @param attributes       the new entry's attributes
+     * @return the appended, self-hashed entry
+     */
+    public static AuditEntry appendAfter(
+            long previousSequence, String tenant, String previousHash,
+            String eventType, Instant timestamp, Map<String, String> attributes) {
+        Objects.requireNonNull(previousHash, "previousHash must not be null");
+        return create(previousSequence + 1, tenant, eventType, timestamp, attributes, previousHash);
     }
 
     /**
