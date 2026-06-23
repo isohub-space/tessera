@@ -1,0 +1,41 @@
+name: Feature request
+description: Propose a capability or enhancement for the authorization server.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / use case
+      description: What are you trying to do, and what's missing or hard today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: The behavior or capability you'd like. For protocol features, link the relevant RFC / OpenID specification.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches, workarounds, or prior art.
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Authorization / token endpoints
+        - Token formats & claims
+        - Client authentication / registration
+        - Keys & signing
+        - Multi-tenancy / isolation
+        - Discovery / metadata
+        - Observability / audit
+        - Operations / deployment
+        - Other
+    validations:
+      required: false
