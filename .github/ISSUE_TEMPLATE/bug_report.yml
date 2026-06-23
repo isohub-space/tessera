@@ -1,0 +1,57 @@
+name: Bug report
+description: Report a defect in the authorization server (not a security vulnerability).
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. **Do not report security vulnerabilities here** —
+        please use private advisory reporting instead (see our
+        [Security Policy](../../security/policy)).
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear description of the bug and its impact.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps (requests, config, grant type) that trigger the issue.
+      placeholder: |
+        1. Configure ...
+        2. Call POST /token with ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs. actual behavior
+      description: What you expected, and what happened instead (include any relevant RFC/OIDC clause).
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      description: Release tag or commit SHA.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: JDK, OS, database, deployment topology (gateway in front?), relevant config.
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant logs or stack traces. Redact any tokens, secrets, or tenant identifiers.
+      render: shell
+    validations:
+      required: false
