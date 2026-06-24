@@ -1,0 +1,61 @@
+name: CLA
+
+# Checks that every pull-request contributor has signed the Tessera
+# Contributor License Agreement (CLA.md) before the PR can be merged.
+#
+# Uses the contributor-assistant GitHub Action, which:
+#  1. On PR open/sync — verifies all commit authors have signed.
+#  2. If any have not — posts a comment with a one-click sign link.
+#  3. On "I have read the CLA Document and I hereby sign the CLA" comment
+#     from the contributor — records the signature and re-checks the PR.
+#
+# Signatures are stored in the `cla-signatures` branch of this repository
+# as a JSON file (no external service required).
+#
+# Setup required (one-time, by the repository maintainer):
+#  - Create a GitHub personal access token with `repo` scope and add it
+#    as a repository secret named TESSERA_CLA_TOKEN. The default
+#    GITHUB_TOKEN cannot write to branches other than the PR head, so a
+#    PAT is required to persist signatures to `cla-signatures`.
+#    See: https://github.com/contributor-assistant/github-action
+
+on:
+  pull_request_target:
+    types: [opened, closed, synchronize]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write    # write signatures to cla-signatures branch
+  pull-requests: write  # post comments on PRs
+  statuses: write    # set the cla-signed status check
+
+jobs:
+  cla-check:
+    name: cla-signed
+    runs-on: ubuntu-latest
+    # Only run on PRs to this repository; skip Dependabot (automated).
+    if: >
+      github.actor != 'dependabot[bot]' &&
+      github.actor != 'dependabot-preview[bot]'
+    steps:
+      - name: CLA Assistant
+        uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PERSONAL_ACCESS_TOKEN: ${{ secrets.TESSERA_CLA_TOKEN }}
+        with:
+          path-to-document: 'CLA.md'
+          branch: 'cla-signatures'
+          path-to-signatures: 'signatures/version1/cla.json'
+          create-file-commit-message: 'chore: initialise CLA signature store'
+          signed-commit-message: 'chore: record CLA signature for $contributorName'
+          custom-notsigned-prcomment: >
+            Thank you for your pull request! Before it can be merged, please
+            sign the **Tessera Contributor License Agreement**.
+
+
+            Click the button below — it takes about 30 seconds. The CLA text
+            is in [CLA.md](../blob/main/CLA.md).
+          custom-pr-sign-comment: 'I have read the CLA Document and I hereby sign the CLA'
+          allowlist: 'mova77'
