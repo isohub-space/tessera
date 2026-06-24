@@ -1,0 +1,90 @@
+name: SAST
+
+# Layered static application security testing on every PR and push to main.
+#
+#  • Semgrep — semantic pattern matching: Java security, OWASP Top-10, JWT
+#    anti-patterns (alg:none, weak secrets, missing signature verification).
+#  • Trivy  — filesystem CVE scan across all Maven dependencies and source
+#    files (HIGH + CRITICAL only; unfixed CVEs suppressed).
+#
+# Both tools upload SARIF to the Security > Code scanning tab.
+# Neither blocks merge on its own findings today; once a clean baseline is
+# established, Semgrep can be promoted to a required status check.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write
+
+concurrency:
+  group: sast-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  semgrep:
+    name: Semgrep (Java / OWASP / JWT)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install Semgrep
+        run: pip install semgrep --quiet
+
+      - name: Run Semgrep
+        # Runs fully offline — no SEMGREP_APP_TOKEN required.
+        # p/java        : general Java security anti-patterns
+        # p/owasp-top-ten: OWASP Top 10 mappings
+        # p/jwt         : JWT-specific issues (alg:none, symmetric-key confusion,
+        #                  missing signature verification, weak secrets)
+        run: |
+          semgrep scan \
+            --config "p/java" \
+            --config "p/owasp-top-ten" \
+            --config "p/jwt" \
+            --sarif \
+            --output semgrep.sarif \
+            . 2>/dev/null
+        continue-on-error: true
+
+      - name: Upload Semgrep SARIF
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        if: always()
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+  trivy:
+    name: Trivy (filesystem CVE scan)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Run Trivy filesystem scan
+        # Scans Maven dependency descriptors (pom.xml) and source for
+        # HIGH/CRITICAL CVEs using Trivy's bundled advisory database.
+        # ignore-unfixed: suppresses CVEs with no available fix to reduce noise.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          format: sarif
+          output: trivy.sarif
+          ignore-unfixed: true
+          exit-code: '0'
+
+      - name: Upload Trivy SARIF
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        if: always()
+        with:
+          sarif_file: trivy.sarif
+          category: trivy
