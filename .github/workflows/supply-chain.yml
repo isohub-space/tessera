@@ -8,8 +8,9 @@ name: Supply Chain Security
 #
 #  • OWASP Dependency Check — full NVD CVE scan of all direct and transitive
 #    Maven dependencies. Heavier than Trivy (downloads the NVD database); runs
-#    weekly and on push to main. NVD data is cached between runs.
-#    Optionally accelerated by setting the NVD_API_KEY repository secret
+#    weekly and on push to main. The plugin (config in the root pom) keeps its
+#    NVD data set in /tmp/owasp, which is cached between runs. The NVD_API_KEY
+#    organization secret lifts the anonymous rate-limit throttle
 #    (https://nvd.nist.gov/developers/request-an-api-key).
 #
 # Both jobs upload SARIF to the Security > Code scanning tab.
@@ -72,23 +73,21 @@ jobs:
       - name: Cache NVD database
         uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
         with:
-          path: ~/.m2/repository/org/owasp/dependency-check-data
+          path: /tmp/owasp
           key: nvd-${{ runner.os }}-${{ hashFiles('**/pom.xml') }}
           restore-keys: |
             nvd-${{ runner.os }}-
 
       - name: OWASP Dependency Check
-        # Fails the build only on CVSS ≥ 10 (perfect score = actively exploited
-        # critical RCE with no fix). Advisory findings surface via SARIF.
-        # Set NVD_API_KEY repository secret to remove NVD rate-limit throttle.
+        # The scan lives in the on-demand `owasp` profile; its configuration
+        # (data directory, SARIF output, CVSS gate) is in the root pom. CI only
+        # activates the profile and supplies the NVD API key from the
+        # organization secret to lift the anonymous rate limit. Fails only on
+        # CVSS 10; advisory findings surface via the uploaded SARIF.
         run: >
-          mvn -B -ntp
-          org.owasp:dependency-check-maven:10.0.4:check
-          -DfailBuildOnCVSS=10
+          mvn -B -ntp -Powasp dependency-check:check
           -DskipTests
-          -Dformat=SARIF
-          -DdataDirectory=$HOME/.m2/repository/org/owasp/dependency-check-data
-          -DnvdApiKey=${{ secrets.NVD_API_KEY }}
+          -Dnvd.api.key=${{ secrets.NVD_API_KEY }}
         continue-on-error: true
 
       - name: Upload OWASP DC SARIF

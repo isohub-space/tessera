@@ -66,6 +66,15 @@
     <maven-surefire-plugin.version>3.5.6</maven-surefire-plugin.version>
     <maven-failsafe-plugin.version>3.5.6</maven-failsafe-plugin.version>
 
+    <!--
+      Security tooling. dependency-check lives in the on-demand `owasp` profile
+      (activated with -Powasp), so it is never resolved or run during a normal
+      build. nvd.api.key is empty by default and supplied by CI from the
+      NVD_API_KEY secret to lift the anonymous NVD rate limit.
+    -->
+    <dependency-check-maven.version>10.0.4</dependency-check-maven.version>
+    <nvd.api.key></nvd.api.key>
+
     <!-- Release-profile plugins (inactive during normal builds). -->
     <maven-source-plugin.version>3.3.1</maven-source-plugin.version>
     <maven-javadoc-plugin.version>3.11.2</maven-javadoc-plugin.version>
@@ -211,6 +220,36 @@
   </build>
 
   <profiles>
+    <!--
+      owasp — on-demand security scan, activated explicitly with -Powasp by the
+      Supply Chain CI workflow. Kept out of the default build so a normal
+      `mvn verify` never resolves or runs the heavy dependency-check plugin.
+      Invoke with: mvn -Powasp dependency-check:check
+    -->
+    <profile>
+      <id>owasp</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.owasp</groupId>
+            <artifactId>dependency-check-maven</artifactId>
+            <version>${dependency-check-maven.version}</version>
+            <configuration>
+              <!-- Stable NVD data directory, outside the module target dirs, so
+                   CI can restore it across runs and a clean build never
+                   re-downloads the database. -->
+              <dataDirectory>/tmp/owasp</dataDirectory>
+              <!-- Supplied by CI from the NVD_API_KEY secret; empty locally. -->
+              <nvdApiKey>${nvd.api.key}</nvdApiKey>
+              <format>SARIF</format>
+              <!-- Fail only on a maxed-out CVSS (actively exploited critical). -->
+              <failBuildOnCVSS>10</failBuildOnCVSS>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+
     <!--
       release — activated by the release.yml CI workflow on tag push.
       Generates sources + Javadoc jars, signs all artifacts with GPG,
