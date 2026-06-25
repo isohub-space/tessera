@@ -16,7 +16,7 @@
     architecture: framework-free domain and api, REST and persistence adapters, and a
     thin Quarkus composition root.
   </description>
-  <url>https://github.com/mova77/tessera</url>
+  <url>https://github.com/isohub-space/tessera</url>
 
   <licenses>
     <license>
@@ -39,15 +39,15 @@
   </developers>
 
   <scm>
-    <connection>scm:git:https://github.com/mova77/tessera.git</connection>
-    <developerConnection>scm:git:https://github.com/mova77/tessera.git</developerConnection>
-    <url>https://github.com/mova77/tessera</url>
+    <connection>scm:git:https://github.com/isohub-space/tessera.git</connection>
+    <developerConnection>scm:git:https://github.com/isohub-space/tessera.git</developerConnection>
+    <url>https://github.com/isohub-space/tessera</url>
     <tag>HEAD</tag>
   </scm>
 
   <issueManagement>
     <system>GitHub Issues</system>
-    <url>https://github.com/mova77/tessera/issues</url>
+    <url>https://github.com/isohub-space/tessera/issues</url>
   </issueManagement>
 
   <properties>

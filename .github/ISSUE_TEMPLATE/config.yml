@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
   - name: Report a security vulnerability (private)
-    url: https://github.com/mova77/tessera/security/advisories/new
+    url: https://github.com/isohub-space/tessera/security/advisories/new
     about: Please report security issues privately via a GitHub security advisory — do not open a public issue.

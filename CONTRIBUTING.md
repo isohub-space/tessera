@@ -33,7 +33,7 @@ privately via GitHub's [Report a vulnerability][advisory] feature
 (Security › Advisories › *Report a vulnerability*). See
 [`SECURITY.md`](SECURITY.md) for full details.
 
-[advisory]: https://github.com/mova77/tessera/security/advisories/new
+[advisory]: https://github.com/isohub-space/tessera/security/advisories/new
 
 ---
 
@@ -73,8 +73,8 @@ launcher need a container.
 - **Feature / RFC**: use the [feature request template][feature].
 - **Question**: open a blank issue — the templates have a direct link.
 
-[bug]: https://github.com/mova77/tessera/issues/new?template=bug_report.yml
-[feature]: https://github.com/mova77/tessera/issues/new?template=feature_request.yml
+[bug]: https://github.com/isohub-space/tessera/issues/new?template=bug_report.yml
+[feature]: https://github.com/isohub-space/tessera/issues/new?template=feature_request.yml
 
 ---
 

@@ -109,7 +109,7 @@ The domain already models these concepts; the adapters will follow in later wave
 Tessera is a standard Quarkus application. The fastest path:
 
 ```bash
-git clone https://github.com/mova77/tessera.git
+git clone https://github.com/isohub-space/tessera.git
 cd tessera
 
 # Build (unit tests only; integration tests need Docker — see below).
