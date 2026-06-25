@@ -1,12 +1,10 @@
 name: CodeQL
 
 # Static application security testing (SAST). Runs the security-extended query
-# suite over the Java sources on every pull request to main, every push to main,
-# and weekly. Findings surface in the repository's Security > Code scanning tab.
+# suite on every push to main and weekly. Post-merge only (not on PRs) to keep
+# PR CI fast. Findings surface in the Security > Code scanning tab.
 on:
   push:
-    branches: [main]
-  pull_request:
     branches: [main]
   schedule:
     - cron: '0 3 * * 1'

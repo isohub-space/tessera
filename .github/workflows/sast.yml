@@ -1,6 +1,6 @@
 name: SAST
 
-# Layered static application security testing on every PR and push to main.
+# Layered static application security testing on every push to main.
 #
 #  • Semgrep — semantic pattern matching: Java security, OWASP Top-10, JWT
 #    anti-patterns (alg:none, weak secrets, missing signature verification).
@@ -8,13 +8,10 @@ name: SAST
 #    files (HIGH + CRITICAL only; unfixed CVEs suppressed).
 #
 # Both tools upload SARIF to the Security > Code scanning tab.
-# Neither blocks merge on its own findings today; once a clean baseline is
-# established, Semgrep can be promoted to a required status check.
+# Runs post-merge only (not on PRs) to keep PR CI fast.
 
 on:
   push:
-    branches: [main]
-  pull_request:
     branches: [main]
 
 permissions:
