@@ -217,7 +217,7 @@
       and publishes to Maven Central via the Sonatype Central Portal.
 
       Required GitHub repository secrets:
-        GPG_PRIVATE_KEY  — armoured private key  (gpg --armor --export-secret-keys <id>)
+        GPG_PRIVATE_KEY  — armoured private key exported with gpg armor
         GPG_PASSPHRASE   — passphrase protecting the private key
         CENTRAL_TOKEN    — deployment token from central.sonatype.com
     -->
