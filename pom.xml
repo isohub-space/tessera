@@ -66,6 +66,15 @@
     <maven-surefire-plugin.version>3.5.6</maven-surefire-plugin.version>
     <maven-failsafe-plugin.version>3.5.6</maven-failsafe-plugin.version>
 
+    <!--
+      Security tooling. dependency-check runs only when its goal is invoked
+      explicitly (the Supply Chain CI workflow), never during a normal build.
+      nvd.api.key is empty by default and supplied by CI from the NVD_API_KEY
+      secret to lift the anonymous NVD rate limit.
+    -->
+    <dependency-check-maven.version>10.0.4</dependency-check-maven.version>
+    <nvd.api.key></nvd.api.key>
+
     <!-- Release-profile plugins (inactive during normal builds). -->
     <maven-source-plugin.version>3.3.1</maven-source-plugin.version>
     <maven-javadoc-plugin.version>3.11.2</maven-javadoc-plugin.version>
@@ -206,6 +215,30 @@
             </goals>
           </execution>
         </executions>
+      </plugin>
+
+      <!--
+        OWASP Dependency-Check. Declared (not bound to a phase) so it never runs
+        during a normal `mvn verify`; the Supply Chain CI workflow invokes
+        `dependency-check:check` explicitly. Centralising the configuration here
+        keeps the NVD data set in one stable, CI-cacheable location and lets CI
+        simply supply the API key.
+      -->
+      <plugin>
+        <groupId>org.owasp</groupId>
+        <artifactId>dependency-check-maven</artifactId>
+        <version>${dependency-check-maven.version}</version>
+        <configuration>
+          <!-- Stable NVD data directory, outside the module target dirs, so CI
+               can restore it across runs and a clean build never re-downloads
+               the database. -->
+          <dataDirectory>/tmp/owasp</dataDirectory>
+          <!-- Supplied by CI from the NVD_API_KEY secret; empty for local runs. -->
+          <nvdApiKey>${nvd.api.key}</nvdApiKey>
+          <format>SARIF</format>
+          <!-- Fail only on a maxed-out CVSS (actively exploited critical RCE). -->
+          <failBuildOnCVSS>10</failBuildOnCVSS>
+        </configuration>
       </plugin>
     </plugins>
   </build>
