@@ -4,20 +4,19 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
 
-  <groupId>dev.tessera</groupId>
+  <groupId>space.isohub</groupId>
   <artifactId>tessera-parent</artifactId>
-  <version>1.0.0-SNAPSHOT</version>
+  <version>0.1.0-SNAPSHOT</version>
   <packaging>pom</packaging>
 
   <name>Tessera — Parent</name>
   <description>
-    Tessera is a standalone, general-purpose OIDC / OAuth2 authorization server
-    built on Quarkus — a from-scratch, developer-friendly alternative to Keycloak.
-    This aggregator imports the Quarkus BOM, pins the build toolchain, and wires
-    a strict hexagonal module layout: a framework-free domain and api, REST and
-    persistence adapters, and a thin Quarkus composition root (tessera-server).
+    Tessera is a standalone, general-purpose OIDC / OAuth 2.0 authorization server
+    built on Quarkus — a developer-friendly alternative to Keycloak. Strict hexagonal
+    architecture: framework-free domain and api, REST and persistence adapters, and a
+    thin Quarkus composition root.
   </description>
-  <url>https://github.com/tessera/tessera</url>
+  <url>https://github.com/isohub-space/tessera</url>
 
   <licenses>
     <license>
@@ -26,6 +25,30 @@
       <distribution>repo</distribution>
     </license>
   </licenses>
+
+  <developers>
+    <developer>
+      <id>mova77</id>
+      <name>Marco Vanadia</name>
+      <email>mova77@users.noreply.github.com</email>
+      <url>https://github.com/mova77</url>
+      <roles>
+        <role>maintainer</role>
+      </roles>
+    </developer>
+  </developers>
+
+  <scm>
+    <connection>scm:git:https://github.com/isohub-space/tessera.git</connection>
+    <developerConnection>scm:git:https://github.com/isohub-space/tessera.git</developerConnection>
+    <url>https://github.com/isohub-space/tessera</url>
+    <tag>HEAD</tag>
+  </scm>
+
+  <issueManagement>
+    <system>GitHub Issues</system>
+    <url>https://github.com/isohub-space/tessera/issues</url>
+  </issueManagement>
 
   <properties>
     <maven.compiler.release>25</maven.compiler.release>
@@ -42,6 +65,12 @@
     <maven-compiler-plugin.version>3.15.0</maven-compiler-plugin.version>
     <maven-surefire-plugin.version>3.5.6</maven-surefire-plugin.version>
     <maven-failsafe-plugin.version>3.5.6</maven-failsafe-plugin.version>
+
+    <!-- Release-profile plugins (inactive during normal builds). -->
+    <maven-source-plugin.version>3.3.1</maven-source-plugin.version>
+    <maven-javadoc-plugin.version>3.11.2</maven-javadoc-plugin.version>
+    <maven-gpg-plugin.version>3.2.7</maven-gpg-plugin.version>
+    <central-publishing-plugin.version>0.6.0</central-publishing-plugin.version>
   </properties>
 
   <modules>
@@ -67,32 +96,32 @@
 
       <!-- Internal module coordinates. -->
       <dependency>
-        <groupId>dev.tessera</groupId>
+        <groupId>space.isohub</groupId>
         <artifactId>tessera-statemachine</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
-        <groupId>dev.tessera</groupId>
+        <groupId>space.isohub</groupId>
         <artifactId>tessera-observability</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
-        <groupId>dev.tessera</groupId>
+        <groupId>space.isohub</groupId>
         <artifactId>tessera-domain</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
-        <groupId>dev.tessera</groupId>
+        <groupId>space.isohub</groupId>
         <artifactId>tessera-api</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
-        <groupId>dev.tessera</groupId>
+        <groupId>space.isohub</groupId>
         <artifactId>tessera-persistence</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
-        <groupId>dev.tessera</groupId>
+        <groupId>space.isohub</groupId>
         <artifactId>tessera-rest</artifactId>
         <version>${project.version}</version>
       </dependency>
@@ -180,5 +209,88 @@
       </plugin>
     </plugins>
   </build>
+
+  <profiles>
+    <!--
+      release — activated by the release.yml CI workflow on tag push.
+      Generates sources + Javadoc jars, signs all artifacts with GPG,
+      and publishes to Maven Central via the Sonatype Central Portal.
+
+      Required GitHub repository secrets:
+        GPG_PRIVATE_KEY  — armoured private key exported with gpg armor
+        GPG_PASSPHRASE   — passphrase protecting the private key
+        CENTRAL_TOKEN    — deployment token from central.sonatype.com
+    -->
+    <profile>
+      <id>release</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-source-plugin</artifactId>
+            <version>${maven-source-plugin.version}</version>
+            <executions>
+              <execution>
+                <id>attach-sources</id>
+                <goals>
+                  <goal>jar-no-fork</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-javadoc-plugin</artifactId>
+            <version>${maven-javadoc-plugin.version}</version>
+            <configuration>
+              <doclint>none</doclint>
+            </configuration>
+            <executions>
+              <execution>
+                <id>attach-javadocs</id>
+                <goals>
+                  <goal>jar</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-gpg-plugin</artifactId>
+            <version>${maven-gpg-plugin.version}</version>
+            <executions>
+              <execution>
+                <id>sign-artifacts</id>
+                <phase>verify</phase>
+                <goals>
+                  <goal>sign</goal>
+                </goals>
+                <configuration>
+                  <gpgArguments>
+                    <arg>--pinentry-mode</arg>
+                    <arg>loopback</arg>
+                  </gpgArguments>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+
+          <plugin>
+            <groupId>org.sonatype.central</groupId>
+            <artifactId>central-publishing-maven-plugin</artifactId>
+            <version>${central-publishing-plugin.version}</version>
+            <extensions>true</extensions>
+            <configuration>
+              <publishingServerId>central</publishingServerId>
+              <autoPublish>true</autoPublish>
+              <waitUntil>published</waitUntil>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 
 </project>

@@ -4,7 +4,7 @@
 
 Thank you for your interest in contributing to Tessera
 (the "Project"), an open-source OIDC / OAuth 2.0 authorization server
-maintained at https://github.com/mova77/tessera.
+maintained at https://github.com/isohub-space/tessera.
 
 This Contributor License Agreement ("Agreement") documents the rights
 you grant to the Project when you submit a Contribution. It is
