@@ -16,18 +16,20 @@ on:
   schedule:
     - cron: '30 2 * * 1' # weekly Monday 02:30 UTC (offset from supply-chain.yml)
 
-# Scorecard requires id-token to publish signed results to the OpenSSF API.
-permissions:
-  security-events: write
-  id-token: write
-  contents: read
-  actions: read
+# Scorecard API (publish_results: true) requires that no write permissions are
+# declared at the workflow top level. All writes go at the job level instead.
+permissions: read-all
 
 jobs:
   scorecard:
     name: Scorecard analysis
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      security-events: write  # upload SARIF to Security > Code Scanning
+      id-token: write         # publish signed results to api.securityscorecards.dev
+      contents: read
+      actions: read
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
