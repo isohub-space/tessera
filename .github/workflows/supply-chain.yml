@@ -79,12 +79,13 @@ jobs:
             nvd-${{ runner.os }}-
 
       - name: OWASP Dependency Check
-        # Plugin configuration (data directory, SARIF output, CVSS gate) lives in
-        # the root pom. CI only supplies the NVD API key from the organization
-        # secret to lift the anonymous rate limit. Fails only on CVSS 10;
-        # advisory findings surface via the uploaded SARIF.
+        # The scan lives in the on-demand `owasp` profile; its configuration
+        # (data directory, SARIF output, CVSS gate) is in the root pom. CI only
+        # activates the profile and supplies the NVD API key from the
+        # organization secret to lift the anonymous rate limit. Fails only on
+        # CVSS 10; advisory findings surface via the uploaded SARIF.
         run: >
-          mvn -B -ntp dependency-check:check
+          mvn -B -ntp -Powasp dependency-check:check
           -DskipTests
           -Dnvd.api.key=${{ secrets.NVD_API_KEY }}
         continue-on-error: true
