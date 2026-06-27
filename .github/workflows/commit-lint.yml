@@ -1,0 +1,51 @@
+name: commit-lint
+
+# Server-side enforcement (the real gate). Every commit in a PR must:
+#   - use a Conventional Commits subject prefix
+#   - have a human author (no anthropic.com / "Claude" authorship)
+#   - carry no AI attribution trailers (Co-Authored-By: Claude…, Claude-Session:, claude.ai/code)
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate PR commits
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          re='^(feat|fix|chore|docs|ci|build|refactor|test|perf|style|revert)(\([a-z0-9._/-]+\))?!?: .+'
+          fail=0
+          for sha in $(git rev-list "$BASE..$HEAD"); do
+            subject=$(git log -1 --format=%s "$sha")
+            body=$(git log -1 --format=%B "$sha")
+            ae=$(git log -1 --format=%ae "$sha")
+            an=$(git log -1 --format=%an "$sha")
+            case "$subject" in
+              Merge\ *|Revert\ *|fixup!*|squash!*) continue ;;
+            esac
+            if ! printf '%s' "$subject" | grep -qE "$re"; then
+              echo "::error::[$sha] non-conventional subject: $subject"; fail=1
+            fi
+            if printf '%s' "$ae$an" | grep -qiE 'anthropic\.com|^claude$|<claude@'; then
+              echo "::error::[$sha] AI-attributed author: $an <$ae>"; fail=1
+            fi
+            if printf '%s' "$body" | grep -qiE '(co-authored-by:.*(anthropic|claude))|(claude-session:)|(claude\.ai/code)|(generated (with|by) \[claude)'; then
+              echo "::error::[$sha] AI attribution trailer present in commit body"; fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "Commit-lint failed. Fix with an interactive rebase (reword/amend author) before merging."
+            exit 1
+          fi
+          echo "All PR commits pass: conventional prefix, human author, no AI trailers."

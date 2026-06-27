@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# pre-commit — block AI-attributed authorship before the commit object is created.
+# The author must be a human; AI assistants commit AS the human, never as themselves.
+set -uo pipefail
+ident="$(git var GIT_AUTHOR_IDENT 2>/dev/null || true)"
+low="$(printf '%s' "$ident" | tr 'A-Z' 'a-z')"
+case "$low" in
+  *anthropic.com*|claude\ \<*|*\<claude@*)
+    echo "✗ commit author is AI-attributed:  $ident" >&2
+    echo "  Commit as the human author instead:" >&2
+    echo "    git config user.name  \"Your Name\"" >&2
+    echo "    git config user.email \"you@users.noreply.github.com\"" >&2
+    exit 1 ;;
+esac
+exit 0

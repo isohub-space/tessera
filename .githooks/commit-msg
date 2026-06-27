@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# commit-msg — local fast-feedback gate (bash 3.2 / macOS compatible).
+#   1) Auto-strip AI attribution noise (Co-Authored-By: Claude/anthropic, Claude-Session:,
+#      "Generated with [Claude Code]", bare claude.ai/code URLs).
+#   2) Require a Conventional Commits subject prefix.
+# The authoritative enforcement is the server-side commit-lint workflow; this just
+# catches mistakes before they leave your machine.
+set -uo pipefail
+msg_file="$1"
+
+# --- 1) strip AI noise lines ---
+tmp="${msg_file}.tmp.$$"
+grep -viE '(^co-authored-by:.*(anthropic|claude))|(^claude-session:)|(claude\.ai/code)|(generated (with|by) \[claude)' "$msg_file" > "$tmp" 2>/dev/null || cp "$msg_file" "$tmp"
+# collapse 3+ blank lines and drop trailing blanks
+awk 'BEGIN{b=0} /^[[:space:]]*$/{b++; next} {while(b-->0 && NR>1) print ""; b=0; print} END{}' "$tmp" > "$msg_file" 2>/dev/null || mv "$tmp" "$msg_file"
+rm -f "$tmp"
+
+# --- 2) conventional prefix on the subject (first non-comment, non-blank line) ---
+subject="$(grep -vE '^#' "$msg_file" | sed '/^[[:space:]]*$/d' | head -1)"
+case "$subject" in
+  Merge\ *|Revert\ *|fixup!*|squash!*) exit 0 ;;   # tooling-generated subjects pass through
+esac
+if ! printf '%s' "$subject" | grep -qE '^(feat|fix|chore|docs|ci|build|refactor|test|perf|style|revert)(\([a-z0-9._/-]+\))?!?: .+'; then
+  echo "✗ commit message must start with a Conventional Commits prefix." >&2
+  echo "    <type>[(scope)][!]: <subject>" >&2
+  echo "    type ∈ feat fix chore docs ci build refactor test perf style revert" >&2
+  echo "  got: ${subject:-<empty>}" >&2
+  exit 1
+fi
+exit 0

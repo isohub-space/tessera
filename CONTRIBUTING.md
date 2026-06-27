@@ -176,3 +176,18 @@ violate this expectation without further explanation.
 ## Questions?
 
 Open an issue — the templates include a free-form option for questions.
+
+<!-- githooks-setup -->
+## Git hooks (one-time setup)
+
+This repository ships hooks under `.githooks/` that enforce commit discipline
+locally — a [Conventional Commits](https://www.conventionalcommits.org) subject
+prefix, a human commit author, and no AI-attribution trailers. After cloning,
+activate them once:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+The same rules are enforced server-side by the `commit-lint` workflow on every
+pull request, so this step is a convenience that catches issues before you push.
