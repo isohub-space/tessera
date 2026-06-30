@@ -76,7 +76,7 @@
     <nvd.api.key></nvd.api.key>
 
     <!-- Release-profile plugins (inactive during normal builds). -->
-    <maven-source-plugin.version>3.3.1</maven-source-plugin.version>
+    <maven-source-plugin.version>3.4.0</maven-source-plugin.version>
     <maven-javadoc-plugin.version>3.11.2</maven-javadoc-plugin.version>
     <maven-gpg-plugin.version>3.2.7</maven-gpg-plugin.version>
     <central-publishing-plugin.version>0.6.0</central-publishing-plugin.version>
