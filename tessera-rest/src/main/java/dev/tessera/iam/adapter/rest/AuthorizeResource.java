@@ -93,14 +93,14 @@ public class AuthorizeResource {
         RealmKey realm = tenantContext.realm();
 
         // Authorization-time validation errors are deliberately NOT redirected. RFC 6749
-        // §4.1.2.1: an error may be delivered to a redirect_uri only once that URI has been
-        // verified as registered to the client. This server does not yet have a registered-
-        // redirect-URI check at /authorize (the Client model carries no registered URIs — a
-        // client-registration concern), so to avoid acting as an open redirector EVERY
-        // authorize-time error is returned as a 400 to the user agent, never redirected.
-        // Only the success path delivers to the requested redirect_uri; the issued code is
-        // additionally bound to that exact URI and to the PKCE challenge, so the token
-        // endpoint re-checks both before any token is minted.
+        // §4.1.2.1: an error may be delivered to a redirect_uri only once that URI is verified
+        // as registered to the client. The use case now validates the requested redirect_uri
+        // against the client's registered allow-list (exact match) before issuing a code — an
+        // unregistered URI is a non-redirectable 400 — but to stay strictly on the safe side
+        // EVERY authorize-time error here is still returned as a 400 to the user agent rather
+        // than redirected. Only the success path delivers to the requested (now-registered)
+        // redirect_uri; the issued code is additionally bound to that exact URI and to the PKCE
+        // challenge, so the token endpoint re-checks both before any token is minted.
         if (isBlank(clientId) || isBlank(redirectUri)) {
             return badRequest(AuthorizationError.INVALID_REQUEST,
                     "client_id and redirect_uri are required");

@@ -36,4 +36,14 @@ public sealed interface Client permits ConfidentialClient, PublicClient {
      * @return an immutable view of the allowed grants
      */
     Set<GrantType> allowedGrants();
+
+    /**
+     * The redirect URIs registered for this client — the exact-match allow-list the
+     * {@code /authorize} endpoint validates the requested {@code redirect_uri} against
+     * before issuing a code. Returned as an unmodifiable set; may be empty (a client with
+     * no registered URI can complete no authorization-code flow).
+     *
+     * @return an immutable view of the registered redirect URIs
+     */
+    Set<String> redirectUris();
 }

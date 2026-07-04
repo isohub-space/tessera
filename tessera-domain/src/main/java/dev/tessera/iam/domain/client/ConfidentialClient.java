@@ -4,6 +4,7 @@ import dev.tessera.iam.domain.client.grant.GrantType;
 import dev.tessera.iam.domain.tenancy.RealmKey;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.Set;
 
 /**
@@ -19,12 +20,15 @@ import java.util.Set;
  * @param allowedGrants permitted grants; defensively copied and exposed unmodifiable
  *                      (never {@code null} or empty)
  * @param authMethod    how this client authenticates (never {@code null})
+ * @param redirectUris  registered redirect URIs (exact-match allow-list); defensively
+ *                      copied and exposed unmodifiable (never {@code null}, may be empty)
  */
 public record ConfidentialClient(
         ClientId id,
         RealmKey realm,
         Set<GrantType> allowedGrants,
-        ClientAuthMethod authMethod) implements Client {
+        ClientAuthMethod authMethod,
+        Set<String> redirectUris) implements Client {
 
     public ConfidentialClient {
         if (id == null) {
@@ -39,8 +43,12 @@ public record ConfidentialClient(
         if (authMethod == null) {
             throw new IllegalArgumentException("ConfidentialClient authMethod must not be null");
         }
+        if (redirectUris == null) {
+            throw new IllegalArgumentException("ConfidentialClient redirectUris must not be null");
+        }
         // Defensive copy + unmodifiable view: the record stays immutable even if the
         // caller mutates the set it passed in.
         allowedGrants = Collections.unmodifiableSet(new HashSet<>(allowedGrants));
+        redirectUris = Collections.unmodifiableSet(new LinkedHashSet<>(redirectUris));
     }
 }
