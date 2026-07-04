@@ -32,7 +32,8 @@ class EdgeSecurityBaselineTest {
                 .header("X-Content-Type-Options", equalTo("nosniff"))
                 .header("X-Frame-Options", equalTo("DENY"))
                 .header("Referrer-Policy", equalTo("no-referrer"))
-                .header("Content-Security-Policy", containsString("default-src 'none'"));
+                .header("Content-Security-Policy", containsString("default-src 'none'"))
+                .header("Content-Security-Policy", containsString("form-action 'none'"));
     }
 
     @Test
@@ -55,5 +56,18 @@ class EdgeSecurityBaselineTest {
                 .get(ENDPOINT)
                 .then()
                 .statusCode(403);
+    }
+
+    @Test
+    @DisplayName("CORS rejects an unlisted-origin preflight and echoes no allow-origin")
+    void corsPreflightRejectsUnlistedOrigin() {
+        given()
+                .header("Origin", "https://evil.example")
+                .header("Access-Control-Request-Method", "GET")
+                .when()
+                .options(ENDPOINT)
+                .then()
+                .statusCode(403)
+                .header("Access-Control-Allow-Origin", nullValue());
     }
 }
