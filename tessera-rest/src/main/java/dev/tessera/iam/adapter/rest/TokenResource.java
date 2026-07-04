@@ -3,6 +3,7 @@ package dev.tessera.iam.adapter.rest;
 import io.smallrye.mutiny.Uni;
 import dev.tessera.iam.adapter.rest.dto.OAuthErrorDto;
 import dev.tessera.iam.adapter.rest.dto.TokenResponseDto;
+import dev.tessera.iam.adapter.rest.ratelimit.RateLimited;
 import dev.tessera.iam.adapter.rest.tenancy.TenantContext;
 import dev.tessera.iam.adapter.rest.tenancy.TenantScoped;
 import dev.tessera.iam.application.port.in.TokenUseCase;
@@ -46,6 +47,7 @@ import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 @Path("/token")
 @Tag(name = "token", description = "OAuth 2.0 / OIDC token endpoint.")
 @TenantScoped
+@RateLimited
 public class TokenResource {
 
     private static final String GRANT_AUTHORIZATION_CODE = "authorization_code";

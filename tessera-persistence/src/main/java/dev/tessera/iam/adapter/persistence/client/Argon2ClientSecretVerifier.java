@@ -8,20 +8,23 @@ import dev.tessera.iam.application.port.out.ClientSecretVerifierPort;
 import dev.tessera.iam.domain.client.ClientId;
 import dev.tessera.iam.domain.tenancy.RealmKey;
 import io.smallrye.mutiny.Uni;
-import io.vertx.mutiny.core.Vertx;
+import io.vertx.mutiny.core.WorkerExecutor;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import jakarta.inject.Named;
 import java.util.UUID;
 
 /**
  * Persistence-backed {@link ClientSecretVerifierPort}: verifies a confidential client's
  * presented {@code client_secret} against the Argon2id PHC stored on {@code oauth_client}.
  *
- * <p>Argon2id is CPU- and memory-hard, so the check runs on a worker thread (never the
- * reactive event loop). The lookup is tenant-scoped through {@link OAuthClientRepository}
- * (RLS fail-closed). To avoid a client-existence timing oracle, the reject path (unknown
- * client, or a client with no stored secret) still runs one Argon2 check against a fixed
- * dummy hash before denying, so it costs the same order as a genuine secret mismatch.
+ * <p>Argon2id is CPU- and memory-hard, so the check runs on a dedicated {@code argon2} worker
+ * pool (never the reactive event loop, and never the shared worker pool — isolating the hashing
+ * so a flood cannot starve other blocking work). The lookup is tenant-scoped through
+ * {@link OAuthClientRepository} (RLS fail-closed). To avoid a client-existence timing oracle, the
+ * reject path (unknown client, or a client with no stored secret) still runs one Argon2 check
+ * against a fixed dummy hash before denying, so it costs the same order as a genuine secret
+ * mismatch.
  *
  * <p>Like {@link DbClientRepositoryAdapter}, this plain {@code @ApplicationScoped} bean
  * replaces the fail-closed {@code @DefaultBean} fallback in the assembled server.
@@ -54,7 +57,8 @@ public class Argon2ClientSecretVerifier implements ClientSecretVerifierPort {
     OAuthClientRepository clients;
 
     @Inject
-    Vertx vertx;
+    @Named("argon2")
+    WorkerExecutor argon2Executor;
 
     @Override
     public Uni<Boolean> verifySecret(RealmKey realm, ClientId clientId, String presentedSecret) {
@@ -63,14 +67,14 @@ public class Argon2ClientSecretVerifier implements ClientSecretVerifierPort {
         }
         UUID tenantId = realm.tenant().value();
         // The client lookup is a reactive DB read and must run (and commit) on the event loop.
-        // Argon2 is CPU/memory-hard, so it runs on a Vert.x worker via executeBlocking, which
-        // completes back on the event-loop context — leaving the caller's pipeline on the event
-        // loop. (emitOn/runSubscriptionOn would strand the downstream — and the next chained DB
-        // call — on a worker thread, which Hibernate Reactive rejects with HR000068.)
+        // Argon2 is CPU/memory-hard, so it runs on the dedicated argon2 worker via executeBlocking,
+        // which completes back on the event-loop context — leaving the caller's pipeline on the
+        // event loop. (emitOn/runSubscriptionOn would strand the downstream — and the next chained
+        // DB call — on a worker thread, which Hibernate Reactive rejects with HR000068.)
         return clients.findById(tenantId, clientId.value())
                 .map(entity -> entity == null ? null : entity.secretHash)
                 .flatMap(storedHash ->
-                        vertx.executeBlocking(() -> check(storedHash, presentedSecret), false));
+                        argon2Executor.executeBlocking(() -> check(storedHash, presentedSecret), false));
     }
 
     /**

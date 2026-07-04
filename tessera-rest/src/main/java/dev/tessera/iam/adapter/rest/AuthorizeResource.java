@@ -3,6 +3,7 @@ package dev.tessera.iam.adapter.rest;
 import io.smallrye.mutiny.Uni;
 import dev.tessera.iam.adapter.rest.config.OidcDiscoveryConfig;
 import dev.tessera.iam.adapter.rest.dto.OAuthErrorDto;
+import dev.tessera.iam.adapter.rest.ratelimit.RateLimited;
 import dev.tessera.iam.adapter.rest.tenancy.TenantContext;
 import dev.tessera.iam.adapter.rest.tenancy.TenantScoped;
 import dev.tessera.iam.application.port.in.AuthorizeUseCase;
@@ -57,6 +58,7 @@ import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 @Path("/authorize")
 @Tag(name = "authorization", description = "OAuth 2.0 / OIDC authorization endpoint.")
 @TenantScoped
+@RateLimited
 public class AuthorizeResource {
 
     /** The only response type this server supports (RFC 6749 §3.1.1). */
