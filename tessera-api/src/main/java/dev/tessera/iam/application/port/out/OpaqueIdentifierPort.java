@@ -21,4 +21,11 @@ public interface OpaqueIdentifierPort {
      * @return a fresh, unique token identifier suitable for a JWT {@code jti} claim
      */
     String newTokenId();
+
+    /**
+     * @return a fresh, unguessable refresh-token secret (base64url, ≥256 bits of entropy). Being
+     *         high-entropy and server-minted, it is stored as a fast one-way hash (not a
+     *         memory-hard KDF), unlike a user-chosen client secret.
+     */
+    String newRefreshToken();
 }
