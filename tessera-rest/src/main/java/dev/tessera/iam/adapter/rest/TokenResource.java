@@ -3,6 +3,8 @@ package dev.tessera.iam.adapter.rest;
 import io.smallrye.mutiny.Uni;
 import dev.tessera.iam.adapter.rest.dto.OAuthErrorDto;
 import dev.tessera.iam.adapter.rest.dto.TokenResponseDto;
+import dev.tessera.iam.adapter.rest.tenancy.TenantContext;
+import dev.tessera.iam.adapter.rest.tenancy.TenantScoped;
 import dev.tessera.iam.application.port.in.TokenUseCase;
 import dev.tessera.iam.application.port.in.TokenUseCase.TokenRequestCommand;
 import dev.tessera.iam.application.port.in.TokenUseCase.TokenResult;
@@ -43,12 +45,16 @@ import org.eclipse.microprofile.openapi.annotations.tags.Tag;
  */
 @Path("/token")
 @Tag(name = "token", description = "OAuth 2.0 / OIDC token endpoint.")
+@TenantScoped
 public class TokenResource {
 
     private static final String GRANT_AUTHORIZATION_CODE = "authorization_code";
 
     @Inject
     TokenUseCase token;
+
+    @Inject
+    TenantContext tenantContext;
 
     @POST
     @Consumes(MediaType.APPLICATION_FORM_URLENCODED)
@@ -57,8 +63,6 @@ public class TokenResource {
             operationId = "token",
             summary = "Redeem an authorization code for tokens (Authorization Code + PKCE)")
     public Uni<Response> token(
-            @HeaderParam("X-Tenant-Id") String tenantHeader,
-            @HeaderParam("X-Baseline-Id") String baselineHeader,
             @HeaderParam("Authorization") String authorization,
             @FormParam("grant_type") String grantType,
             @FormParam("code") String code,
@@ -67,7 +71,7 @@ public class TokenResource {
             @FormParam("client_secret") String clientSecret,
             @FormParam("code_verifier") String codeVerifier) {
 
-        RealmKey realm = RealmHeaders.resolve(tenantHeader, baselineHeader);
+        RealmKey realm = tenantContext.realm();
 
         if (!GRANT_AUTHORIZATION_CODE.equals(grantType)) {
             return error(Response.Status.BAD_REQUEST,

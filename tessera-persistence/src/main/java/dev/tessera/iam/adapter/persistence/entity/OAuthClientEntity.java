@@ -51,6 +51,14 @@ public class OAuthClientEntity extends PanacheEntityBase {
     @Column(name = "auth_method", length = 32)
     public String authMethod;
 
+    /**
+     * Argon2id PHC string for a confidential client that authenticates with a shared
+     * {@code client_secret}; never plaintext. {@code null} for public clients and for
+     * confidential clients that authenticate by MTLS or {@code private_key_jwt}.
+     */
+    @Column(name = "secret_hash")
+    public String secretHash;
+
     /** Comma-separated allowed {@code grant_type} values. */
     @Column(name = "allowed_grants", nullable = false)
     public String allowedGrants;

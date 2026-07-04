@@ -61,6 +61,7 @@
 
     <archunit.version>1.4.2</archunit.version>
     <assertj.version>3.27.7</assertj.version>
+    <password4j.version>1.8.4</password4j.version>
     <jandex-maven-plugin.version>3.6.0</jandex-maven-plugin.version>
     <maven-compiler-plugin.version>3.15.0</maven-compiler-plugin.version>
     <maven-surefire-plugin.version>3.5.6</maven-surefire-plugin.version>
@@ -101,6 +102,14 @@
         <version>${quarkus.platform.version}</version>
         <type>pom</type>
         <scope>import</scope>
+      </dependency>
+
+      <!-- Argon2id password hashing (pure-Java, native-image friendly) — used by the
+           confidential-client secret verifier to check secrets stored as Argon2id PHC. -->
+      <dependency>
+        <groupId>com.password4j</groupId>
+        <artifactId>password4j</artifactId>
+        <version>${password4j.version}</version>
       </dependency>
 
       <!-- Internal module coordinates. -->

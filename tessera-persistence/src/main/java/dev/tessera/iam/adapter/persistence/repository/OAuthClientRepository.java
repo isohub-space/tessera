@@ -21,17 +21,23 @@ public class OAuthClientRepository {
     TenantScopedSession scoped;
 
     /**
-     * Finds a client by its external {@code client_key} within the tenant.
+     * Finds a client by its external {@code client_key} within the {@code (tenant, baseline)}
+     * scope. The uniqueness constraint is {@code (tenant_id, baseline_id, client_key)}, so the
+     * baseline must be part of the predicate — RLS scopes only the tenant, and the same
+     * {@code client_key} may legitimately exist under a different baseline in the same tenant.
      *
-     * @param tenantId  the owning tenant (the RLS scoping key)
-     * @param clientKey the external client identifier to match
+     * @param tenantId   the owning tenant (the RLS scoping key)
+     * @param baselineId the configuration baseline scope
+     * @param clientKey  the external client identifier to match
      * @return a {@link Uni} emitting the client, or {@code null} if none matches
      */
-    public Uni<OAuthClientEntity> findByClientKey(UUID tenantId, String clientKey) {
+    public Uni<OAuthClientEntity> findByClientKey(UUID tenantId, UUID baselineId, String clientKey) {
         return scoped.inTenant(tenantId, session ->
                 session.createQuery(
-                                "from OAuthClientEntity c where c.clientKey = :key",
+                                "from OAuthClientEntity c "
+                                        + "where c.baselineId = :baseline and c.clientKey = :key",
                                 OAuthClientEntity.class)
+                        .setParameter("baseline", baselineId)
                         .setParameter("key", clientKey)
                         .getSingleResultOrNull());
     }

@@ -53,6 +53,13 @@
       <artifactId>quarkus-arc</artifactId>
     </dependency>
 
+    <!-- Argon2id verification for confidential-client secrets (PHC strings). Pure-Java,
+         no native dependency; the CPU/memory-hard check is run off the reactive event loop. -->
+    <dependency>
+      <groupId>com.password4j</groupId>
+      <artifactId>password4j</artifactId>
+    </dependency>
+
     <!-- Test -->
     <dependency>
       <groupId>org.junit.jupiter</groupId>
