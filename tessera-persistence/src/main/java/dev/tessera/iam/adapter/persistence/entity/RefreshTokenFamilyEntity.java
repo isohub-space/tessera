@@ -53,13 +53,21 @@ public class RefreshTokenFamilyEntity extends PanacheEntityBase {
     @Column(name = "current_token_hash", nullable = false)
     public String currentTokenHash;
 
+    /** Hash of the immediately superseded token (null at generation 0); a replay signal. */
+    @Column(name = "previous_token_hash")
+    public String previousTokenHash;
+
     /** Rotation counter; incremented on each successful rotation. */
     @Column(name = "generation", nullable = false)
     public int generation;
 
-    /** Set {@code true} on detected replay, which revokes the family. */
+    /** Set {@code true} on detected replay or explicit revocation, which revokes the family. */
     @Column(name = "reused", nullable = false)
     public boolean reused;
+
+    /** When the family was revoked; null while live. */
+    @Column(name = "revoked_at")
+    public Instant revokedAt;
 
     /** Creation instant (UTC). */
     @Column(name = "created_at", nullable = false, updatable = false)
