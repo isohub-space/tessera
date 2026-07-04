@@ -1,22 +1,28 @@
 name: pr-hygiene
 
 # Server-side gate for the PUBLIC-facing surfaces that commit-lint does not cover:
-# the pull-request TITLE and BODY, and the added lines of the diff. Blocks two classes of
-# leak into the public repo:
+#   - the pull-request TITLE and BODY, and the added lines of the diff (blocking, per-commit);
+#   - PR/issue COMMENT bodies (detect-and-hide — a comment is not a commit, so it cannot be a
+#     merge-blocking required check; the offending comment is minimized and a short note posted).
+# Both block two classes of leak into the public repo:
 #   - AI-attribution / agent markers (Co-Authored-By: Claude…, Claude-Session:, claude.ai/code,
 #     "generated/authored with Claude", anthropic.com, the robot emoji)
 #   - internal issue-tracker keys (project-prefixed ids) and the internal tracker host
-# commit-lint enforces the same on commit messages/authors; this closes the title/body + diff gap.
+# commit-lint enforces the same on commit messages/authors; this closes the remaining gaps.
 on:
   pull_request:
     types: [opened, edited, reopened, synchronize]
     branches: [main]
+  issue_comment:
+    types: [created, edited]
 
 permissions:
   contents: read
+  pull-requests: write   # to hide a flagged comment and post a short note
 
 jobs:
   hygiene:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -62,3 +68,33 @@ jobs:
             exit 1
           fi
           echo "PR text and diff are neutral (no AI attribution, no internal keys)."
+
+  comment:
+    # A PR/issue comment is not a commit, so this cannot be a merge-blocking required check.
+    # Instead: detect a marker in the comment body and hide it (minimize) + post a short note.
+    # Skip the bot's own notes so it can never act on itself (no loop).
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.comment.user.login != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hide a comment carrying an AI-attribution marker or internal key
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BODY: ${{ github.event.comment.body }}
+          NODE_ID: ${{ github.event.comment.node_id }}
+          HTML_URL: ${{ github.event.comment.html_url }}
+          ISSUE: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          ai='co-authored-by:[[:space:]]*(claude|anthropic)|claude-session:|claude\.ai/code|generated (with|by) \[?claude|authored (with|by)[^.]*claude|anthropic\.com|🤖'
+          keys='(\b(IOS|IAM|INF|VEC)-[0-9])|(\bADR-[A-Z0-9])|(iospace\.atlassian)'
+          if printf '%s' "$BODY" | grep -qiE "$ai" || printf '%s' "$BODY" | grep -qE "$keys"; then
+            echo "Comment $HTML_URL matched a hygiene pattern — hiding it."
+            gh api graphql -f query='mutation($id: ID!) { minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) { minimizedComment { isMinimized } } }' -f id="$NODE_ID"
+            gh api "repos/$REPO/issues/$ISSUE/comments" \
+              -f body=":lock: A comment was auto-hidden by pr-hygiene: it contained an AI-attribution marker or an internal tracker key. Please repost with neutral, human-authored text."
+          else
+            echo "Comment is neutral."
+          fi
