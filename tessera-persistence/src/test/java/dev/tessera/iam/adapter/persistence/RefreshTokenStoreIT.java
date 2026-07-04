@@ -119,6 +119,24 @@ class RefreshTokenStoreIT {
 
     @Test
     @RunOnVertxContext
+    @DisplayName("a stranger hash against a live family is Unknown and does not burn it")
+    void strangerHashDoesNotBurn(UniAsserter asserter) {
+        UUID tenant = UUID.randomUUID();
+        FamilyId fid = new FamilyId(UUID.randomUUID());
+        asserter.execute(() -> store.createFamily(family(fid, realm(tenant), "h0")));
+
+        // A forged token must be rejected without revoking the family (revocation-DoS guard).
+        asserter.assertThat(
+                () -> store.consumeAndRotate(fid, realm(tenant), "stranger", "hx", NOW),
+                o -> assertThat(o.decision()).isInstanceOf(RefreshDecision.Unknown.class));
+        // The genuine current token still rotates, proving the family stayed live.
+        asserter.assertThat(
+                () -> store.consumeAndRotate(fid, realm(tenant), "h0", "h1", NOW),
+                o -> assertThat(o.decision()).isInstanceOf(RefreshDecision.Rotate.class));
+    }
+
+    @Test
+    @RunOnVertxContext
     @DisplayName("revokeFamily is idempotent and burns the family")
     void revokeIsIdempotent(UniAsserter asserter) {
         UUID tenant = UUID.randomUUID();

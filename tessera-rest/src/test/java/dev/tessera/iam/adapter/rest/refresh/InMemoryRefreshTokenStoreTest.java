@@ -74,6 +74,25 @@ class InMemoryRefreshTokenStoreTest {
     }
 
     @Test
+    @DisplayName("a stranger hash against a live family is Unknown and does NOT burn it")
+    void strangerHashDoesNotBurn() {
+        InMemoryRefreshTokenStore store = new InMemoryRefreshTokenStore();
+        RefreshTokenFamily fam = seed(store, "h0");
+
+        // A forged/garbage token (matches neither current nor previous) is rejected. Crucially it
+        // must not revoke the family — else a guessed family id + arbitrary secret would be a
+        // revocation denial-of-service.
+        RefreshConsumeOutcome garbage =
+                store.consumeAndRotate(fam.id(), REALM, "stranger", "hx", NOW).await().indefinitely();
+        assertThat(garbage.decision()).isInstanceOf(RefreshDecision.Unknown.class);
+
+        // The family is still live: the genuine current token still rotates.
+        RefreshConsumeOutcome ok =
+                store.consumeAndRotate(fam.id(), REALM, "h0", "h1", NOW).await().indefinitely();
+        assertThat(ok.decision()).isInstanceOf(RefreshDecision.Rotate.class);
+    }
+
+    @Test
     @DisplayName("revokeFamily is idempotent")
     void revokeIdempotent() {
         InMemoryRefreshTokenStore store = new InMemoryRefreshTokenStore();

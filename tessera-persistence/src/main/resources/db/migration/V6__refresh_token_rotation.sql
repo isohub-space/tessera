@@ -15,10 +15,9 @@ COMMENT ON COLUMN refresh_token_family.previous_token_hash IS
 COMMENT ON COLUMN refresh_token_family.revoked_at IS
     'When the family was revoked (replay detected or explicit revocation); NULL while live.';
 
--- Rotation fast path: locate a live family by its current token hash within a tenant. The
--- refresh_token_family RLS policy (V3) is table-level and already governs these columns.
-CREATE INDEX idx_refresh_token_family_current
-    ON refresh_token_family (tenant_id, current_token_hash);
+-- (No new index: every rotation/lookup keys on the primary key — the family id is embedded in
+-- the token — so the existing PK index serves them. The refresh_token_family RLS policy (V3) is
+-- table-level and already governs the new columns.)
 
 -- ---------------------------------------------------------------------------
 -- Family → owning-tenant directory

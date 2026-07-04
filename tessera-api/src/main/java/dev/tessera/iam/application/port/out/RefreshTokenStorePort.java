@@ -5,6 +5,7 @@ import dev.tessera.iam.domain.refresh.RefreshDecision;
 import dev.tessera.iam.domain.refresh.RefreshTokenFamily;
 import dev.tessera.iam.domain.tenancy.RealmKey;
 import io.smallrye.mutiny.Uni;
+import java.time.Instant;
 
 /**
  * Outbound port for the rotating refresh-token family store — the analogue of
@@ -64,7 +65,7 @@ public interface RefreshTokenStorePort {
             RealmKey authoritativeRealm,
             String presentedHash,
             String newTokenHash,
-            java.time.Instant now);
+            Instant now);
 
     /**
      * Revokes the entire family (idempotent). Used both by replay handling and by explicit token

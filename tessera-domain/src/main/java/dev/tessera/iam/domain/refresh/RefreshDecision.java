@@ -21,14 +21,15 @@ public sealed interface RefreshDecision
                 RefreshDecision.Unknown,
                 RefreshDecision.Expired {
 
-    /** The presented token is current; rotate the family forward from {@code generation}. */
-    record Rotate(FamilyId id, int generation) implements RefreshDecision {
+    /**
+     * The presented token is current; rotate the family forward. The post-rotation family state
+     * (new generation, hashes) travels on the store outcome's family snapshot, not here, so the two
+     * adapters cannot disagree on a generation number.
+     */
+    record Rotate(FamilyId id) implements RefreshDecision {
         public Rotate {
             if (id == null) {
                 throw new IllegalArgumentException("Rotate id must not be null");
-            }
-            if (generation < 0) {
-                throw new IllegalArgumentException("Rotate generation must not be negative");
             }
         }
     }

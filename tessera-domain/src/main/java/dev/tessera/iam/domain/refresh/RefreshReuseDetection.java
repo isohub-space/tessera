@@ -8,8 +8,9 @@ import java.time.Instant;
  * <p>Given an immutable {@link RefreshTokenFamily} snapshot and the hash of a presented token, it
  * classifies the redemption into a {@link RefreshDecision} with no I/O, no clock read (the instant
  * is passed in), and no crypto (hashing is an adapter concern). The rule is deliberately framework-
- * free and exhaustively unit-tested; the persistence adapter enforces the same decision
- * <em>atomically</em> under concurrency, and a test asserts the two agree.
+ * free and exhaustively unit-tested; each store adapter enforces the same decision — the in-memory
+ * one under a per-key atomic remap, the persistence one under a row-locking compare-and-swap — and
+ * the store tests exercise the same rotate/replay/unknown scenarios against both.
  *
  * <p>Order of checks matters and is fail-safe:
  * <ol>
@@ -19,8 +20,17 @@ import java.time.Instant;
  *   <li>the current-token hash → {@link RefreshDecision.Rotate};</li>
  *   <li>the previous-token hash → {@link RefreshDecision.Replay} (a superseded token was presented —
  *       the canonical stolen-token replay);</li>
- *   <li>anything else → {@link RefreshDecision.Unknown}.</li>
+ *   <li>anything else → {@link RefreshDecision.Unknown} (rejected, no side effect).</li>
  * </ol>
+ *
+ * <p><strong>Detection depth is the immediate predecessor, by design.</strong> Only the current and
+ * one previous hash are tracked, so a token more than one generation stale hashes to neither and is
+ * {@code Unknown} (rejected) rather than {@code Replay} (burn). This is deliberate: burning a family
+ * on <em>any</em> non-current hash would let a caller who guesses a family id (the id is embedded in
+ * the token and is time-ordered) revoke that family with an arbitrary secret — a revocation
+ * denial-of-service. Requiring the presented token to match a genuinely recent hash means only a
+ * party that actually held a real recent token can trigger the burn. A deeply stale token is already
+ * useless (it will not rotate), so the residual is a lost defence-in-depth signal, not access.
  */
 public final class RefreshReuseDetection {
 
@@ -53,7 +63,7 @@ public final class RefreshReuseDetection {
             return new RefreshDecision.Expired();
         }
         if (presentedHash.equals(family.currentTokenHash())) {
-            return new RefreshDecision.Rotate(family.id(), family.generation());
+            return new RefreshDecision.Rotate(family.id());
         }
         if (presentedHash.equals(family.previousTokenHash())) {
             return new RefreshDecision.Replay(family.id());

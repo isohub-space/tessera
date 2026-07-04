@@ -8,7 +8,9 @@ import dev.tessera.iam.domain.refresh.FamilyId;
 import dev.tessera.iam.domain.refresh.RefreshDecision;
 import dev.tessera.iam.domain.refresh.RefreshReuseDetection;
 import dev.tessera.iam.domain.refresh.RefreshTokenFamily;
+import dev.tessera.iam.domain.tenancy.BaselineId;
 import dev.tessera.iam.domain.tenancy.RealmKey;
+import dev.tessera.iam.domain.tenancy.TenantId;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -77,6 +79,9 @@ public class DbRefreshTokenStore implements RefreshTokenStorePort {
     public Uni<RefreshConsumeOutcome> consumeAndRotate(
             FamilyId id, RealmKey authoritativeRealm, String presentedHash, String newTokenHash,
             Instant now) {
+        if (id == null || authoritativeRealm == null) {
+            throw new IllegalArgumentException("id and authoritativeRealm must not be null");
+        }
         UUID tenant = authoritativeRealm.tenant().value();
         return scoped.inTenant(tenant, session ->
                 session.createNativeQuery(CAS_ROTATE)
@@ -93,10 +98,11 @@ public class DbRefreshTokenStore implements RefreshTokenStorePort {
                                         return Uni.createFrom().item(new RefreshConsumeOutcome(
                                                 new RefreshDecision.Unknown(), null));
                                     }
-                                    RefreshTokenFamily snap = toSnapshot(entity, authoritativeRealm);
+                                    RefreshTokenFamily snap = toSnapshot(entity);
                                     if (rowCount == 1) {
+                                        // The CAS won: this transaction rotated the family.
                                         return Uni.createFrom().item(new RefreshConsumeOutcome(
-                                                new RefreshDecision.Rotate(id, snap.generation()), snap));
+                                                new RefreshDecision.Rotate(id), snap));
                                     }
                                     // The CAS matched nothing — classify the presented token.
                                     RefreshDecision decision =
@@ -105,6 +111,12 @@ public class DbRefreshTokenStore implements RefreshTokenStorePort {
                                         return burn(session, id, now).replaceWith(
                                                 new RefreshConsumeOutcome(decision, snap));
                                     }
+                                    if (decision instanceof RefreshDecision.Rotate) {
+                                        // Defensive: a losing CAS must never issue. A Rotate here
+                                        // could only arise from a concurrent external rotation racing
+                                        // the re-read; treat it as a miss rather than mint a token.
+                                        decision = new RefreshDecision.Unknown();
+                                    }
                                     return Uni.createFrom().item(
                                             new RefreshConsumeOutcome(decision, snap));
                                 })));
@@ -112,15 +124,21 @@ public class DbRefreshTokenStore implements RefreshTokenStorePort {
 
     @Override
     public Uni<Void> revokeFamily(FamilyId id, RealmKey authoritativeRealm) {
+        if (id == null || authoritativeRealm == null) {
+            throw new IllegalArgumentException("id and authoritativeRealm must not be null");
+        }
         return scoped.inTenant(authoritativeRealm.tenant().value(),
                 session -> burn(session, id, Instant.now()).replaceWithVoid());
     }
 
     @Override
     public Uni<RefreshTokenFamily> find(FamilyId id, RealmKey realm) {
+        if (id == null || realm == null) {
+            throw new IllegalArgumentException("id and realm must not be null");
+        }
         return scoped.inTenant(realm.tenant().value(),
                 session -> session.find(RefreshTokenFamilyEntity.class, id.value())
-                        .map(entity -> entity == null ? null : toSnapshot(entity, realm)));
+                        .map(entity -> entity == null ? null : toSnapshot(entity)));
     }
 
     private static Uni<Integer> burn(
@@ -148,7 +166,10 @@ public class DbRefreshTokenStore implements RefreshTokenStorePort {
         return e;
     }
 
-    private static RefreshTokenFamily toSnapshot(RefreshTokenFamilyEntity e, RealmKey realm) {
+    // The snapshot's realm is reconstructed from the row's own tenant_id/baseline_id, never the
+    // caller-supplied realm, so a read whose tenant matches but baseline differs cannot mis-stamp it.
+    private static RefreshTokenFamily toSnapshot(RefreshTokenFamilyEntity e) {
+        RealmKey realm = new RealmKey(new TenantId(e.tenantId), new BaselineId(e.baselineId));
         return new RefreshTokenFamily(
                 new FamilyId(e.id), realm, e.userId.toString(), new ClientId(e.clientId),
                 e.currentTokenHash, e.previousTokenHash, e.generation, e.reused,

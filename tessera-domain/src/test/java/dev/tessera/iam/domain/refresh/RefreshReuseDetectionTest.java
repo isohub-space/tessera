@@ -35,12 +35,11 @@ class RefreshReuseDetectionTest {
     }
 
     @Test
-    @DisplayName("the current-token hash rotates the family forward from its generation")
+    @DisplayName("the current-token hash rotates the family forward")
     void currentHashRotates() {
         RefreshTokenFamily fam = family("cur", "prev", 3, false, null);
         RefreshDecision d = RefreshReuseDetection.classify(fam, "cur", NOW);
         assertThat(d).isInstanceOf(RefreshDecision.Rotate.class);
-        assertThat(((RefreshDecision.Rotate) d).generation()).isEqualTo(3);
         assertThat(((RefreshDecision.Rotate) d).id()).isEqualTo(fam.id());
     }
 
