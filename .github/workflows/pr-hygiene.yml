@@ -1,0 +1,64 @@
+name: pr-hygiene
+
+# Server-side gate for the PUBLIC-facing surfaces that commit-lint does not cover:
+# the pull-request TITLE and BODY, and the added lines of the diff. Blocks two classes of
+# leak into the public repo:
+#   - AI-attribution / agent markers (Co-Authored-By: Claude…, Claude-Session:, claude.ai/code,
+#     "generated/authored with Claude", anthropic.com, the robot emoji)
+#   - internal issue-tracker keys (project-prefixed ids) and the internal tracker host
+# commit-lint enforces the same on commit messages/authors; this closes the title/body + diff gap.
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: PR text and diff must be neutral (no AI attribution, no internal keys)
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          ai='co-authored-by:[[:space:]]*(claude|anthropic)|claude-session:|claude\.ai/code|generated (with|by) \[?claude|authored (with|by)[^.]*claude|anthropic\.com|🤖'
+          keys='(\b(IOS|IAM|INF|VEC)-[0-9])|(\bADR-[A-Z0-9])|(iospace\.atlassian)'
+          fail=0
+
+          # 1) PR title + body — the surface commit-lint cannot see.
+          text="$TITLE"$'\n'"$BODY"
+          if printf '%s' "$text" | grep -qiE "$ai"; then
+            echo "::error::PR title/body carries an AI-attribution/agent marker — remove it (human-authored, neutral text only)."; fail=1
+          fi
+          if printf '%s' "$text" | grep -qE "$keys"; then
+            echo "::error::PR title/body carries an internal tracker key — keep public text neutral."; fail=1
+          fi
+
+          # 2) Added lines of the PR diff. The guard files themselves contain these patterns by
+          #    design, so they are excluded from the scan.
+          added=$(git diff --unified=0 "$BASE...$HEAD" -- . \
+                    ':(exclude).github/workflows/pr-hygiene.yml' \
+                    ':(exclude).github/workflows/commit-lint.yml' \
+                    ':(exclude).githooks/pre-push' \
+                  | grep -E '^\+' | grep -vE '^\+\+\+' || true)
+          if printf '%s' "$added" | grep -qiE "$ai"; then
+            echo "::error::A changed line adds an AI-attribution/agent marker — remove it."; fail=1
+          fi
+          if printf '%s' "$added" | grep -qE "$keys"; then
+            echo "::error::A changed line adds an internal tracker key — the public repo must stay neutral."; fail=1
+          fi
+
+          if [ "$fail" -ne 0 ]; then
+            echo "pr-hygiene failed. See the errors above; scrub the offending text before merging."
+            exit 1
+          fi
+          echo "PR text and diff are neutral (no AI attribution, no internal keys)."
