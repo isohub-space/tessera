@@ -63,6 +63,13 @@ public class OAuthClientEntity extends PanacheEntityBase {
     @Column(name = "allowed_grants", nullable = false)
     public String allowedGrants;
 
+    /**
+     * Whitespace-separated registered redirect URIs (exact-match allow-list for
+     * {@code /authorize}); {@code null} for a client with no registered URI.
+     */
+    @Column(name = "redirect_uris")
+    public String redirectUris;
+
     /** Creation instant (UTC). */
     @Column(name = "created_at", nullable = false, updatable = false)
     public Instant createdAt;

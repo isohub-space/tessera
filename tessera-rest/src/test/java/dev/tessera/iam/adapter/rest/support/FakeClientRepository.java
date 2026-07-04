@@ -50,17 +50,21 @@ public class FakeClientRepository implements ClientRepositoryPort {
     private static final Set<GrantType> CODE_GRANT = Set.of(new AuthorizationCode());
     private static final Set<GrantType> ONLY_CLIENT_CREDENTIALS = Set.of(new ClientCredentials());
 
+    /** The redirect URI the flow tests use; registered for every fake client. */
+    public static final String REDIRECT_URI = "https://client.example/callback";
+    private static final Set<String> REDIRECTS = Set.of(REDIRECT_URI);
+
     @Override
     public Uni<Client> findByClientId(RealmKey realm, String clientId) {
         if (realm == null) {
             throw new IllegalArgumentException("realm must not be null");
         }
         Client client = switch (clientId == null ? "" : clientId) {
-            case PUBLIC_CLIENT_ID -> new PublicClient(PUBLIC_IDENTITY, realm, CODE_GRANT);
+            case PUBLIC_CLIENT_ID -> new PublicClient(PUBLIC_IDENTITY, realm, CODE_GRANT, REDIRECTS);
             case CONFIDENTIAL_CLIENT_ID -> new ConfidentialClient(
-                    CONFIDENTIAL_IDENTITY, realm, CODE_GRANT, ClientAuthMethod.CLIENT_SECRET);
+                    CONFIDENTIAL_IDENTITY, realm, CODE_GRANT, ClientAuthMethod.CLIENT_SECRET, REDIRECTS);
             case NO_CODE_CLIENT_ID -> new ConfidentialClient(
-                    NO_CODE_IDENTITY, realm, ONLY_CLIENT_CREDENTIALS, ClientAuthMethod.CLIENT_SECRET);
+                    NO_CODE_IDENTITY, realm, ONLY_CLIENT_CREDENTIALS, ClientAuthMethod.CLIENT_SECRET, REDIRECTS);
             default -> null;
         };
         return Uni.createFrom().item(client);

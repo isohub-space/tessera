@@ -208,6 +208,18 @@ class AuthorizationCodeFlowTest {
     }
 
     @Test
+    @DisplayName("authorize with an unregistered redirect_uri is a non-redirectable 400 invalid_request")
+    void unregisteredRedirectUriIsRejected() {
+        // The fake clients register only https://client.example/callback; a different redirect_uri
+        // is not in the allow-list, so no code is issued and the error is NOT redirected.
+        authorize(FakeClientRepository.PUBLIC_CLIENT_ID, "https://client.example/EVIL",
+                "openid", "state-e", "nonce-e", s256(newVerifier()), "S256", "user-sub-1")
+                .then().statusCode(400)
+                .header("Location", org.hamcrest.Matchers.nullValue())
+                .body("error", org.hamcrest.Matchers.equalTo("invalid_request"));
+    }
+
+    @Test
     @DisplayName("token with an unsupported grant_type is unsupported_grant_type")
     void unsupportedGrantTypeIsRejected() {
         given().config(noFollow())

@@ -69,4 +69,16 @@ class OAuthClientMapperTest {
         assertThatThrownBy(() -> OAuthClientMapper.toDomain(e))
                 .isInstanceOf(IllegalStateException.class);
     }
+
+    @Test
+    @DisplayName("redirect URIs parse from whitespace-separated text; null/blank yields an empty set")
+    void mapsRedirectUris() {
+        OAuthClientEntity e = entity(ClientType.PUBLIC, null, "authorization_code");
+        e.redirectUris = "https://a.example/cb\n  https://b.example/cb ";
+        assertThat(OAuthClientMapper.toDomain(e).redirectUris())
+                .containsExactly("https://a.example/cb", "https://b.example/cb");
+
+        OAuthClientEntity none = entity(ClientType.PUBLIC, null, "authorization_code");
+        assertThat(OAuthClientMapper.toDomain(none).redirectUris()).isEmpty();
+    }
 }

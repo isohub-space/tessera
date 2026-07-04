@@ -33,11 +33,26 @@ final class OAuthClientMapper {
     static Client toDomain(OAuthClientEntity entity) {
         RealmKey realm = new RealmKey(new TenantId(entity.tenantId), new BaselineId(entity.baselineId));
         Set<GrantType> grants = parseGrants(entity.allowedGrants);
+        Set<String> redirectUris = parseRedirectUris(entity.redirectUris);
         ClientId id = new ClientId(entity.id);
         return switch (entity.clientType) {
-            case CONFIDENTIAL -> new ConfidentialClient(id, realm, grants, authMethod(entity));
-            case PUBLIC -> new PublicClient(id, realm, grants);
+            case CONFIDENTIAL -> new ConfidentialClient(id, realm, grants, authMethod(entity), redirectUris);
+            case PUBLIC -> new PublicClient(id, realm, grants, redirectUris);
         };
+    }
+
+    private static Set<String> parseRedirectUris(String value) {
+        if (value == null || value.isBlank()) {
+            return Set.of();
+        }
+        Set<String> uris = new LinkedHashSet<>();
+        for (String token : value.split("\\s+")) {
+            String uri = token.trim();
+            if (!uri.isEmpty()) {
+                uris.add(uri);
+            }
+        }
+        return uris;
     }
 
     private static ClientAuthMethod authMethod(OAuthClientEntity entity) {

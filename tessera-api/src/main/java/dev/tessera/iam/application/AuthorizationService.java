@@ -71,6 +71,13 @@ public final class AuthorizationService implements AuthorizeUseCase {
                         return failed(AuthorizationError.UNAUTHORIZED_CLIENT,
                                 "client may not use the authorization_code grant", false);
                     }
+                    if (!client.redirectUris().contains(request.redirectUri())) {
+                        // Unregistered redirect URI: NON-redirectable — delivering an error to an
+                        // unregistered URI would itself be an open redirect. Exact-match check,
+                        // before any code is minted.
+                        return failed(AuthorizationError.INVALID_REQUEST,
+                                "redirect_uri is not registered for this client", false);
+                    }
                     return issueCode(request, client, subjectId);
                 });
     }

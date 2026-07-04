@@ -36,9 +36,10 @@ class ClientTest {
     @DisplayName("exhaustive switch distinguishes confidential from public")
     void exhaustiveSwitchOverClientKind() {
         Client confidential = new ConfidentialClient(
-                ClientId.generate(), realm(), Set.of(new ClientCredentials()), ClientAuthMethod.MTLS);
+                ClientId.generate(), realm(), Set.of(new ClientCredentials()), ClientAuthMethod.MTLS,
+                Set.of());
         Client publicClient = new PublicClient(
-                ClientId.generate(), realm(), Set.of(new AuthorizationCode()));
+                ClientId.generate(), realm(), Set.of(new AuthorizationCode()), Set.of());
 
         assertThat(canHoldSecret(confidential)).isTrue();
         assertThat(canHoldSecret(publicClient)).isFalse();
@@ -50,10 +51,10 @@ class ClientTest {
         // Compile-time guarantee: PublicClient simply has no ClientAuthMethod
         // component. We assert the type-level fact by reflection-free shape check.
         PublicClient publicClient = new PublicClient(
-                ClientId.generate(), realm(), Set.of(new AuthorizationCode()));
+                ClientId.generate(), realm(), Set.of(new AuthorizationCode()), Set.of());
         assertThat(publicClient.getClass().getRecordComponents())
                 .extracting(java.lang.reflect.RecordComponent::getName)
-                .containsExactlyInAnyOrder("id", "realm", "allowedGrants");
+                .containsExactlyInAnyOrder("id", "realm", "allowedGrants", "redirectUris");
     }
 
     @Test
@@ -63,7 +64,7 @@ class ClientTest {
         mutable.add(new AuthorizationCode());
 
         ConfidentialClient client = new ConfidentialClient(
-                ClientId.generate(), realm(), mutable, ClientAuthMethod.PRIVATE_KEY_JWT);
+                ClientId.generate(), realm(), mutable, ClientAuthMethod.PRIVATE_KEY_JWT, Set.of());
 
         // Mutating the source set after construction must not affect the client.
         mutable.add(new ClientCredentials());
@@ -78,16 +79,22 @@ class ClientTest {
     @DisplayName("rejects null/empty mandatory components")
     void rejectsInvalidComponents() {
         assertThatThrownBy(() -> new ConfidentialClient(
-                null, realm(), Set.of(new ClientCredentials()), ClientAuthMethod.MTLS))
+                null, realm(), Set.of(new ClientCredentials()), ClientAuthMethod.MTLS, Set.of()))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new ConfidentialClient(
-                ClientId.generate(), realm(), Set.of(), ClientAuthMethod.MTLS))
+                ClientId.generate(), realm(), Set.of(), ClientAuthMethod.MTLS, Set.of()))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new ConfidentialClient(
-                ClientId.generate(), realm(), Set.of(new ClientCredentials()), null))
+                ClientId.generate(), realm(), Set.of(new ClientCredentials()), null, Set.of()))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new ConfidentialClient(
+                ClientId.generate(), realm(), Set.of(new ClientCredentials()), ClientAuthMethod.MTLS, null))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new PublicClient(
-                ClientId.generate(), null, Set.of(new AuthorizationCode())))
+                ClientId.generate(), null, Set.of(new AuthorizationCode()), Set.of()))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new PublicClient(
+                ClientId.generate(), realm(), Set.of(new AuthorizationCode()), null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }

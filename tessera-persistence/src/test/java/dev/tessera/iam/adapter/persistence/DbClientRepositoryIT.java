@@ -72,6 +72,7 @@ class DbClientRepositoryIT {
         e.clientType = ClientType.CONFIDENTIAL;
         e.authMethod = "CLIENT_SECRET";
         e.allowedGrants = "authorization_code";
+        e.redirectUris = "https://client.example/callback";
         e.secretHash = secretHash;
         e.createdAt = T0;
         return e;
@@ -98,6 +99,8 @@ class DbClientRepositoryIT {
                     org.assertj.core.api.Assertions.assertThat(client)
                             .isInstanceOf(ConfidentialClient.class);
                     org.assertj.core.api.Assertions.assertThat(client.id().value()).isEqualTo(clientId);
+                    org.assertj.core.api.Assertions.assertThat(client.redirectUris())
+                            .containsExactly("https://client.example/callback");
                 });
 
         asserter.assertEquals(
