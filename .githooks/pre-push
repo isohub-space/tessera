@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Local mirror of the server-side commit-lint + pr-hygiene gates: refuse to push commits whose
+# message, or whose added diff lines, carry AI-attribution markers or internal issue-tracker keys.
+# The public repo stays neutral and human-authored. Activate once after cloning:
+#   git config core.hooksPath .githooks
+# (The same rules are enforced server-side, so this is a convenience that catches issues earlier.)
+set -uo pipefail
+
+ai='co-authored-by:[[:space:]]*(claude|anthropic)|claude-session:|claude\.ai/code|generated (with|by) \[?claude|authored (with|by)[^.]*claude|anthropic\.com'
+keys='(\b(IOS|IAM|INF|VEC)-[0-9])|(\bADR-[A-Z0-9])|(iospace\.atlassian)'
+zero='0000000000000000000000000000000000000000'
+status=0
+
+while read -r _localref localsha _remoteref remotesha; do
+  [ "$localsha" = "$zero" ] && continue            # branch deletion — nothing to scan
+  if [ "$remotesha" = "$zero" ]; then              # new branch — scan since main
+    base=$(git merge-base origin/main "$localsha" 2>/dev/null || true)
+    range=${base:+$base..}$localsha
+  else
+    range="$remotesha..$localsha"
+  fi
+
+  if git log --format='%B' "$range" 2>/dev/null | grep -qiE "$ai"; then
+    echo "pre-push BLOCKED: AI-attribution marker in a commit message ($range)." >&2
+    status=1
+  fi
+
+  added=$(git diff --unified=0 "$range" -- . \
+            ':(exclude).github/workflows/pr-hygiene.yml' \
+            ':(exclude).github/workflows/commit-lint.yml' \
+            ':(exclude).githooks/pre-push' \
+          | grep -E '^\+' | grep -vE '^\+\+\+' || true)
+  if printf '%s' "$added" | grep -qiE "$ai"; then
+    echo "pre-push BLOCKED: AI-attribution marker added in the diff ($range)." >&2
+    status=1
+  fi
+  if printf '%s' "$added" | grep -qE "$keys"; then
+    echo "pre-push BLOCKED: internal tracker key added in the diff ($range)." >&2
+    status=1
+  fi
+done
+
+if [ "$status" -ne 0 ]; then
+  echo "  The public repo must stay neutral: no AI attribution, no internal issue-tracker keys." >&2
+fi
+exit "$status"
