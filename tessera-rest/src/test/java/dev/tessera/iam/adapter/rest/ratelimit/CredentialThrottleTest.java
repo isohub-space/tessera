@@ -23,52 +23,55 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Proves the credential brute-force lockout on the Argon2 path. With {@code max-failures=3}, after
- * three consecutive wrong secrets for one {@code (tenant, client_id)} the credential check
- * short-circuits to {@code invalid_client} <em>without invoking the delegate verifier</em> — the
- * property that relieves the hashing pool under a flood.
+ * Proves the credential failure-budget throttle on the Argon2 path. With a failure burst of 3 and
+ * a negligible refill, after three wrong secrets for one {@code (tenant, client_id)} the budget is
+ * spent, so the next verification short-circuits to {@code invalid_client} <em>without invoking the
+ * delegate verifier</em> — the property that caps the hashing rate under a flood.
  *
- * <p>The bypass is proven behaviourally: once locked, presenting the <em>correct</em> secret still
- * yields {@code invalid_client}. Were the delegate ({@link FakeClientSecretVerifier}, which accepts
- * the correct secret) still consulted, that request would succeed with a token.
+ * <p>The bypass is proven behaviourally: once the budget is spent, presenting the <em>correct</em>
+ * secret still yields {@code invalid_client}. Were the delegate ({@link FakeClientSecretVerifier},
+ * which accepts the correct secret) still consulted, that request would succeed with a token. (A
+ * correct secret never spends budget, and the budget refills over time — recovery is covered by the
+ * deterministic {@code TokenBucketTest}; here the refill is set negligibly slow so the burst is
+ * observable within one test.)
  */
 @QuarkusTest
-@TestProfile(CredentialLockoutTest.Profile.class)
-@DisplayName("LockoutClientSecretVerifier — brute-force lockout short-circuits the Argon2 path")
-class CredentialLockoutTest {
+@TestProfile(CredentialThrottleTest.Profile.class)
+@DisplayName("ThrottlingClientSecretVerifier — failure budget short-circuits the Argon2 path")
+class CredentialThrottleTest {
 
     private static final String REDIRECT_URI = FakeClientRepository.REDIRECT_URI;
     private static final Base64.Encoder B64URL = Base64.getUrlEncoder().withoutPadding();
 
     /**
-     * Lockout after 3 failures; ingress buckets left generous so the ~5 request cycles here never
-     * trip them — only the credential tier is under test.
+     * Failure burst of 3 with a negligible refill; ingress buckets left generous so the ~5 request
+     * cycles here never trip them — only the credential tier is under test.
      */
     public static class Profile implements QuarkusTestProfile {
         @Override
         public Map<String, String> getConfigOverrides() {
             return Map.of(
                     "iam.ratelimit.enabled", "true",
-                    "iam.ratelimit.credential-max-failures", "3",
-                    "iam.ratelimit.credential-lockout", "PT5M",
+                    "iam.ratelimit.credential-failure-burst", "3",
+                    "iam.ratelimit.credential-refill-per-minute", "1",
                     "iam.ratelimit.token-capacity", "100",
                     "iam.ratelimit.authorize-capacity", "100");
         }
     }
 
     @Test
-    @DisplayName("after max failures, even the correct secret is refused (delegate bypassed)")
-    void locksOutAndBypassesDelegate() {
+    @DisplayName("after the failure budget is spent, even the correct secret is refused (delegate bypassed)")
+    void spentBudgetBypassesDelegate() {
         String tenant = UUID.randomUUID().toString();
 
-        // Three consecutive wrong secrets — each a real (delegate-consulted) invalid_client.
+        // Three wrong secrets — each a real (delegate-consulted) invalid_client that spends budget.
         for (int i = 0; i < 3; i++) {
             redeemWithSecret(tenant, "wrong-secret-" + i)
                     .then().statusCode(401)
                     .body("error", Matchers.equalTo("invalid_client"));
         }
 
-        // Now locked: the CORRECT secret must still be refused. If the delegate were consulted it
+        // Budget spent: the CORRECT secret must still be refused. If the delegate were consulted it
         // would accept and mint a token — so a 401 here proves the Argon2 path was short-circuited.
         redeemWithSecret(tenant, FakeClientSecretVerifier.CORRECT_SECRET)
                 .then().statusCode(401)
@@ -76,13 +79,13 @@ class CredentialLockoutTest {
     }
 
     @Test
-    @DisplayName("a different tenant is not affected by another tenant's lockout")
-    void lockoutIsPerTenant() {
-        String locked = UUID.randomUUID().toString();
+    @DisplayName("a different tenant is not affected by another tenant's spent budget")
+    void throttleIsPerTenant() {
+        String throttled = UUID.randomUUID().toString();
         for (int i = 0; i < 3; i++) {
-            redeemWithSecret(locked, "nope-" + i);
+            redeemWithSecret(throttled, "nope-" + i);
         }
-        redeemWithSecret(locked, FakeClientSecretVerifier.CORRECT_SECRET).then().statusCode(401);
+        redeemWithSecret(throttled, FakeClientSecretVerifier.CORRECT_SECRET).then().statusCode(401);
 
         // A fresh tenant with the correct secret authenticates normally (200).
         redeemWithSecret(UUID.randomUUID().toString(), FakeClientSecretVerifier.CORRECT_SECRET)

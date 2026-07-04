@@ -57,6 +57,17 @@ class TokenBucketTest {
     }
 
     @Test
+    @DisplayName("hasToken peeks availability without consuming")
+    void hasTokenDoesNotConsume() {
+        TokenBucket b = bucket(1, 0.5);   // 1 token / 2 seconds
+        assertThat(b.hasToken()).isTrue();
+        assertThat(b.hasToken()).isTrue();   // repeated peeks never drain
+        assertThat(b.tryAcquire()).isTrue(); // the single token is still there to take
+        assertThat(b.hasToken()).isFalse();  // now empty
+        assertThat(b.tryAcquire()).isFalse();
+    }
+
+    @Test
     @DisplayName("rejects non-positive parameters")
     void rejectsBadParams() {
         assertThatThrownBy(() -> bucket(0, 1.0)).isInstanceOf(IllegalArgumentException.class);

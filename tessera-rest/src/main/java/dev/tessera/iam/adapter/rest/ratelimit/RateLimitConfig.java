@@ -2,7 +2,6 @@ package dev.tessera.iam.adapter.rest.ratelimit;
 
 import io.smallrye.config.ConfigMapping;
 import io.smallrye.config.WithDefault;
-import java.time.Duration;
 
 /**
  * Rate-limiting and brute-force-lockout knobs for the edge (RFC 9700 §2 — credential-stuffing
@@ -41,14 +40,15 @@ public interface RateLimitConfig {
     int authorizeRefillPerMinute();
 
     /**
-     * Consecutive wrong secrets for one {@code (tenant, client_id)} before the credential path is
-     * locked out — short-circuiting to {@code invalid_client} without running Argon2, which
-     * relieves the hashing pool under an invalid-credential flood.
+     * Failure-budget burst for the credential path: how many wrong secrets one
+     * {@code (tenant, client_id)} may spend before further verification is throttled (short-circuited
+     * to {@code invalid_client} without running Argon2, capping the hashing rate under a flood). A
+     * correct secret spends none of this budget.
      */
     @WithDefault("10")
-    int credentialMaxFailures();
+    int credentialFailureBurst();
 
-    /** How long a {@code (tenant, client_id)} stays locked out after the failure threshold. */
-    @WithDefault("PT5M")
-    Duration credentialLockout();
+    /** Rate (per minute) at which a client's spent failure budget refills, so throttling self-heals. */
+    @WithDefault("2")
+    int credentialRefillPerMinute();
 }

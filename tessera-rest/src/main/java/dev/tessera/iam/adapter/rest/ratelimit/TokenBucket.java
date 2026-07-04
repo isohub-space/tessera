@@ -40,6 +40,12 @@ final class TokenBucket {
         return false;
     }
 
+    /** True when at least one token is available now, without consuming it. */
+    synchronized boolean hasToken() {
+        refill();
+        return tokens >= 1.0;
+    }
+
     /** Whole seconds until at least one token is available (0 if one is available now). */
     synchronized long retryAfterSeconds() {
         refill();

@@ -97,8 +97,12 @@ public class RateLimitFilter implements ContainerRequestFilter {
         }
     }
 
+    /** True iff the request targets the token endpoint. Matches the exact last path segment, not a
+     *  substring, so a future path merely containing "token" cannot misroute bucket selection. */
     private boolean isToken(ContainerRequestContext request) {
-        return request.getUriInfo().getPath().contains("token");
+        var segments = request.getUriInfo().getPathSegments();
+        return !segments.isEmpty()
+                && "token".equals(segments.get(segments.size() - 1).getPath());
     }
 
     private static RateLimitPolicy tokenPolicy(RateLimitConfig config) {

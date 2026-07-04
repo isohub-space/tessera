@@ -313,7 +313,7 @@ tagged when the wave's integration test suite passes an end-to-end OIDC flow.
 
 ### Ongoing
 - [ ] Distributed authorization-code store (the shipped store is single-node in-memory; a shared-cache adapter is needed for multi-node)
-- [ ] Distributed rate limiting (the shipped ingress limiter and credential lockout are single-node in-memory; a shared-cache backend enforces limits fleet-wide)
+- [ ] Distributed rate limiting (the shipped ingress limiter and credential-verification throttle are single-node in-memory; a shared-cache backend enforces limits fleet-wide)
 - [ ] Native-image build measurements and CI publication
 - [ ] OpenID Connect conformance test suite
 - [ ] Static analysis gates (Checkstyle / SpotBugs) re-enabled in build
