@@ -3,6 +3,8 @@ package dev.tessera.iam.adapter.rest;
 import io.smallrye.mutiny.Uni;
 import dev.tessera.iam.adapter.rest.config.OidcDiscoveryConfig;
 import dev.tessera.iam.adapter.rest.dto.OAuthErrorDto;
+import dev.tessera.iam.adapter.rest.tenancy.TenantContext;
+import dev.tessera.iam.adapter.rest.tenancy.TenantScoped;
 import dev.tessera.iam.application.port.in.AuthorizeUseCase;
 import dev.tessera.iam.application.port.in.AuthorizeUseCase.AuthorizeResult;
 import dev.tessera.iam.domain.authcode.AuthorizationError;
@@ -54,6 +56,7 @@ import org.eclipse.microprofile.openapi.annotations.tags.Tag;
  */
 @Path("/authorize")
 @Tag(name = "authorization", description = "OAuth 2.0 / OIDC authorization endpoint.")
+@TenantScoped
 public class AuthorizeResource {
 
     /** The only response type this server supports (RFC 6749 §3.1.1). */
@@ -68,14 +71,15 @@ public class AuthorizeResource {
     @Inject
     OidcDiscoveryConfig config;
 
+    @Inject
+    TenantContext tenantContext;
+
     @GET
     @Produces(MediaType.APPLICATION_JSON)
     @Operation(
             operationId = "authorize",
             summary = "Authorize a request and issue a single-use code (Authorization Code + PKCE)")
     public Uni<Response> authorize(
-            @HeaderParam("X-Tenant-Id") String tenantHeader,
-            @HeaderParam("X-Baseline-Id") String baselineHeader,
             @HeaderParam("X-Subject-Id") String subjectId,
             @QueryParam("response_type") String responseType,
             @QueryParam("client_id") String clientId,
@@ -86,7 +90,7 @@ public class AuthorizeResource {
             @QueryParam("code_challenge") String codeChallenge,
             @QueryParam("code_challenge_method") String codeChallengeMethod) {
 
-        RealmKey realm = RealmHeaders.resolve(tenantHeader, baselineHeader);
+        RealmKey realm = tenantContext.realm();
 
         // Authorization-time validation errors are deliberately NOT redirected. RFC 6749
         // §4.1.2.1: an error may be delivered to a redirect_uri only once that URI has been
