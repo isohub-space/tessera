@@ -73,7 +73,7 @@
       build. nvd.api.key is empty by default and supplied by CI from the
       NVD_API_KEY secret to lift the anonymous NVD rate limit.
     -->
-    <dependency-check-maven.version>10.0.4</dependency-check-maven.version>
+    <dependency-check-maven.version>12.2.2</dependency-check-maven.version>
     <nvd.api.key></nvd.api.key>
 
     <!-- Release-profile plugins (inactive during normal builds). -->
