@@ -2,7 +2,7 @@ package dev.tessera.iam.application.port.out;
 
 /**
  * Outbound port that mints cryptographically-random opaque identifiers — authorization
- * codes and token {@code jti}s.
+ * codes, token {@code jti}s, refresh-token secrets, and refresh-family ids.
  *
  * <p>Randomness is an effect: the functional core reads no entropy, so generating an
  * unguessable code or token id lives behind this port and is supplied by an adapter
@@ -28,4 +28,11 @@ public interface OpaqueIdentifierPort {
      *         memory-hard KDF), unlike a user-chosen client secret.
      */
     String newRefreshToken();
+
+    /**
+     * @return a fresh identifier for a refresh-token family — a time-ordered UUID (v7), matching the
+     *         append-heavy family primary key. Embedded (non-secret) in the opaque refresh token so a
+     *         presented token routes to its family without a request header.
+     */
+    java.util.UUID newFamilyId();
 }

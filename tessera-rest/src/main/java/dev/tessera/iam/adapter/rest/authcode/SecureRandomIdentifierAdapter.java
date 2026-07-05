@@ -1,9 +1,11 @@
 package dev.tessera.iam.adapter.rest.authcode;
 
 import dev.tessera.iam.application.port.out.OpaqueIdentifierPort;
+import dev.tessera.iam.domain.tenancy.TimeOrderedUuid;
 import jakarta.enterprise.context.ApplicationScoped;
 import java.security.SecureRandom;
 import java.util.Base64;
+import java.util.UUID;
 
 /**
  * CSPRNG-backed implementation of {@link OpaqueIdentifierPort}.
@@ -37,6 +39,12 @@ public class SecureRandomIdentifierAdapter implements OpaqueIdentifierPort {
     @Override
     public String newRefreshToken() {
         return randomToken();
+    }
+
+    @Override
+    public UUID newFamilyId() {
+        // Time-ordered (v7) to match the append-heavy family primary key.
+        return TimeOrderedUuid.generate();
     }
 
     private String randomToken() {

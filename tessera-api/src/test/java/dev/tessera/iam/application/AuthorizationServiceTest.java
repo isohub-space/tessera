@@ -76,6 +76,11 @@ class AuthorizationServiceTest {
             public String newRefreshToken() {
                 return "fixed-refresh";
             }
+
+            @Override
+            public java.util.UUID newFamilyId() {
+                return java.util.UUID.fromString("00000000-0000-7000-8000-000000000001");
+            }
         };
         return new AuthorizationService(clients, codeStore, ids,
                 Clock.fixed(Instant.parse("2026-01-01T00:00:00Z"), ZoneOffset.UTC),
