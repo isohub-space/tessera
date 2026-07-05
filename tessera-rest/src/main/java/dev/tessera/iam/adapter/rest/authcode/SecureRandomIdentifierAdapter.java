@@ -34,6 +34,11 @@ public class SecureRandomIdentifierAdapter implements OpaqueIdentifierPort {
         return randomToken();
     }
 
+    @Override
+    public String newRefreshToken() {
+        return randomToken();
+    }
+
     private String randomToken() {
         byte[] bytes = new byte[IDENTIFIER_BYTES];
         random.nextBytes(bytes);

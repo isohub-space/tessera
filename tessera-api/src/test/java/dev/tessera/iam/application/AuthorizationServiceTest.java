@@ -71,6 +71,11 @@ class AuthorizationServiceTest {
             public String newTokenId() {
                 return "fixed-jti";
             }
+
+            @Override
+            public String newRefreshToken() {
+                return "fixed-refresh";
+            }
         };
         return new AuthorizationService(clients, codeStore, ids,
                 Clock.fixed(Instant.parse("2026-01-01T00:00:00Z"), ZoneOffset.UTC),
