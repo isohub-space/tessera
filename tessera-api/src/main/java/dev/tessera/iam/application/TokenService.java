@@ -6,7 +6,9 @@ import dev.tessera.iam.application.port.out.AuthorizationCodeStorePort;
 import dev.tessera.iam.application.port.out.ClientRepositoryPort;
 import dev.tessera.iam.application.port.out.ClientSecretVerifierPort;
 import dev.tessera.iam.application.port.out.OpaqueIdentifierPort;
+import dev.tessera.iam.application.port.out.RefreshTokenStorePort;
 import dev.tessera.iam.application.port.out.TokenSignerPort;
+import dev.tessera.iam.application.refresh.RefreshTokenCodec;
 import dev.tessera.iam.domain.authcode.AuthorizationError;
 import dev.tessera.iam.domain.authcode.AuthorizationGrant;
 import dev.tessera.iam.domain.authcode.IssuedTokenClaims;
@@ -14,12 +16,17 @@ import dev.tessera.iam.domain.authcode.PkceVerifier;
 import dev.tessera.iam.domain.client.Client;
 import dev.tessera.iam.domain.client.ConfidentialClient;
 import dev.tessera.iam.domain.client.PublicClient;
+import dev.tessera.iam.domain.client.grant.GrantType;
+import dev.tessera.iam.domain.client.grant.RefreshToken;
+import dev.tessera.iam.domain.refresh.FamilyId;
+import dev.tessera.iam.domain.refresh.RefreshTokenFamily;
 import dev.tessera.iam.domain.tenancy.RealmKey;
 import dev.tessera.iam.domain.token.ClaimSet;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * Application service for the token endpoint: redeems a single-use authorization code for
@@ -47,10 +54,13 @@ public final class TokenService implements TokenUseCase {
     private final ClientSecretVerifierPort secretVerifier;
     private final TokenSignerPort signer;
     private final OpaqueIdentifierPort identifiers;
+    private final RefreshTokenStorePort refreshStore;
     private final Clock clock;
     private final String issuer;
     private final Duration accessTokenTtl;
     private final Duration idTokenTtl;
+    private final Duration refreshTokenTtl;
+    private final boolean refreshEnabled;
 
     public TokenService(
             ClientRepositoryPort clients,
@@ -58,19 +68,25 @@ public final class TokenService implements TokenUseCase {
             ClientSecretVerifierPort secretVerifier,
             TokenSignerPort signer,
             OpaqueIdentifierPort identifiers,
+            RefreshTokenStorePort refreshStore,
             Clock clock,
             String issuer,
             Duration accessTokenTtl,
-            Duration idTokenTtl) {
+            Duration idTokenTtl,
+            Duration refreshTokenTtl,
+            boolean refreshEnabled) {
         this.clients = requireNonNull(clients, "clients");
         this.codeStore = requireNonNull(codeStore, "codeStore");
         this.secretVerifier = requireNonNull(secretVerifier, "secretVerifier");
         this.signer = requireNonNull(signer, "signer");
         this.identifiers = requireNonNull(identifiers, "identifiers");
+        this.refreshStore = requireNonNull(refreshStore, "refreshStore");
         this.clock = requireNonNull(clock, "clock");
         this.issuer = requireText(issuer, "issuer");
         this.accessTokenTtl = requirePositive(accessTokenTtl, "accessTokenTtl");
         this.idTokenTtl = requirePositive(idTokenTtl, "idTokenTtl");
+        this.refreshTokenTtl = requirePositive(refreshTokenTtl, "refreshTokenTtl");
+        this.refreshEnabled = refreshEnabled;
     }
 
     @Override
@@ -108,7 +124,7 @@ public final class TokenService implements TokenUseCase {
                     }
                     return authenticateClient(command, client)
                             .flatMap(authenticated -> authenticated
-                                    ? issueTokens(command, grant)
+                                    ? issueTokens(command, grant, client)
                                     : invalidClient("client authentication failed"));
                 });
     }
@@ -132,7 +148,8 @@ public final class TokenService implements TokenUseCase {
         };
     }
 
-    private Uni<TokenResult> issueTokens(TokenRequestCommand command, AuthorizationGrant grant) {
+    private Uni<TokenResult> issueTokens(
+            TokenRequestCommand command, AuthorizationGrant grant, Client client) {
         Instant now = clock.instant();
         Set<String> scopes = grant.scopes();
         ClaimSet accessClaims = IssuedTokenClaims.accessToken(
@@ -154,13 +171,50 @@ public final class TokenService implements TokenUseCase {
                         now, now.plus(idTokenTtl)))
                 : Uni.createFrom().nullItem();
 
+        Uni<String> refreshUni = mintRefreshToken(command, grant, client, now);
+
         String scope = String.join(" ", scopes);
-        return Uni.combine().all().unis(accessUni, idUni).asTuple()
+        return Uni.combine().all().unis(accessUni, idUni, refreshUni).asTuple()
                 .map(tuple -> new TokenResult.Issued(
                         tuple.getItem1(),
                         tuple.getItem2(),
                         accessTokenTtl.toSeconds(),
-                        scope));
+                        scope,
+                        tuple.getItem3()));
+    }
+
+    /**
+     * Mints an initial refresh token — and creates its single-use rotation family — only when the
+     * grant is enabled, the client is permitted the refresh grant, and the request carried the OIDC
+     * {@code offline_access} scope. Otherwise it emits {@code null} (no refresh token), leaving the
+     * response identical to before. This adds no new failure branch: it runs on the already-successful
+     * issuance path.
+     */
+    private Uni<String> mintRefreshToken(
+            TokenRequestCommand command, AuthorizationGrant grant, Client client, Instant now) {
+        boolean issue = refreshEnabled
+                && allowsRefresh(client)
+                && grant.scopes().contains("offline_access");
+        if (!issue) {
+            return Uni.createFrom().nullItem();
+        }
+        UUID familyUuid = identifiers.newFamilyId();
+        FamilyId familyId = new FamilyId(familyUuid);
+        String secret = identifiers.newRefreshToken();
+        String wire = RefreshTokenCodec.assemble(familyId, secret);
+        RefreshTokenFamily family = new RefreshTokenFamily(
+                familyId, command.realm(), grant.subjectId(), grant.clientId(),
+                RefreshTokenCodec.sha256(secret), null, 0, false, now, now.plus(refreshTokenTtl));
+        return refreshStore.createFamily(family).replaceWith(wire);
+    }
+
+    private static boolean allowsRefresh(Client client) {
+        for (GrantType allowed : client.allowedGrants()) {
+            if (allowed instanceof RefreshToken) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // ------------------------------------------------------------------ helpers
