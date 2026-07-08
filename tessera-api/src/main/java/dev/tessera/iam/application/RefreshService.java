@@ -42,10 +42,13 @@ import java.util.Set;
  *       always runs against <em>that</em> realm — so a replayed or stolen token is detected and its
  *       family burned even when the caller sends a wrong or absent tenant header.</li>
  *   <li><strong>Fail-closed issuance.</strong> A new token is minted only when the request's header
- *       tenant equals the authoritative realm. A cross-tenant presentation of the live token still
- *       rotates (consumes) it but issues nothing — a self-inflicted denial that grants no capability,
- *       since reaching the rotate branch already required possessing the live secret. The header
- *       check therefore must stay <em>after</em> {@code consumeAndRotate}, never before it.</li>
+ *       tenant equals the authoritative realm, and only when the family belongs to the authenticating
+ *       client. Both checks run <em>after</em> {@code consumeAndRotate}, so a mismatched presentation
+ *       of the live token still rotates (consumes) it but issues nothing — a self-inflicted denial
+ *       that grants no capability, since reaching the rotate branch already required possessing the
+ *       live secret. This ordering is deliberate: it keeps fail-safe family revocation working on any
+ *       replay signal regardless of who presents the token, at the cost that a party already holding
+ *       a stolen token can force its consumption (but obtains no tokens).</li>
  * </ul>
  * Every failure collapses to {@code invalid_grant} (client-auth failure to {@code invalid_client}),
  * so a caller cannot probe which check failed.
