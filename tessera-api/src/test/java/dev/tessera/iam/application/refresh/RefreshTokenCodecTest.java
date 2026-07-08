@@ -40,11 +40,15 @@ class RefreshTokenCodecTest {
     void hashIsStable() {
         assertThat(RefreshTokenCodec.sha256("abc")).isEqualTo(RefreshTokenCodec.sha256("abc"));
         assertThat(RefreshTokenCodec.sha256("abc")).isNotEqualTo(RefreshTokenCodec.sha256("abd"));
-        // The family id is not part of the hash: two tokens with the same secret hash equally.
+        // The family id is not part of the hash: two tokens under different families but the same
+        // secret produce the same stored hash.
         FamilyId a = new FamilyId(UUID.randomUUID());
         FamilyId b = new FamilyId(UUID.randomUUID());
         String secret = "shared-secret";
-        assertThat(RefreshTokenCodec.parse(RefreshTokenCodec.assemble(a, secret)).get().secret())
-                .isEqualTo(RefreshTokenCodec.parse(RefreshTokenCodec.assemble(b, secret)).get().secret());
+        String hashA = RefreshTokenCodec.sha256(
+                RefreshTokenCodec.parse(RefreshTokenCodec.assemble(a, secret)).get().secret());
+        String hashB = RefreshTokenCodec.sha256(
+                RefreshTokenCodec.parse(RefreshTokenCodec.assemble(b, secret)).get().secret());
+        assertThat(hashA).isEqualTo(hashB);
     }
 }

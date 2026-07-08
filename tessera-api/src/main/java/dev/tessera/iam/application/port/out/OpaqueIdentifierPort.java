@@ -1,5 +1,7 @@
 package dev.tessera.iam.application.port.out;
 
+import java.util.UUID;
+
 /**
  * Outbound port that mints cryptographically-random opaque identifiers — authorization
  * codes, token {@code jti}s, refresh-token secrets, and refresh-family ids.
@@ -34,5 +36,5 @@ public interface OpaqueIdentifierPort {
      *         append-heavy family primary key. Embedded (non-secret) in the opaque refresh token so a
      *         presented token routes to its family without a request header.
      */
-    java.util.UUID newFamilyId();
+    UUID newFamilyId();
 }

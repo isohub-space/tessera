@@ -106,7 +106,9 @@ class RefreshTokenFlowTest {
     private String authorizeCode(String tenant, String verifier) {
         Response authorize = given().config(noFollow())
                 .header("X-Tenant-Id", tenant)
-                .header("X-Subject-Id", "user-sub-1")
+                // The refresh family anchors on a UUID subject (see TokenService), as a real
+                // deployment's OIDC subject is a user UUID.
+                .header("X-Subject-Id", UUID.randomUUID().toString())
                 .queryParam("response_type", "code")
                 .queryParam("client_id", CLIENT)
                 .queryParam("redirect_uri", REDIRECT_URI)

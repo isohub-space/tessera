@@ -194,7 +194,8 @@ public final class TokenService implements TokenUseCase {
             TokenRequestCommand command, AuthorizationGrant grant, Client client, Instant now) {
         boolean issue = refreshEnabled
                 && allowsRefresh(client)
-                && grant.scopes().contains("offline_access");
+                && grant.scopes().contains("offline_access")
+                && isUuid(grant.subjectId());
         if (!issue) {
             return Uni.createFrom().nullItem();
         }
@@ -215,6 +216,21 @@ public final class TokenService implements TokenUseCase {
             }
         }
         return false;
+    }
+
+    /**
+     * The refresh family's user id is persisted as a UUID, so only a UUID subject can anchor one. A
+     * non-UUID subject therefore skips refresh issuance — the client still receives its access and ID
+     * tokens rather than the whole response failing — leaving the deployment's subject-identifier
+     * shape (a user UUID) as the effective precondition for durable credentials.
+     */
+    private static boolean isUuid(String subject) {
+        try {
+            UUID.fromString(subject);
+            return true;
+        } catch (IllegalArgumentException notUuid) {
+            return false;
+        }
     }
 
     // ------------------------------------------------------------------ helpers

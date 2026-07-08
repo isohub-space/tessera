@@ -138,6 +138,20 @@ class RefreshServiceTest {
     }
 
     @Test
+    @DisplayName("with the grant disabled, redemption is refused (invalid_grant), signer untouched")
+    void disabledRefusesRedemption() {
+        String wire = seedFamily();
+        RefreshService disabled = new RefreshService(clients, verifier, signer, ids, store, store,
+                Clock.fixed(T0, ZoneOffset.UTC), "https://issuer.test", Duration.ofMinutes(5), false);
+        TokenResult result = disabled
+                .redeem(new RefreshCommand(REALM_A, wire, CONF_WIRE, CORRECT_SECRET, null))
+                .await().indefinitely();
+        assertThat(result).isInstanceOf(TokenResult.Failed.class);
+        assertThat(((TokenResult.Failed) result).error()).isEqualTo(AuthorizationError.INVALID_GRANT);
+        assertThat(signerCalls).hasValue(0);
+    }
+
+    @Test
     @DisplayName("a malformed / unknown refresh token is invalid_grant")
     void unknownTokenIsInvalidGrant() {
         TokenResult result = service()
