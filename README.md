@@ -17,6 +17,37 @@ whose whole job is issuing verifiable tokens of identity.
 > refresh/introspection/revocation, a login/consent UI, the remaining grants) are
 > still on the roadmap below. Not yet recommended for production.
 
+## What Tessera is — and is not
+
+Tessera is a **multi-tenant OAuth 2.0 / OpenID Connect authorization core**, designed to be
+embedded behind your own infrastructure rather than run as a turnkey identity product. Being
+precise about that boundary matters.
+
+**What it is**
+- A production-shaped implementation of the **Authorization Code + PKCE (S256)** vertical:
+  `/authorize` → `/token`, RFC 9068 JWT access tokens, OIDC ID tokens, rotating refresh
+  tokens, OIDC discovery + JWKS, and EdDSA signing-key rotation.
+- **Multi-tenant and fail-closed** — per-tenant PostgreSQL row-level security, resolved at a
+  single ingress chokepoint.
+- **Hardened at the edge** — deny-by-default CORS, security headers, TLS redirect, ingress
+  rate limiting, and a per-tenant credential brute-force throttle.
+- **Operable** — Micrometer/Prometheus metrics, OpenTelemetry tracing, health probes, and a
+  tamper-evident per-tenant audit log.
+
+**What it is _not_ (yet)**
+- **Not a standalone login server.** Tessera ships no login or consent UI. The authenticated
+  subject is supplied by an upstream authenticator via the `X-Subject-Id` header — you bring
+  the front-end that establishes identity.
+- **Not yet self-sufficient for production key protection.** Signing keys are wrapped with a
+  development master key that is _refused_ outside dev/test; a KMS-backed wrapping adapter is
+  required before a production deployment can boot.
+- **Single-node.** The authorization-code store, the rate limiter, and the refresh-token
+  family store are in-process; a shared-cache backend for multi-node deployments is on the
+  roadmap.
+
+Releases use a `YY.MAJOR.MINOR` version scheme, one Greek-named release per named line; the
+first tagged release will be `26.1.0 "Andromeda"`.
+
 ## Why
 
 Keycloak is powerful but heavy: a JEE-era footprint, slow startup, and a
