@@ -6,6 +6,8 @@ import dev.tessera.iam.adapter.rest.dto.TokenResponseDto;
 import dev.tessera.iam.adapter.rest.ratelimit.RateLimited;
 import dev.tessera.iam.adapter.rest.tenancy.TenantContext;
 import dev.tessera.iam.adapter.rest.tenancy.TenantScoped;
+import dev.tessera.iam.application.port.in.RefreshUseCase;
+import dev.tessera.iam.application.port.in.RefreshUseCase.RefreshCommand;
 import dev.tessera.iam.application.port.in.TokenUseCase;
 import dev.tessera.iam.application.port.in.TokenUseCase.TokenRequestCommand;
 import dev.tessera.iam.application.port.in.TokenUseCase.TokenResult;
@@ -51,9 +53,13 @@ import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 public class TokenResource {
 
     private static final String GRANT_AUTHORIZATION_CODE = "authorization_code";
+    private static final String GRANT_REFRESH_TOKEN = "refresh_token";
 
     @Inject
     TokenUseCase token;
+
+    @Inject
+    RefreshUseCase refresh;
 
     @Inject
     TenantContext tenantContext;
@@ -71,33 +77,43 @@ public class TokenResource {
             @FormParam("redirect_uri") String redirectUri,
             @FormParam("client_id") String clientId,
             @FormParam("client_secret") String clientSecret,
-            @FormParam("code_verifier") String codeVerifier) {
+            @FormParam("code_verifier") String codeVerifier,
+            @FormParam("refresh_token") String refreshToken,
+            @FormParam("scope") String scope) {
 
         RealmKey realm = tenantContext.realm();
 
-        if (!GRANT_AUTHORIZATION_CODE.equals(grantType)) {
-            return error(Response.Status.BAD_REQUEST,
-                    AuthorizationError.UNSUPPORTED_GRANT_TYPE,
-                    "only grant_type=authorization_code is supported");
-        }
-
         // HTTP Basic client authentication takes precedence over body params (RFC 6749
         // §2.3.1 recommends Basic). A confidential client may present its credential either
-        // way; a public client presents neither and relies on PKCE.
+        // way; a public client presents neither and relies on PKCE (or refresh possession).
         BasicCredentials basic = BasicCredentials.parse(authorization);
         String resolvedClientId = basic != null ? basic.clientId() : clientId;
         String resolvedSecret = basic != null ? basic.clientSecret() : clientSecret;
 
-        if (isBlank(resolvedClientId) || isBlank(code) || isBlank(redirectUri)
-                || isBlank(codeVerifier)) {
-            return error(Response.Status.BAD_REQUEST, AuthorizationError.INVALID_REQUEST,
-                    "code, redirect_uri, client_id and code_verifier are required");
+        if (GRANT_AUTHORIZATION_CODE.equals(grantType)) {
+            if (isBlank(resolvedClientId) || isBlank(code) || isBlank(redirectUri)
+                    || isBlank(codeVerifier)) {
+                return error(Response.Status.BAD_REQUEST, AuthorizationError.INVALID_REQUEST,
+                        "code, redirect_uri, client_id and code_verifier are required");
+            }
+            TokenRequestCommand command = new TokenRequestCommand(
+                    realm, code, redirectUri, resolvedClientId, resolvedSecret, codeVerifier);
+            return token.redeemAuthorizationCode(command).map(TokenResource::render);
         }
 
-        TokenRequestCommand command = new TokenRequestCommand(
-                realm, code, redirectUri, resolvedClientId, resolvedSecret, codeVerifier);
+        if (GRANT_REFRESH_TOKEN.equals(grantType)) {
+            if (isBlank(resolvedClientId) || isBlank(refreshToken)) {
+                return error(Response.Status.BAD_REQUEST, AuthorizationError.INVALID_REQUEST,
+                        "refresh_token and client_id are required");
+            }
+            RefreshCommand command = new RefreshCommand(
+                    realm, refreshToken, resolvedClientId, resolvedSecret, scope);
+            return refresh.redeem(command).map(TokenResource::render);
+        }
 
-        return token.redeemAuthorizationCode(command).map(TokenResource::render);
+        return error(Response.Status.BAD_REQUEST,
+                AuthorizationError.UNSUPPORTED_GRANT_TYPE,
+                "only grant_type=authorization_code and grant_type=refresh_token are supported");
     }
 
     private static Response render(TokenResult result) {
@@ -118,7 +134,8 @@ public class TokenResource {
                 TokenResponseDto.BEARER,
                 issued.expiresInSecs(),
                 issued.scope(),
-                issued.idToken());
+                issued.idToken(),
+                issued.refreshToken());
         // RFC 6749 §5.1: token responses must not be cached.
         return Response.ok(body)
                 .header("Cache-Control", "no-store")

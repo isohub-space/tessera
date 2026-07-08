@@ -23,7 +23,8 @@ public record TokenResponseDto(
         @JsonProperty("token_type") String tokenType,
         @JsonProperty("expires_in") long expiresIn,
         @JsonProperty("scope") String scope,
-        @JsonProperty("id_token") String idToken) {
+        @JsonProperty("id_token") String idToken,
+        @JsonProperty("refresh_token") String refreshToken) {
 
     /** The only token type this server issues. */
     public static final String BEARER = "Bearer";

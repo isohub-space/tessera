@@ -11,6 +11,7 @@ import dev.tessera.iam.domain.client.PublicClient;
 import dev.tessera.iam.domain.client.grant.AuthorizationCode;
 import dev.tessera.iam.domain.client.grant.ClientCredentials;
 import dev.tessera.iam.domain.client.grant.GrantType;
+import dev.tessera.iam.domain.client.grant.RefreshToken;
 import dev.tessera.iam.domain.tenancy.RealmKey;
 import jakarta.enterprise.context.ApplicationScoped;
 import java.util.Set;
@@ -37,6 +38,8 @@ public class FakeClientRepository implements ClientRepositoryPort {
     public static final String PUBLIC_CLIENT_ID = "public-spa";
     public static final String CONFIDENTIAL_CLIENT_ID = "confidential-web";
     public static final String NO_CODE_CLIENT_ID = "no-code-client";
+    /** A public client additionally permitted the refresh-token grant (for the refresh flow). */
+    public static final String REFRESH_CLIENT_ID = "refresh-spa";
 
     /** Stable resolved identity for the confidential client (used by the secret verifier). */
     public static final ClientId CONFIDENTIAL_IDENTITY =
@@ -46,8 +49,12 @@ public class FakeClientRepository implements ClientRepositoryPort {
             new ClientId(UUID.fromString("00000000-0000-0000-0000-0000000000a0"));
     private static final ClientId NO_CODE_IDENTITY =
             new ClientId(UUID.fromString("00000000-0000-0000-0000-0000000000b0"));
+    private static final ClientId REFRESH_IDENTITY =
+            new ClientId(UUID.fromString("00000000-0000-0000-0000-0000000000d0"));
 
     private static final Set<GrantType> CODE_GRANT = Set.of(new AuthorizationCode());
+    private static final Set<GrantType> CODE_AND_REFRESH =
+            Set.of(new AuthorizationCode(), new RefreshToken());
     private static final Set<GrantType> ONLY_CLIENT_CREDENTIALS = Set.of(new ClientCredentials());
 
     /** The redirect URI the flow tests use; registered for every fake client. */
@@ -65,6 +72,8 @@ public class FakeClientRepository implements ClientRepositoryPort {
                     CONFIDENTIAL_IDENTITY, realm, CODE_GRANT, ClientAuthMethod.CLIENT_SECRET, REDIRECTS);
             case NO_CODE_CLIENT_ID -> new ConfidentialClient(
                     NO_CODE_IDENTITY, realm, ONLY_CLIENT_CREDENTIALS, ClientAuthMethod.CLIENT_SECRET, REDIRECTS);
+            case REFRESH_CLIENT_ID -> new PublicClient(
+                    REFRESH_IDENTITY, realm, CODE_AND_REFRESH, REDIRECTS);
             default -> null;
         };
         return Uni.createFrom().item(client);

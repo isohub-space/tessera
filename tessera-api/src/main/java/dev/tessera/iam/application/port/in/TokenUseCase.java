@@ -72,15 +72,18 @@ public interface TokenUseCase {
     sealed interface TokenResult permits TokenResult.Issued, TokenResult.Failed {
 
         /**
-         * Success: a signed RFC 9068 access token, its lifetime, and (for an OIDC request)
-         * a signed ID token.
+         * Success: a signed RFC 9068 access token, its lifetime, optionally a signed ID token
+         * (for an OIDC request), and optionally a rotating refresh token.
          *
          * @param accessToken   the compact-serialised JWT access token (never {@code null} or blank)
          * @param idToken       the compact-serialised ID token, or {@code null} for a non-OIDC request
          * @param expiresInSecs the access token lifetime in seconds (positive)
          * @param scope         the granted scope, space-delimited (never {@code null})
+         * @param refreshToken  the opaque refresh token, or {@code null} when none is issued
          */
-        record Issued(String accessToken, String idToken, long expiresInSecs, String scope)
+        record Issued(
+                String accessToken, String idToken, long expiresInSecs, String scope,
+                String refreshToken)
                 implements TokenResult {
             public Issued {
                 if (accessToken == null || accessToken.isBlank()) {
