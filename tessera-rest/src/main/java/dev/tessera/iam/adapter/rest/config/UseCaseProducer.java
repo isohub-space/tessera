@@ -1,15 +1,18 @@
 package dev.tessera.iam.adapter.rest.config;
 
 import dev.tessera.iam.application.AuthorizationService;
+import dev.tessera.iam.application.IntrospectService;
 import dev.tessera.iam.application.ItemService;
 import dev.tessera.iam.application.RefreshService;
 import dev.tessera.iam.application.RevokeService;
 import dev.tessera.iam.application.TokenService;
 import dev.tessera.iam.application.port.in.AuthorizeUseCase;
+import dev.tessera.iam.application.port.in.IntrospectUseCase;
 import dev.tessera.iam.application.port.in.QueryItemsUseCase;
 import dev.tessera.iam.application.port.in.RefreshUseCase;
 import dev.tessera.iam.application.port.in.RevokeUseCase;
 import dev.tessera.iam.application.port.in.TokenUseCase;
+import dev.tessera.iam.application.port.out.AccessTokenIntrospectorPort;
 import dev.tessera.iam.application.port.out.AuthorizationCodeStorePort;
 import dev.tessera.iam.application.port.out.ClientRepositoryPort;
 import dev.tessera.iam.application.port.out.ClientSecretVerifierPort;
@@ -117,5 +120,16 @@ public class UseCaseProducer {
             ClientSecretVerifierPort secretVerifier,
             RefreshTokenStorePort refreshStore) {
         return new RevokeService(clients, secretVerifier, refreshStore);
+    }
+
+    @Produces
+    @ApplicationScoped
+    IntrospectUseCase introspectUseCase(
+            ClientRepositoryPort clients,
+            ClientSecretVerifierPort secretVerifier,
+            RefreshTokenStorePort refreshStore,
+            AccessTokenIntrospectorPort accessTokens,
+            Clock clock) {
+        return new IntrospectService(clients, secretVerifier, refreshStore, accessTokens, clock);
     }
 }
