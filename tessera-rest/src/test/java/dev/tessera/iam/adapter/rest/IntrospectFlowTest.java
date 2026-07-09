@@ -96,8 +96,8 @@ class IntrospectFlowTest {
         introspect(tenant, CALLER, CALLER_SECRET, "").then()
                 .statusCode(200).body("active", Matchers.is(false));
 
-        // A tampered access token (flipped final signature char) fails verification.
-        String tampered = flipLast(tokens.accessToken());
+        // A tampered access token (corrupted signature) fails verification.
+        String tampered = tamperSignature(tokens.accessToken());
         introspect(tenant, CALLER, CALLER_SECRET, tampered).then()
                 .statusCode(200).body("active", Matchers.is(false));
     }
@@ -214,10 +214,17 @@ class IntrospectFlowTest {
         return RestAssured.config().redirect(RedirectConfig.redirectConfig().followRedirects(false));
     }
 
-    private static String flipLast(String jws) {
-        char last = jws.charAt(jws.length() - 1);
-        char replacement = last == 'A' ? 'B' : 'A';
-        return jws.substring(0, jws.length() - 1) + replacement;
+    /**
+     * Corrupts a JWS by changing the <em>first</em> signature character. Unlike the trailing
+     * character — whose low bits are unused base64url padding for a 64-byte Ed25519 signature, so
+     * flipping it may leave the decoded bytes (and thus the signature) unchanged — the first
+     * character always contributes data bits, so this deterministically invalidates the signature.
+     */
+    private static String tamperSignature(String jws) {
+        int sig = jws.lastIndexOf('.') + 1;
+        char first = jws.charAt(sig);
+        char replacement = first == 'A' ? 'B' : 'A';
+        return jws.substring(0, sig) + replacement + jws.substring(sig + 1);
     }
 
     private static byte[] uuidBytes(UUID u) {
