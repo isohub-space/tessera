@@ -61,6 +61,9 @@ public class ThrottlingClientSecretVerifier implements ClientSecretVerifierPort 
     @Inject
     RateLimitConfig config;
 
+    @Inject
+    RateLimitMetrics metrics;
+
     private final ConcurrentMap<CredentialKey, TokenBucket> budgets = new ConcurrentHashMap<>();
     private final AtomicLong callsSinceSweep = new AtomicLong();
 
@@ -75,6 +78,7 @@ public class ThrottlingClientSecretVerifier implements ClientSecretVerifierPort 
         if (!budget.hasToken()) {
             // Failure allowance exhausted: short-circuit without running Argon2. Collapses to
             // invalid_client downstream, same as a wrong secret — no 429, no client-existence oracle.
+            metrics.credentialThrottled(realm.tenant().value());
             return Uni.createFrom().item(Boolean.FALSE);
         }
 

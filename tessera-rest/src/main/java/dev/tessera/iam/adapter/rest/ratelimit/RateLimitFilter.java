@@ -51,6 +51,9 @@ public class RateLimitFilter implements ContainerRequestFilter {
     @Inject
     RateLimitStore store;
 
+    @Inject
+    RateLimitMetrics metrics;
+
     // Resolved lazily (at request time): this filter is a JAX-RS interceptor that RESTEasy
     // instantiates eagerly at deployment — before the @ConfigMapping is registered with the
     // runtime config — so injecting the mapping directly would fail to resolve. By request time
@@ -90,7 +93,9 @@ public class RateLimitFilter implements ContainerRequestFilter {
         for (Bucket bucket : buckets) {
             RateLimitDecision decision = store.tryAcquire(bucket.key(), bucket.policy());
             if (!decision.allowed()) {
-                // A single generic 429 — it must not reveal which key/limit tripped.
+                // A single generic 429 — it must not reveal which key/limit tripped. The metric is
+                // tagged only by the bounded surface and tenant, never the principal.
+                metrics.ingressThrottled(bucket.key().surface().name(), bucket.key().tenant());
                 request.abortWith(ProblemResponse.tooManyRequests(decision.retryAfterSeconds()));
                 return;
             }
