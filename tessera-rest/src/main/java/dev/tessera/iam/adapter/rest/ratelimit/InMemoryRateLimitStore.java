@@ -42,19 +42,21 @@ class InMemoryRateLimitStore implements RateLimitStore {
     private final AtomicLong callsSinceSweep = new AtomicLong();
     private final int maxTrackedKeys;
     private final LongSupplier nanoTime;
+    private final RateLimitMetrics metrics;
 
     @Inject
-    InMemoryRateLimitStore(RateLimitConfig config) {
-        this(config.maxTrackedKeys(), System::nanoTime);
+    InMemoryRateLimitStore(RateLimitConfig config, RateLimitMetrics metrics) {
+        this(config.maxTrackedKeys(), System::nanoTime, metrics);
     }
 
-    /** Visible for testing: inject a deterministic clock and a small key bound. */
-    InMemoryRateLimitStore(int maxTrackedKeys, LongSupplier nanoTime) {
+    /** Visible for testing: inject a deterministic clock, a small key bound, and a metrics sink. */
+    InMemoryRateLimitStore(int maxTrackedKeys, LongSupplier nanoTime, RateLimitMetrics metrics) {
         if (maxTrackedKeys <= 0) {
             throw new IllegalArgumentException("maxTrackedKeys must be positive");
         }
         this.maxTrackedKeys = maxTrackedKeys;
         this.nanoTime = nanoTime;
+        this.metrics = metrics;
     }
 
     @Override
@@ -66,6 +68,7 @@ class InMemoryRateLimitStore implements RateLimitStore {
                 if (buckets.size() >= maxTrackedKeys) {
                     // Fail closed: the tracking table is full, so treat an untracked key as
                     // throttled rather than growing memory without bound under a key-rotation flood.
+                    metrics.trackingTableFull();
                     return RateLimitDecision.deny((long) Math.ceil(1.0 / policy.refillPerSecond()));
                 }
             }
