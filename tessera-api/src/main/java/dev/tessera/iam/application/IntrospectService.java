@@ -127,10 +127,11 @@ public final class IntrospectService implements IntrospectUseCase {
     private static ActiveToken refreshClaims(RefreshTokenFamily family) {
         Long exp = family.expiresAt() == null ? null : family.expiresAt().getEpochSecond();
         Long iat = family.createdAt() == null ? null : family.createdAt().getEpochSecond();
-        // A refresh family carries no scope or jti; token_type is omitted (a refresh token is not a
-        // bearer access token). Those members are simply absent from the response.
-        return new ActiveToken(
-                null, family.clientId().value().toString(), family.userId(), null, exp, iat, null);
+        // A refresh family stores the client's SURROGATE id (a ClientId UUID), not the wire
+        // client_id, and there is no reverse lookup — so client_id is omitted rather than exposing
+        // the internal surrogate (RFC 7662's client_id means the wire identifier). scope, token_type,
+        // and jti are likewise not carried by a refresh family. Only sub and the timestamps are echoed.
+        return new ActiveToken(null, null, family.userId(), null, exp, iat, null);
     }
 
     private Uni<Boolean> authenticate(RealmKey realm, Client client, String presentedSecret) {
