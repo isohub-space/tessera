@@ -55,7 +55,7 @@ class IntrospectFlowTest {
     }
 
     @Test
-    @DisplayName("a live refresh token is active with client_id and sub; a superseded one is inactive")
+    @DisplayName("a live refresh token is active with sub (no client_id); a superseded one is inactive")
     void activeRefreshTokenAndSupersededInactive() {
         String tenant = UUID.randomUUID().toString();
         String subject = UUID.randomUUID().toString();
@@ -64,8 +64,10 @@ class IntrospectFlowTest {
         introspect(tenant, CALLER, CALLER_SECRET, tokens.refreshToken()).then()
                 .statusCode(200)
                 .body("active", Matchers.is(true))
-                .body("client_id", Matchers.equalTo(TOKEN_CLIENT))
-                .body("sub", Matchers.equalTo(subject));
+                .body("sub", Matchers.equalTo(subject))
+                // A refresh family stores only the client's surrogate id, not the wire client_id,
+                // so client_id is omitted for a refresh token (unlike the access-token path).
+                .body("client_id", Matchers.nullValue());
 
         // Rotate: redeeming the refresh token supersedes it and mints a new one.
         String rotated = refresh(tenant, tokens.refreshToken()).then().statusCode(200)
