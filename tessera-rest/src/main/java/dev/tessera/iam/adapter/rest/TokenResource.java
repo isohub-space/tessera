@@ -161,42 +161,4 @@ public class TokenResource {
     private static boolean isBlank(String value) {
         return value == null || value.isBlank();
     }
-
-    /**
-     * Parsed HTTP Basic client credentials ({@code Authorization: Basic base64(id:secret)},
-     * RFC 6749 §2.3.1). The {@code client_id} and {@code client_secret} are
-     * {@code application/x-www-form-urlencoded} per the spec; we decode them so a credential
-     * containing reserved characters round-trips.
-     */
-    private record BasicCredentials(String clientId, String clientSecret) {
-
-        static BasicCredentials parse(String authorization) {
-            if (authorization == null) {
-                return null;
-            }
-            String prefix = "Basic ";
-            if (!authorization.regionMatches(true, 0, prefix, 0, prefix.length())) {
-                return null;
-            }
-            String encoded = authorization.substring(prefix.length()).trim();
-            byte[] decoded;
-            try {
-                decoded = java.util.Base64.getDecoder().decode(encoded);
-            } catch (IllegalArgumentException ex) {
-                return null;
-            }
-            String pair = new String(decoded, java.nio.charset.StandardCharsets.UTF_8);
-            int colon = pair.indexOf(':');
-            if (colon < 0) {
-                return null;
-            }
-            String id = formDecode(pair.substring(0, colon));
-            String secret = formDecode(pair.substring(colon + 1));
-            return new BasicCredentials(id, secret);
-        }
-
-        private static String formDecode(String value) {
-            return java.net.URLDecoder.decode(value, java.nio.charset.StandardCharsets.UTF_8);
-        }
-    }
 }

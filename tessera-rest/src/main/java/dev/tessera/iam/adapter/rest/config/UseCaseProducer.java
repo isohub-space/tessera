@@ -3,10 +3,12 @@ package dev.tessera.iam.adapter.rest.config;
 import dev.tessera.iam.application.AuthorizationService;
 import dev.tessera.iam.application.ItemService;
 import dev.tessera.iam.application.RefreshService;
+import dev.tessera.iam.application.RevokeService;
 import dev.tessera.iam.application.TokenService;
 import dev.tessera.iam.application.port.in.AuthorizeUseCase;
 import dev.tessera.iam.application.port.in.QueryItemsUseCase;
 import dev.tessera.iam.application.port.in.RefreshUseCase;
+import dev.tessera.iam.application.port.in.RevokeUseCase;
 import dev.tessera.iam.application.port.in.TokenUseCase;
 import dev.tessera.iam.application.port.out.AuthorizationCodeStorePort;
 import dev.tessera.iam.application.port.out.ClientRepositoryPort;
@@ -106,5 +108,14 @@ public class UseCaseProducer {
                 oidc.issuer(),
                 authFlow.accessTokenTtl(),
                 refresh.enabled());
+    }
+
+    @Produces
+    @ApplicationScoped
+    RevokeUseCase revokeUseCase(
+            ClientRepositoryPort clients,
+            ClientSecretVerifierPort secretVerifier,
+            RefreshTokenStorePort refreshStore) {
+        return new RevokeService(clients, secretVerifier, refreshStore);
     }
 }
