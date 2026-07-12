@@ -7,15 +7,25 @@ Tessera issues and signs OpenID Connect / OAuth 2.0 tokens. The name is the Roma
 *tessera* — a small token that proved a bearer's identity; fitting, for a service
 whose whole job is issuing verifiable tokens of identity.
 
-> **Status: early / experimental.** The cryptographic core (signing-key lifecycle,
-> JWKS, OIDC discovery), the reactive multi-tenant persistence layer (users,
-> clients, sessions, consents and rotating refresh-token families, each behind
-> fail-closed row-level security), the functional auth-flow domain model, and the
-> **Authorization Code flow with mandatory PKCE (S256)** — `/authorize` →
-> `/token`, issuing signed RFC 9068 JWT access tokens and OIDC ID tokens — are in
-> place. Other authorization-server surfaces (client registration,
-> refresh/introspection/revocation, a login/consent UI, the remaining grants) are
-> still on the roadmap below. Not yet recommended for production.
+> **Status: early / experimental — but the token-issuance core is complete.** The
+> cryptographic core (EdDSA signing-key lifecycle, JWKS, OIDC discovery), the reactive
+> multi-tenant persistence layer (clients and rotating refresh-token families, each behind
+> fail-closed row-level security), the functional auth-flow domain model, and the full
+> confidential-client token-issuance vertical are in place:
+>
+> - **Authorization Code flow with mandatory PKCE (S256)** — `/authorize` → `/token`,
+    >   issuing signed RFC 9068 JWT access tokens and OIDC ID tokens.
+> - **Refresh-token grant** (`grant_type=refresh_token`) — single-use rotation with
+    >   family reuse-detection (RFC 9700 §4.14).
+> - **Token introspection** (RFC 7662, `/introspect`) and **token revocation**
+    >   (RFC 7009, `/revoke`).
+> - **Confidential + public client registry** — Argon2id client secrets, with an
+    >   exact-match `redirect_uri` allow-list enforced before any code is issued.
+>
+> Remaining surfaces (a login/consent UI and interactive credential verification, the
+> `client_credentials` grant, dynamic client registration) are on the roadmap below. No
+> known-open security gaps in the shipped vertical, but not yet recommended for production
+> until the KMS-backed signing-key protection and multi-node stores land.
 
 ## What Tessera is — and is not
 
@@ -24,13 +34,18 @@ embedded behind your own infrastructure rather than run as a turnkey identity pr
 precise about that boundary matters.
 
 **What it is**
-- A production-shaped implementation of the **Authorization Code + PKCE (S256)** vertical:
-  `/authorize` → `/token`, RFC 9068 JWT access tokens, OIDC ID tokens, rotating refresh
-  tokens, OIDC discovery + JWKS, and EdDSA signing-key rotation.
+- A production-shaped implementation of the confidential-client token-issuance vertical:
+  **Authorization Code + PKCE (S256)** (`/authorize` → `/token`), the **refresh-token grant**
+  with single-use rotation and family reuse-detection, **token introspection** (RFC 7662)
+  and **revocation** (RFC 7009) — issuing RFC 9068 JWT access tokens and OIDC ID tokens,
+  with OIDC discovery + JWKS and EdDSA signing-key rotation.
+- A **confidential + public client registry** — Argon2id-hashed client secrets on a dedicated
+  worker pool, with an exact-match registered-`redirect_uri` allow-list enforced before a code
+  is ever issued.
 - **Multi-tenant and fail-closed** — per-tenant PostgreSQL row-level security, resolved at a
   single ingress chokepoint.
 - **Hardened at the edge** — deny-by-default CORS, security headers, TLS redirect, ingress
-  rate limiting, and a per-tenant credential brute-force throttle.
+  rate limiting, and a per-`(tenant, client)` credential brute-force throttle.
 - **Operable** — Micrometer/Prometheus metrics, OpenTelemetry tracing, health probes, and a
   tamper-evident per-tenant audit log.
 
@@ -41,9 +56,9 @@ precise about that boundary matters.
 - **Not yet self-sufficient for production key protection.** Signing keys are wrapped with a
   development master key that is _refused_ outside dev/test; a KMS-backed wrapping adapter is
   required before a production deployment can boot.
-- **Single-node.** The authorization-code store, the rate limiter, and the refresh-token
-  family store are in-process; a shared-cache backend for multi-node deployments is on the
-  roadmap.
+- **Single-node for the ephemeral stores.** The refresh-token family store is durable
+  (PostgreSQL, per-tenant RLS), but the authorization-code store and the rate limiter are
+  in-process; a shared-cache backend for those is required before a multi-node deployment.
 
 Releases use a `YY.MAJOR.MINOR` version scheme, one Greek-named release per named line; the
 first tagged release will be `26.1.0 "Andromeda"`.
@@ -102,8 +117,11 @@ called by the REST adapter:
 
 | Port | Description |
 |------|-------------|
-| `AuthorizeUseCase` | `GET /authorize` — validates an authorization request, starts the auth flow, returns a sealed `AuthorizeResult.Issued` or `AuthorizeResult.Failed`. |
+| `AuthorizeUseCase` | `GET /authorize` — validates an authorization request against the client's registered `redirect_uri` allow-list, starts the auth flow, returns a sealed `AuthorizeResult.Issued` or `AuthorizeResult.Failed`. |
 | `TokenUseCase` | `POST /token` — redeems a single-use authorization code (PKCE verified), issues signed JWT access token + OIDC ID token + opaque refresh token. |
+| `RefreshUseCase` | `POST /token` (`grant_type=refresh_token`) — rotates a single-use refresh token, detects family reuse (RFC 9700 §4.14) and revokes the family on replay, re-issues the token set. |
+| `IntrospectUseCase` | `POST /introspect` (RFC 7662) — grant-authenticated introspection of an access or refresh token. |
+| `RevokeUseCase` | `POST /revoke` (RFC 7009) — grant-authenticated revocation of a token. |
 
 #### Outbound ports (driven adapters)
 
@@ -113,8 +131,11 @@ replacing the bundled adapters:
 | Port | Description |
 |------|-------------|
 | `AuthorizationCodeStorePort` | Store and consume authorization codes with **exactly-once** semantics — `store(code, grant)` / `consume(realm, code)`. The bundled adapter is an in-process concurrent map (single-node only; a shared-cache adapter is on the roadmap). |
-| `ClientRepositoryPort` | Load a registered client by realm and client ID — `findByClientId(realm, clientId)`. |
-| `ClientSecretVerifierPort` | Verify a presented client secret without exposing the stored hash — `verifySecret(realm, clientId, presentedSecret)`. |
+| `ClientRepositoryPort` | Load a registered client by realm and client ID — `findByClientId(realm, clientId)`. The bundled adapter is the reactive-Postgres `OAuthClientRepository`. |
+| `ClientSecretVerifierPort` | Verify a presented client secret without exposing the stored hash — `verifySecret(realm, clientId, presentedSecret)`. The bundled adapter verifies Argon2id hashes on a dedicated worker pool. |
+| `RefreshTokenStorePort` | Persist and rotate refresh-token families with reuse-detection. The bundled adapter is durable (reactive Postgres, per-tenant RLS). |
+| `RefreshTokenTenantResolverPort` | Resolve the owning tenant for a presented refresh token so the request can bind its tenant context before touching tenant-scoped tables. |
+| `AccessTokenIntrospectorPort` | Parse and validate a presented access token (signature, expiry, claims) for the introspection endpoint. |
 | `KeyProviderPort` | Three operations: `sign(realm, keyId, signingInput)` (EdDSA), `publishedJwks(realm)` (public JWKS), `currentSigningKey(realm)` (the `ACTIVE` key for this realm). |
 | `TokenSignerPort` | Produces a compact JWT string from a claim set — `sign(realm, typ, claims)`. Implemented by the bundled EdDSA signer; swap for a KMS-backed signer without touching the domain. |
 | `ClaimSourcePort` | Enriches a token with deployment-specific claims — `loadClaimContext(subject, realm, scopes)`. Implement this to add roles, groups, or any custom assertion from your user store. |
@@ -129,9 +150,8 @@ The domain already models these concepts; the adapters will follow in later wave
 | `credential.*` (PasswordHash, TotpSecret, WebAuthnAuthenticator) | `CredentialVerifierPort` |
 | `authflow.*` (AuthExchange, ChallengeDescriptor, MfaKind) | `SubjectRepositoryPort` + interactive login flow |
 | `client.grant.ClientCredentials` | `ClientCredentialsUseCase` (inbound) |
-| `token.RefreshToken` | `RefreshTokenStorePort` |
-| `signingkey.KeyRotationPolicy` | `KeyRotationPort` |
-| *(not yet modelled)* | `TokenRevocationPort` (RFC 7009), `TokenIntrospectionPort` (RFC 7662), `ClientRegistrationPort` (RFC 7591) |
+| `signingkey.KeyRotationPolicy` | `KeyRotationPort` (scheduled rotation) |
+| *(not yet modelled)* | `ClientRegistrationPort` (RFC 7591 dynamic registration) |
 
 ## Using Tessera
 
@@ -157,7 +177,9 @@ The server listens on `http://localhost:8090` by default. Key endpoints:
 | `GET /.well-known/openid-configuration` | OIDC discovery document |
 | `GET /.well-known/jwks.json` | JSON Web Key Set (public signing keys) |
 | `GET /authorize` | Authorization Code + PKCE endpoint |
-| `POST /token` | Token endpoint |
+| `POST /token` | Token endpoint (authorization-code and `refresh_token` grants) |
+| `POST /introspect` | Token introspection (RFC 7662) |
+| `POST /revoke` | Token revocation (RFC 7009) |
 | `GET /q/health` · `/q/health/ready` · `/q/health/live` | Health probes |
 | `GET /q/metrics` | Prometheus metrics |
 
@@ -186,9 +208,9 @@ The full artifact list published to Maven Central:
 | `space.isohub:tessera-statemachine` | Auth-flow state-machine library |
 | `space.isohub:tessera-observability` | Metrics / tracing / health module |
 
-> Snapshots are not yet published. The first release (`0.1.0`) is gated on the
-> `tessera-e2e` integration suite passing an end-to-end OIDC flow against a real
-> client service.
+> Snapshots are not yet published. The first tagged release, `26.1.0 "Andromeda"`, is
+> gated on the `tessera-e2e` integration suite passing an end-to-end OIDC flow against a
+> real client service.
 
 ### Extending Tessera
 
@@ -199,12 +221,12 @@ with your application's roles, groups, or custom claims:
 @ApplicationScoped
 public class MyClaimSource implements ClaimSourcePort {
 
-    @Override
-    public Uni<ClaimContext> loadClaimContext(String subject, String realm, Set<String> scopes) {
-        // Load roles from your user store and return them as a ClaimContext.
-        return myUserService.findRoles(subject)
+  @Override
+  public Uni<ClaimContext> loadClaimContext(String subject, String realm, Set<String> scopes) {
+    // Load roles from your user store and return them as a ClaimContext.
+    return myUserService.findRoles(subject)
             .map(roles -> ClaimContext.of(Map.of("roles", roles)));
-    }
+  }
 }
 ```
 
@@ -320,24 +342,26 @@ mvn -Pnative -DskipITs -pl tessera-server -am package
 Tessera evolves in waves. Each wave is releasable on its own; a new minor version is
 tagged when the wave's integration test suite passes an end-to-end OIDC flow.
 
-### Wave 1 — shipped (v0.1.0, gated on e2e suite)
+### Wave 1 — machine-facing token issuance (accumulating toward `26.1.0 "Andromeda"`, gated on the e2e suite)
 - [x] OAuth 2.0 Authorization Code flow with mandatory PKCE (S256)
 - [x] RFC 9068 JWT access tokens, OIDC ID tokens
+- [x] Refresh-token grant — single-use rotation with family reuse-detection (RFC 9700 §4.14)
+- [x] Token introspection — RFC 7662 (`POST /introspect`)
+- [x] Token revocation — RFC 7009 (`POST /revoke`)
+- [x] Confidential (Argon2id) + public (PKCE) client registry with `redirect_uri` allow-list
 - [x] EdDSA (Ed25519) signing keys with `PENDING → ACTIVE → RETIRING → RETIRED` lifecycle
 - [x] OIDC discovery (`/.well-known/openid-configuration`) + JWKS endpoint
 - [x] Multi-tenant PostgreSQL adapter with fail-closed row-level security
+- [x] Edge hardening: deny-by-default CORS, security headers, TLS redirect, ingress rate limiting, credential-verification throttle
 - [x] Tamper-evident per-tenant audit log with signed checkpoints
 - [x] First-class observability: Micrometer, OpenTelemetry, SmallRye Health
 
 ### Wave 2 — interactive login
 - [ ] Subject repository port + pluggable credential verifier (password, TOTP, WebAuthn)
 - [ ] Login and consent UI (server-side rendered; replaceable)
-- [ ] Refresh token store port + token rotation
-- [ ] `client_credentials` grant (machine-to-machine)
+- [ ] `client_credentials` grant (machine-to-machine; already modelled in the domain)
 
-### Wave 3 — RFC completeness
-- [ ] Token introspection — RFC 7662 (`POST /introspect`)
-- [ ] Token revocation — RFC 7009 (`POST /revoke`)
+### Wave 3 — RFC completeness & operations
 - [ ] Dynamic client registration — RFC 7591
 - [ ] Key rotation port (scheduled, driven by `KeyRotationPolicy`)
 - [ ] Realm management API
