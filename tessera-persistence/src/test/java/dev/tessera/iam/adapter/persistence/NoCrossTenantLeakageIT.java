@@ -245,8 +245,25 @@ class NoCrossTenantLeakageIT {
         Uni<Void> crossTenant = tenantScope.inTenant(
                 intruder, s -> s.persist(user(new Marker(a.tenantId(), "intruder"))).call(s::flush));
 
+        // collectFailures lets both branches run to completion before the combined Uni
+        // reports the intruder's failure, so tenant A's own transaction has committed by
+        // the time this assertion fires.
         asserter.assertFailedWith(
                 () -> Uni.combine().all().unis(legitimate, crossTenant).collectFailures().discardItems(),
                 Throwable.class);
+
+        // Only the intruder's write must have failed: tenant A sees exactly its own one
+        // user and nothing the intruder tried to stamp with A's id. A count of 1 rules out
+        // an intruder row wrongly slipping in; the subject confirms it is A's own row. This
+        // also guards against the whole assertion passing when both writes wrongly failed.
+        asserter.assertThat(
+                () -> tenantScope.inTenant(a.tenantId(),
+                        s -> s.createQuery("from UserEntity", UserEntity.class).getResultList()),
+                rows -> {
+                    Assertions.assertThat(rows)
+                            .as("tenant A's own concurrent write committed while the intruder's was rejected")
+                            .hasSize(1);
+                    Assertions.assertThat(rows.get(0).subjectId).isEqualTo(a.subject());
+                });
     }
 }
