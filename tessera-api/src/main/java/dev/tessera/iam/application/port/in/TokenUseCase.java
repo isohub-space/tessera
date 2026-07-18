@@ -37,6 +37,13 @@ public interface TokenUseCase {
      * @param clientSecret the presented client secret for a confidential client, or
      *                     {@code null} for a public (PKCE-only) client
      * @param codeVerifier the PKCE {@code code_verifier} (never {@code null} or blank)
+     * @param dpopProof    the compact DPoP proof JWS from the {@code DPoP} header, or
+     *                     {@code null} when none was presented. Required for a public client
+     *                     (its sender-constraining proof); ignored for a confidential client.
+     * @param certThumbprint the base64url SHA-256 thumbprint ({@code x5t#S256}) of the
+     *                     client certificate the gateway asserted for this request, computed
+     *                     at the edge, or {@code null} when none was presented. Required for a
+     *                     confidential client (its mTLS sender-constraining binding, RFC 8705).
      */
     record TokenRequestCommand(
             RealmKey realm,
@@ -44,7 +51,9 @@ public interface TokenUseCase {
             String redirectUri,
             String clientId,
             String clientSecret,
-            String codeVerifier) {
+            String codeVerifier,
+            String dpopProof,
+            String certThumbprint) {
 
         public TokenRequestCommand {
             if (realm == null) {
@@ -76,18 +85,25 @@ public interface TokenUseCase {
          * (for an OIDC request), and optionally a rotating refresh token.
          *
          * @param accessToken   the compact-serialised JWT access token (never {@code null} or blank)
+         * @param tokenType     the OAuth {@code token_type} — {@code DPoP} for a DPoP-bound token
+         *                      (RFC 9449), else {@code Bearer} (a Bearer type covers an
+         *                      mTLS-bound token, whose binding is carried in {@code cnf}, not the
+         *                      type) (never {@code null} or blank)
          * @param idToken       the compact-serialised ID token, or {@code null} for a non-OIDC request
          * @param expiresInSecs the access token lifetime in seconds (positive)
          * @param scope         the granted scope, space-delimited (never {@code null})
          * @param refreshToken  the opaque refresh token, or {@code null} when none is issued
          */
         record Issued(
-                String accessToken, String idToken, long expiresInSecs, String scope,
-                String refreshToken)
+                String accessToken, String tokenType, String idToken, long expiresInSecs,
+                String scope, String refreshToken)
                 implements TokenResult {
             public Issued {
                 if (accessToken == null || accessToken.isBlank()) {
                     throw new IllegalArgumentException("Issued accessToken must not be blank");
+                }
+                if (tokenType == null || tokenType.isBlank()) {
+                    throw new IllegalArgumentException("Issued tokenType must not be blank");
                 }
                 if (expiresInSecs <= 0) {
                     throw new IllegalArgumentException("Issued expiresInSecs must be positive");

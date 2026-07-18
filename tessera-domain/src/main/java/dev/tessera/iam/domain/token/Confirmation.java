@@ -1,5 +1,7 @@
 package dev.tessera.iam.domain.token;
 
+import java.util.Map;
+
 /**
  * A token's {@code cnf} (confirmation) claim — the sender-constraining binding
  *.
@@ -14,6 +16,17 @@ package dev.tessera.iam.domain.token;
 public sealed interface Confirmation permits Confirmation.DpopJkt, Confirmation.MtlsX5tS256 {
 
     /**
+     * Renders this confirmation as the JSON object that becomes a token's {@code cnf}
+     * claim (RFC 7800 §3.1): a single-member map keyed by the binding method's
+     * confirmation-key — {@code jkt} for DPoP (RFC 9449 §6.1), {@code x5t#S256} for
+     * mTLS (RFC 8705 §3.1). Pure: no framework, no serialisation — the adapter that
+     * signs the JWT places this map under the {@code cnf} claim verbatim.
+     *
+     * @return an immutable single-entry {@code cnf} object
+     */
+    Map<String, Object> asCnfClaim();
+
+    /**
      * The JWK SHA-256 thumbprint binding for a DPoP-bound token
      * ({@code cnf.jkt}, RFC 9449).
      *
@@ -25,6 +38,11 @@ public sealed interface Confirmation permits Confirmation.DpopJkt, Confirmation.
             if (jkt == null || jkt.isBlank()) {
                 throw new IllegalArgumentException("DpopJkt jkt must not be blank");
             }
+        }
+
+        @Override
+        public Map<String, Object> asCnfClaim() {
+            return Map.of("jkt", jkt);
         }
     }
 
@@ -40,6 +58,11 @@ public sealed interface Confirmation permits Confirmation.DpopJkt, Confirmation.
             if (x5tS256 == null || x5tS256.isBlank()) {
                 throw new IllegalArgumentException("MtlsX5tS256 x5tS256 must not be blank");
             }
+        }
+
+        @Override
+        public Map<String, Object> asCnfClaim() {
+            return Map.of("x5t#S256", x5tS256);
         }
     }
 }

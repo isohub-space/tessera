@@ -100,6 +100,10 @@ class CredentialThrottleTest {
         String code = authorizeAndExtractCode(tenant, verifier);
         return given().config(noFollow())
                 .header("X-Tenant-Id", tenant)
+                // Confidential client is mTLS sender-constrained: present the client certificate so
+                // a successful auth can be bound and issued (the throttle/401 paths fail before this).
+                .header("X-Client-Certificate",
+                        dev.tessera.iam.adapter.rest.support.TestClientCertificate.PEM)
                 .contentType("application/x-www-form-urlencoded")
                 .formParam("grant_type", "authorization_code")
                 .formParam("code", code)

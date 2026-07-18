@@ -1,6 +1,7 @@
 package dev.tessera.iam.domain.authcode;
 
 import dev.tessera.iam.domain.token.ClaimSet;
+import dev.tessera.iam.domain.token.Confirmation;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -70,6 +71,37 @@ public final class IssuedTokenClaims {
         claims.put("exp", expiresAt.getEpochSecond());
         claims.put("jti", jti);
         claims.put("scope", String.join(" ", scopes));
+        return new ClaimSet(claims);
+    }
+
+    /**
+     * Builds the claim set for a <em>sender-constrained</em> RFC 9068 access token: the
+     * required claims above plus the {@code cnf} confirmation (RFC 7800) that binds the
+     * token to its holder's key — {@code cnf.jkt} for DPoP (RFC 9449) or
+     * {@code cnf["x5t#S256"]} for mTLS (RFC 8705). Every access token this server issues
+     * on the authorization-code path is bound, so {@code cnf} is required here.
+     *
+     * @param cnf the sender-constraining confirmation (never {@code null}); other parameters
+     *            are as {@link #accessToken(String, String, String, Set, Set, String, Instant, Instant)}
+     * @return the unsigned RFC 9068 access-token claim set, including {@code cnf}
+     */
+    public static ClaimSet accessToken(
+            String issuer,
+            String subjectId,
+            String clientId,
+            Set<String> audience,
+            Set<String> scopes,
+            String jti,
+            Instant issuedAt,
+            Instant expiresAt,
+            Confirmation cnf) {
+        if (cnf == null) {
+            throw new IllegalArgumentException("sender-constrained access token cnf must not be null");
+        }
+        ClaimSet base =
+                accessToken(issuer, subjectId, clientId, audience, scopes, jti, issuedAt, expiresAt);
+        Map<String, Object> claims = new LinkedHashMap<>(base.claims());
+        claims.put("cnf", cnf.asCnfClaim());
         return new ClaimSet(claims);
     }
 

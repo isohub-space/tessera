@@ -16,6 +16,7 @@ import dev.tessera.iam.application.port.out.AccessTokenIntrospectorPort;
 import dev.tessera.iam.application.port.out.AuthorizationCodeStorePort;
 import dev.tessera.iam.application.port.out.ClientRepositoryPort;
 import dev.tessera.iam.application.port.out.ClientSecretVerifierPort;
+import dev.tessera.iam.application.port.out.DpopProofValidatorPort;
 import dev.tessera.iam.application.port.out.ItemRepositoryPort;
 import dev.tessera.iam.application.port.out.OpaqueIdentifierPort;
 import dev.tessera.iam.application.port.out.RefreshTokenStorePort;
@@ -66,6 +67,7 @@ public class UseCaseProducer {
             AuthorizationCodeStorePort codeStore,
             ClientSecretVerifierPort secretVerifier,
             TokenSignerPort signer,
+            DpopProofValidatorPort dpop,
             OpaqueIdentifierPort identifiers,
             RefreshTokenStorePort refreshStore,
             Clock clock,
@@ -77,14 +79,25 @@ public class UseCaseProducer {
                 codeStore,
                 secretVerifier,
                 signer,
+                dpop,
                 identifiers,
                 refreshStore,
                 clock,
                 oidc.issuer(),
+                tokenEndpoint(oidc.issuer()),
                 authFlow.accessTokenTtl(),
                 authFlow.idTokenTtl(),
                 refresh.refreshTokenTtl(),
                 refresh.enabled());
+    }
+
+    /**
+     * The token endpoint URL a DPoP proof's {@code htu} must match (RFC 9449 §4.2). Derived
+     * from the configured issuer — never from the request Host — so a client cannot bind a
+     * proof to a foreign authority. Mirrors how OIDC discovery derives endpoint URLs.
+     */
+    private static String tokenEndpoint(String issuer) {
+        return issuer.replaceAll("/+$", "") + "/token";
     }
 
     @Produces

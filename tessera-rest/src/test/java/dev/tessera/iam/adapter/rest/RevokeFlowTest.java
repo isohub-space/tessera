@@ -118,6 +118,8 @@ class RevokeFlowTest {
         String code = authorizeCode(tenant, verifier);
         Response token = given().config(noFollow())
                 .header("X-Tenant-Id", tenant)
+                .header("DPoP", new dev.tessera.iam.adapter.rest.support.DpopTestClient()
+                        .proof("https://issuer.test.example/token"))
                 .contentType("application/x-www-form-urlencoded")
                 .formParam("grant_type", "authorization_code")
                 .formParam("code", code)

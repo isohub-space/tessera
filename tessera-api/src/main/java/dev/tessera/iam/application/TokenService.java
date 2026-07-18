@@ -5,6 +5,7 @@ import dev.tessera.iam.application.port.in.TokenUseCase;
 import dev.tessera.iam.application.port.out.AuthorizationCodeStorePort;
 import dev.tessera.iam.application.port.out.ClientRepositoryPort;
 import dev.tessera.iam.application.port.out.ClientSecretVerifierPort;
+import dev.tessera.iam.application.port.out.DpopProofValidatorPort;
 import dev.tessera.iam.application.port.out.OpaqueIdentifierPort;
 import dev.tessera.iam.application.port.out.RefreshTokenStorePort;
 import dev.tessera.iam.application.port.out.TokenSignerPort;
@@ -22,6 +23,7 @@ import dev.tessera.iam.domain.refresh.FamilyId;
 import dev.tessera.iam.domain.refresh.RefreshTokenFamily;
 import dev.tessera.iam.domain.tenancy.RealmKey;
 import dev.tessera.iam.domain.token.ClaimSet;
+import dev.tessera.iam.domain.token.Confirmation;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -49,14 +51,23 @@ import java.util.UUID;
  */
 public final class TokenService implements TokenUseCase {
 
+    /** OAuth {@code token_type} for a DPoP-bound token (RFC 9449 §5). */
+    private static final String TOKEN_TYPE_DPOP = "DPoP";
+    /** OAuth {@code token_type} for a Bearer token (an mTLS-bound token is a cert-bound Bearer). */
+    private static final String TOKEN_TYPE_BEARER = "Bearer";
+    /** RFC 9449 §4.2: the token endpoint binds proofs to the POST method. */
+    private static final String DPOP_HTM = "POST";
+
     private final ClientRepositoryPort clients;
     private final AuthorizationCodeStorePort codeStore;
     private final ClientSecretVerifierPort secretVerifier;
     private final TokenSignerPort signer;
+    private final DpopProofValidatorPort dpop;
     private final OpaqueIdentifierPort identifiers;
     private final RefreshTokenStorePort refreshStore;
     private final Clock clock;
     private final String issuer;
+    private final String tokenEndpoint;
     private final Duration accessTokenTtl;
     private final Duration idTokenTtl;
     private final Duration refreshTokenTtl;
@@ -67,10 +78,12 @@ public final class TokenService implements TokenUseCase {
             AuthorizationCodeStorePort codeStore,
             ClientSecretVerifierPort secretVerifier,
             TokenSignerPort signer,
+            DpopProofValidatorPort dpop,
             OpaqueIdentifierPort identifiers,
             RefreshTokenStorePort refreshStore,
             Clock clock,
             String issuer,
+            String tokenEndpoint,
             Duration accessTokenTtl,
             Duration idTokenTtl,
             Duration refreshTokenTtl,
@@ -79,10 +92,12 @@ public final class TokenService implements TokenUseCase {
         this.codeStore = requireNonNull(codeStore, "codeStore");
         this.secretVerifier = requireNonNull(secretVerifier, "secretVerifier");
         this.signer = requireNonNull(signer, "signer");
+        this.dpop = requireNonNull(dpop, "dpop");
         this.identifiers = requireNonNull(identifiers, "identifiers");
         this.refreshStore = requireNonNull(refreshStore, "refreshStore");
         this.clock = requireNonNull(clock, "clock");
         this.issuer = requireText(issuer, "issuer");
+        this.tokenEndpoint = requireText(tokenEndpoint, "tokenEndpoint");
         this.accessTokenTtl = requirePositive(accessTokenTtl, "accessTokenTtl");
         this.idTokenTtl = requirePositive(idTokenTtl, "idTokenTtl");
         this.refreshTokenTtl = requirePositive(refreshTokenTtl, "refreshTokenTtl");
@@ -151,6 +166,19 @@ public final class TokenService implements TokenUseCase {
     private Uni<TokenResult> issueTokens(
             TokenRequestCommand command, AuthorizationGrant grant, Client client) {
         Instant now = clock.instant();
+        // Resolve the sender-constraining binding by client kind BEFORE minting anything: a
+        // public client must present a valid DPoP proof (cnf.jkt), a confidential client must
+        // present its mTLS certificate (cnf.x5t#S256). A missing/invalid proof fails here, so
+        // no token is ever assembled unbound.
+        return resolveBinding(command, client, now).flatMap(binding -> switch (binding) {
+            case Binding.Rejected rejected -> Uni.createFrom().item(rejected.result());
+            case Binding.Bound bound -> assembleTokens(command, grant, client, bound, now);
+        });
+    }
+
+    private Uni<TokenResult> assembleTokens(
+            TokenRequestCommand command, AuthorizationGrant grant, Client client,
+            Binding.Bound bound, Instant now) {
         Set<String> scopes = grant.scopes();
         ClaimSet accessClaims = IssuedTokenClaims.accessToken(
                 issuer,
@@ -160,7 +188,8 @@ public final class TokenService implements TokenUseCase {
                 scopes,
                 identifiers.newTokenId(),
                 now,
-                now.plus(accessTokenTtl));
+                now.plus(accessTokenTtl),
+                bound.cnf());
 
         Uni<String> accessUni = signer.sign(command.realm(), "at+jwt", accessClaims);
 
@@ -177,10 +206,75 @@ public final class TokenService implements TokenUseCase {
         return Uni.combine().all().unis(accessUni, idUni, refreshUni).asTuple()
                 .map(tuple -> new TokenResult.Issued(
                         tuple.getItem1(),
+                        bound.tokenType(),
                         tuple.getItem2(),
                         accessTokenTtl.toSeconds(),
                         scope,
                         tuple.getItem3()));
+    }
+
+    /**
+     * Resolves the sender-constraining confirmation for the issued token, exhaustively over
+     * client kind (no {@code default}):
+     * <ul>
+     *   <li>a {@link PublicClient} must present a DPoP proof (RFC 9449) — validated off-loop
+     *       via {@link DpopProofValidatorPort}; the token is {@code cnf.jkt}-bound and its
+     *       {@code token_type} is {@code DPoP};</li>
+     *   <li>a {@link ConfidentialClient} must present its mTLS client certificate (RFC 8705),
+     *       whose {@code x5t#S256} thumbprint the edge computed — the token is
+     *       {@code cnf["x5t#S256"]}-bound and its {@code token_type} stays {@code Bearer}.</li>
+     * </ul>
+     * A missing or invalid proof yields {@link Binding.Rejected}. The mTLS binding is
+     * independent of the client's authentication method, so a {@code client_secret}
+     * confidential client is still certificate-bound.
+     */
+    private Uni<Binding> resolveBinding(TokenRequestCommand command, Client client, Instant now) {
+        return switch (client) {
+            case PublicClient ignored -> {
+                if (command.dpopProof() == null || command.dpopProof().isBlank()) {
+                    yield Uni.createFrom().item(Binding.rejected(
+                            AuthorizationError.INVALID_DPOP_PROOF,
+                            "a DPoP proof is required for a public client"));
+                }
+                DpopProofValidatorPort.Request request = new DpopProofValidatorPort.Request(
+                        command.dpopProof(), DPOP_HTM, tokenEndpoint, now);
+                yield dpop.validate(request).map(result -> switch (result) {
+                    case DpopProofValidatorPort.Result.Valid valid ->
+                            Binding.bound(new Confirmation.DpopJkt(valid.jkt()), TOKEN_TYPE_DPOP);
+                    case DpopProofValidatorPort.Result.Invalid ignoredReason ->
+                            Binding.rejected(
+                                    AuthorizationError.INVALID_DPOP_PROOF,
+                                    "the DPoP proof is invalid");
+                });
+            }
+            case ConfidentialClient ignored -> {
+                if (command.certThumbprint() == null || command.certThumbprint().isBlank()) {
+                    yield Uni.createFrom().item(Binding.rejected(
+                            AuthorizationError.INVALID_REQUEST,
+                            "a client certificate is required for a confidential client"));
+                }
+                yield Uni.createFrom().item(Binding.bound(
+                        new Confirmation.MtlsX5tS256(command.certThumbprint()), TOKEN_TYPE_BEARER));
+            }
+        };
+    }
+
+    /** The resolved sender-constraining outcome: a bound confirmation, or a rejection. */
+    private sealed interface Binding permits Binding.Bound, Binding.Rejected {
+
+        record Bound(Confirmation cnf, String tokenType) implements Binding {
+        }
+
+        record Rejected(TokenResult result) implements Binding {
+        }
+
+        static Binding bound(Confirmation cnf, String tokenType) {
+            return new Bound(cnf, tokenType);
+        }
+
+        static Binding rejected(AuthorizationError error, String description) {
+            return new Rejected(new TokenResult.Failed(error, description));
+        }
     }
 
     /**

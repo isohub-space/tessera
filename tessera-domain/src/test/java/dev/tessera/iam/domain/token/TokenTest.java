@@ -57,6 +57,16 @@ class TokenTest {
     }
 
     @Test
+    @DisplayName("Confirmation renders the RFC 7800 cnf claim under the right key per method")
+    void confirmationRendersCnfClaim() {
+        // DPoP → cnf.jkt (RFC 9449 §6.1); mTLS → cnf["x5t#S256"] (RFC 8705 §3.1).
+        assertThat(new Confirmation.DpopJkt("thumb-jkt").asCnfClaim())
+                .containsExactly(Map.entry("jkt", "thumb-jkt"));
+        assertThat(new Confirmation.MtlsX5tS256("thumb-x5t").asCnfClaim())
+                .containsExactly(Map.entry("x5t#S256", "thumb-x5t"));
+    }
+
+    @Test
     @DisplayName("AccessToken requires a non-null cnf (sender-constrained)")
     void accessTokenRequiresCnf() {
         assertThatThrownBy(() -> new AccessToken(ClaimSet.empty(), null))

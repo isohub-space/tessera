@@ -6,6 +6,7 @@ import dev.tessera.iam.adapter.rest.dto.TokenResponseDto;
 import dev.tessera.iam.adapter.rest.ratelimit.RateLimited;
 import dev.tessera.iam.adapter.rest.tenancy.TenantContext;
 import dev.tessera.iam.adapter.rest.tenancy.TenantScoped;
+import dev.tessera.iam.adapter.rest.token.ClientCertificateThumbprint;
 import dev.tessera.iam.application.port.in.RefreshUseCase;
 import dev.tessera.iam.application.port.in.RefreshUseCase.RefreshCommand;
 import dev.tessera.iam.application.port.in.TokenUseCase;
@@ -72,6 +73,8 @@ public class TokenResource {
             summary = "Redeem an authorization code for tokens (Authorization Code + PKCE)")
     public Uni<Response> token(
             @HeaderParam("Authorization") String authorization,
+            @HeaderParam("DPoP") String dpopProof,
+            @HeaderParam(ClientCertificateThumbprint.HEADER) String clientCertificate,
             @FormParam("grant_type") String grantType,
             @FormParam("code") String code,
             @FormParam("redirect_uri") String redirectUri,
@@ -96,8 +99,14 @@ public class TokenResource {
                 return error(Response.Status.BAD_REQUEST, AuthorizationError.INVALID_REQUEST,
                         "code, redirect_uri, client_id and code_verifier are required");
             }
+            // Sender-constraining material: the DPoP proof (public client) is passed opaque to
+            // the use case's validator; the mTLS certificate thumbprint (confidential client) is
+            // computed here at the edge from the gateway-asserted certificate.
+            String certThumbprint =
+                    ClientCertificateThumbprint.fromHeader(clientCertificate).orElse(null);
             TokenRequestCommand command = new TokenRequestCommand(
-                    realm, code, redirectUri, resolvedClientId, resolvedSecret, codeVerifier);
+                    realm, code, redirectUri, resolvedClientId, resolvedSecret, codeVerifier,
+                    dpopProof, certThumbprint);
             return token.redeemAuthorizationCode(command).map(TokenResource::render);
         }
 
@@ -131,7 +140,7 @@ public class TokenResource {
     private static Response success(TokenResult.Issued issued) {
         TokenResponseDto body = new TokenResponseDto(
                 issued.accessToken(),
-                TokenResponseDto.BEARER,
+                issued.tokenType(),
                 issued.expiresInSecs(),
                 issued.scope(),
                 issued.idToken(),
@@ -150,12 +159,17 @@ public class TokenResource {
 
     private static Response errorBody(
             Response.Status status, AuthorizationError error, String description) {
-        return Response.status(status)
+        Response.ResponseBuilder builder = Response.status(status)
                 .type(MediaType.APPLICATION_JSON)
                 .entity(new OAuthErrorDto(error.code(), description))
                 .header("Cache-Control", "no-store")
-                .header("Pragma", "no-cache")
-                .build();
+                .header("Pragma", "no-cache");
+        // RFC 9449 §5: signal DPoP (and the accepted algorithms) when a public client's proof
+        // was missing or invalid, so the client knows to retry with a proof.
+        if (error == AuthorizationError.INVALID_DPOP_PROOF) {
+            builder.header("WWW-Authenticate", "DPoP algs=\"ES256\"");
+        }
+        return builder.build();
     }
 
     private static boolean isBlank(String value) {

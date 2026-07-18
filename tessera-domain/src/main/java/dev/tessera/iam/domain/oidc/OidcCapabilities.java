@@ -80,7 +80,11 @@ public record OidcCapabilities(
                 List.of("client_secret_basic", "private_key_jwt", "tls_client_auth"),
                 List.of("public"),
                 asymmetricSigningAlgs,
-                asymmetricSigningAlgs,
+                // DPoP proof algorithms accepted at the token endpoint. Narrower than the token
+                // signing set on purpose: the bundled proof validator verifies ES256 (the de-facto
+                // DPoP algorithm), so discovery advertises exactly that — accepting EdDSA proofs is
+                // a follow-up. "Discovery never lies": this list equals what is enforced.
+                List.of("ES256"),
                 List.of("openid", "profile", "email"),
                 true);
     }

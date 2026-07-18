@@ -42,6 +42,17 @@
       <artifactId>quarkus-arc</artifactId>
     </dependency>
 
+    <!--
+      DPoP (RFC 9449) proof verification: parsing the proof JWS, verifying its embedded
+      public JWK signature over client-chosen asymmetric algs, and computing the RFC 7638
+      JWK thumbprint (cnf.jkt). Version is managed by the Quarkus BOM. Confined to this
+      inbound adapter — the domain/api stay framework- and crypto-library-free.
+    -->
+    <dependency>
+      <groupId>com.nimbusds</groupId>
+      <artifactId>nimbus-jose-jwt</artifactId>
+    </dependency>
+
     <!-- Test: boot the adapter as a Quarkus app and exercise it over HTTP. -->
     <dependency>
       <groupId>io.quarkus</groupId>
