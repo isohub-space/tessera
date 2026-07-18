@@ -51,17 +51,40 @@ public final class DpopTestClient {
                     .type(new JOSEObjectType("dpop+jwt"))
                     .jwk(key.toPublicJWK())
                     .build();
-            JWTClaimsSet claims = new JWTClaimsSet.Builder()
-                    .jwtID(jti)
-                    .claim("htm", htm)
-                    .claim("htu", htu)
-                    .issueTime(Date.from(iat))
-                    .build();
-            SignedJWT jwt = new SignedJWT(header, claims);
+            SignedJWT jwt = new SignedJWT(header, boundClaims(htm, htu, iat, jti));
             jwt.sign(new ECDSASigner(key));
             return jwt.serialize();
         } catch (Exception e) {
             throw new IllegalStateException("failed to mint DPoP proof", e);
         }
+    }
+
+    /**
+     * A proof signed with a non-ES256 algorithm (ES384, on a fresh P-384 key) — the validator
+     * accepts only ES256 and must reject it.
+     */
+    public String proofWithUnsupportedAlg(String htu) {
+        try {
+            ECKey es384Key = new ECKeyGenerator(Curve.P_384).generate();
+            JWSHeader header = new JWSHeader.Builder(JWSAlgorithm.ES384)
+                    .type(new JOSEObjectType("dpop+jwt"))
+                    .jwk(es384Key.toPublicJWK())
+                    .build();
+            SignedJWT jwt = new SignedJWT(header,
+                    boundClaims("POST", htu, Instant.now(), UUID.randomUUID().toString()));
+            jwt.sign(new ECDSASigner(es384Key));
+            return jwt.serialize();
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static JWTClaimsSet boundClaims(String htm, String htu, Instant iat, String jti) {
+        return new JWTClaimsSet.Builder()
+                .jwtID(jti)
+                .claim("htm", htm)
+                .claim("htu", htu)
+                .issueTime(Date.from(iat))
+                .build();
     }
 }

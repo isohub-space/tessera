@@ -101,6 +101,17 @@ class NimbusDpopProofValidatorTest {
     }
 
     @Test
+    @DisplayName("a proof signed with a non-ES256 algorithm is rejected")
+    void unsupportedAlgRejected() {
+        assertThat(validate(client.proofWithUnsupportedAlg(HTU), Instant.now()))
+                .isInstanceOf(Result.Invalid.class);
+    }
+
+    // NOTE: the validator's isPrivate() guard is defense-in-depth — the JOSE library's own
+    // header builder refuses to embed a private JWK ("The JWK must be public"), so a proof
+    // carrying private key material cannot be constructed through it to exercise the guard.
+
+    @Test
     @DisplayName("a malformed proof string is rejected, not thrown")
     void malformedRejected() {
         assertThat(validate("not-a-jwt", Instant.now())).isInstanceOf(Result.Invalid.class);
