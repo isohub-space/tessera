@@ -155,9 +155,14 @@ public final class RefreshService implements RefreshUseCase {
                 ClaimSet accessClaims = IssuedTokenClaims.accessToken(
                         issuer, family.userId(), command.clientId(), Set.of(issuer), Set.of(),
                         identifiers.newTokenId(), now, now.plus(accessTokenTtl));
+                // NOTE (follow-up): the refreshed access token is not yet sender-constrained.
+                // Binding it correctly requires continuity — the refresh proof must match the
+                // confirmation bound at original issuance — which needs the confirmation persisted
+                // on the refresh-token family. Until then the rotated access token is an unbound
+                // Bearer.
                 yield signer.sign(authoritativeRealm, "at+jwt", accessClaims)
                         .map(jwt -> new TokenResult.Issued(
-                                jwt, null, accessTokenTtl.toSeconds(), "",
+                                jwt, "Bearer", null, accessTokenTtl.toSeconds(), "",
                                 RefreshTokenCodec.assemble(fid, newSecret)));
             }
             // Replay: the store already burned the family inside the CAS; revoke again (idempotent)

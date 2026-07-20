@@ -3,6 +3,7 @@ package dev.tessera.iam.adapter.rest;
 import static io.restassured.RestAssured.given;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import dev.tessera.iam.adapter.rest.support.DpopTestClient;
 import dev.tessera.iam.adapter.rest.support.FakeClientRepository;
 import dev.tessera.iam.adapter.rest.support.FakeClientSecretVerifier;
 import io.quarkus.test.junit.QuarkusTest;
@@ -34,7 +35,10 @@ class IntrospectFlowTest {
     private static final String TOKEN_CLIENT = FakeClientRepository.REFRESH_CLIENT_ID; // owns the tokens
     private static final String CALLER = FakeClientRepository.CONFIDENTIAL_CLIENT_ID;   // the resource server
     private static final String CALLER_SECRET = FakeClientSecretVerifier.CORRECT_SECRET;
+    private static final String TOKEN_ENDPOINT = "https://issuer.test.example/token";
     private static final Base64.Encoder B64URL = Base64.getUrlEncoder().withoutPadding();
+
+    private final DpopTestClient dpop = new DpopTestClient();
 
     @Test
     @DisplayName("a live JWT access token is active with sub, client_id, scope, token_type, exp, iat")
@@ -149,6 +153,7 @@ class IntrospectFlowTest {
         String code = authorizeCode(tenant, subject, verifier);
         Response token = given().config(noFollow())
                 .header("X-Tenant-Id", tenant)
+                .header("DPoP", dpop.proof(TOKEN_ENDPOINT))
                 .contentType("application/x-www-form-urlencoded")
                 .formParam("grant_type", "authorization_code")
                 .formParam("code", code)

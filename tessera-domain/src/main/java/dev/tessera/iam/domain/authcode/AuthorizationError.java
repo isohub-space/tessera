@@ -38,6 +38,13 @@ public enum AuthorizationError {
     /** The requested scope is unknown or exceeds what the client may request. */
     INVALID_SCOPE("invalid_scope"),
 
+    /**
+     * The DPoP proof (RFC 9449) was missing, malformed, unverifiable, replayed, or not
+     * bound to this request — the sender-constraining proof a public client must present
+     * at the token endpoint. RFC 9449 §5 defines this token-endpoint error code.
+     */
+    INVALID_DPOP_PROOF("invalid_dpop_proof"),
+
     /** The resource owner (or server policy) denied the request. */
     ACCESS_DENIED("access_denied"),
 

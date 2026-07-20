@@ -3,9 +3,11 @@ package dev.tessera.iam.adapter.rest;
 import static io.restassured.RestAssured.given;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import dev.tessera.iam.adapter.rest.support.DpopTestClient;
 import dev.tessera.iam.adapter.rest.support.FakeClientRepository;
 import dev.tessera.iam.adapter.rest.support.FakeClientSecretVerifier;
 import dev.tessera.iam.adapter.rest.support.FakeKeyProvider;
+import dev.tessera.iam.adapter.rest.support.TestClientCertificate;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.RestAssured;
 import io.restassured.config.RedirectConfig;
@@ -39,6 +41,10 @@ class AuthorizationCodeFlowTest {
     private static final String TENANT = UUID.randomUUID().toString();
     private static final String REDIRECT_URI = "https://client.example/callback";
     private static final String ISSUER = "https://issuer.test.example";
+    private static final String TOKEN_ENDPOINT = ISSUER + "/token";
+
+    /** A fresh DPoP client per test method — a public client's sender-constraining key. */
+    private final DpopTestClient dpop = new DpopTestClient();
 
     private static final Base64.Encoder B64URL = Base64.getUrlEncoder().withoutPadding();
     private static final Base64.Decoder B64URL_DEC = Base64.getUrlDecoder();
@@ -67,6 +73,7 @@ class AuthorizationCodeFlowTest {
         Response token = given()
                 .config(noFollow())
                 .header("X-Tenant-Id", TENANT)
+                .header("DPoP", dpop.proof(TOKEN_ENDPOINT))
                 .contentType("application/x-www-form-urlencoded")
                 .formParam("grant_type", "authorization_code")
                 .formParam("code", params.get("code"))
@@ -75,9 +82,10 @@ class AuthorizationCodeFlowTest {
                 .formParam("code_verifier", verifier)
                 .when().post("/token");
 
+        // A public client is DPoP-bound: token_type is DPoP (RFC 9449).
         token.then().statusCode(200)
                 .header("Cache-Control", "no-store")
-                .body("token_type", org.hamcrest.Matchers.equalTo("Bearer"))
+                .body("token_type", org.hamcrest.Matchers.equalTo("DPoP"))
                 .body("scope", org.hamcrest.Matchers.equalTo("openid profile"));
 
         String accessToken = token.jsonPath().getString("access_token");
@@ -97,6 +105,11 @@ class AuthorizationCodeFlowTest {
         assertThat(atClaims.get("client_id")).isEqualTo(FakeClientRepository.PUBLIC_CLIENT_ID);
         assertThat(atClaims.get("scope")).isEqualTo("openid profile");
         assertThat(atClaims).containsKey("jti").containsKey("exp").containsKey("iat");
+        // Sender-constrained: cnf.jkt binds the token to the client's DPoP key (RFC 9449 §6).
+        @SuppressWarnings("unchecked")
+        Map<String, Object> cnf = (Map<String, Object>) atClaims.get("cnf");
+        assertThat(cnf).isNotNull();
+        assertThat(cnf.get("jkt")).isEqualTo(dpop.jkt());
 
         // The ID token binds the nonce from the authorization request (OIDC Core §3.1.3.6).
         assertThat(verifySignature(idToken)).isTrue();
@@ -107,16 +120,97 @@ class AuthorizationCodeFlowTest {
     }
 
     @Test
-    @DisplayName("confidential client: a correct secret authenticates and yields tokens")
+    @DisplayName("confidential client: correct secret + client cert yields an mTLS-bound (cnf.x5t#S256) token")
     void confidentialClientHappyPath() {
         String verifier = newVerifier();
         String code = authorizeAndExtractCode(FakeClientRepository.CONFIDENTIAL_CLIENT_ID,
                 verifier, "state-c", "nonce-c");
 
+        Response token = given().config(noFollow())
+                .header("X-Tenant-Id", TENANT)
+                .header("X-Client-Certificate", TestClientCertificate.PEM)
+                .contentType("application/x-www-form-urlencoded")
+                .formParam("grant_type", "authorization_code")
+                .formParam("code", code)
+                .formParam("redirect_uri", REDIRECT_URI)
+                .formParam("client_id", FakeClientRepository.CONFIDENTIAL_CLIENT_ID)
+                .formParam("code_verifier", verifier)
+                .formParam("client_secret", FakeClientSecretVerifier.CORRECT_SECRET)
+                .when().post("/token");
+
+        // A confidential client is mTLS-bound: token_type stays Bearer, binding is in cnf.
+        token.then().statusCode(200)
+                .body("token_type", org.hamcrest.Matchers.equalTo("Bearer"))
+                .body("access_token", org.hamcrest.Matchers.not(org.hamcrest.Matchers.emptyOrNullString()));
+
+        Map<String, Object> atClaims = jsonPart(token.jsonPath().getString("access_token"), 1);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> cnf = (Map<String, Object>) atClaims.get("cnf");
+        assertThat(cnf).isNotNull();
+        assertThat(cnf.get("x5t#S256")).isEqualTo(TestClientCertificate.X5T_S256);
+    }
+
+    // --------------------------------------------------- sender-constraining denial paths
+
+    @Test
+    @DisplayName("public client without a DPoP proof is 400 invalid_dpop_proof with a DPoP challenge")
+    void publicClientMissingDpopIsRejected() {
+        String verifier = newVerifier();
+        String code = authorizeAndExtractCode(FakeClientRepository.PUBLIC_CLIENT_ID,
+                verifier, "state-nd", "nonce-nd");
+
+        // No DPoP header — the public client cannot be sender-constrained, so no token is issued.
+        token(FakeClientRepository.PUBLIC_CLIENT_ID, code, REDIRECT_URI, verifier, null)
+                .then().statusCode(400)
+                .header("WWW-Authenticate", org.hamcrest.Matchers.containsString("DPoP"))
+                .body("error", org.hamcrest.Matchers.equalTo("invalid_dpop_proof"));
+    }
+
+    @Test
+    @DisplayName("a replayed DPoP proof (same jti) is rejected on the second presentation")
+    void replayedDpopProofIsRejected() {
+        String proof = dpop.proof(TOKEN_ENDPOINT);
+
+        String verifier1 = newVerifier();
+        String code1 = authorizeAndExtractCode(FakeClientRepository.PUBLIC_CLIENT_ID,
+                verifier1, "state-d1", "nonce-d1");
+        tokenWithDpop(FakeClientRepository.PUBLIC_CLIENT_ID, code1, REDIRECT_URI, verifier1, proof)
+                .then().statusCode(200);
+
+        // The very same proof (same jti) presented again is a replay — refused.
+        String verifier2 = newVerifier();
+        String code2 = authorizeAndExtractCode(FakeClientRepository.PUBLIC_CLIENT_ID,
+                verifier2, "state-d2", "nonce-d2");
+        tokenWithDpop(FakeClientRepository.PUBLIC_CLIENT_ID, code2, REDIRECT_URI, verifier2, proof)
+                .then().statusCode(400)
+                .body("error", org.hamcrest.Matchers.equalTo("invalid_dpop_proof"));
+    }
+
+    @Test
+    @DisplayName("a DPoP proof bound to a different endpoint (htu) is rejected")
+    void dpopProofWrongHtuIsRejected() {
+        String verifier = newVerifier();
+        String code = authorizeAndExtractCode(FakeClientRepository.PUBLIC_CLIENT_ID,
+                verifier, "state-h", "nonce-h");
+
+        String wrongHtu = dpop.proof("https://issuer.test.example/OTHER");
+        tokenWithDpop(FakeClientRepository.PUBLIC_CLIENT_ID, code, REDIRECT_URI, verifier, wrongHtu)
+                .then().statusCode(400)
+                .body("error", org.hamcrest.Matchers.equalTo("invalid_dpop_proof"));
+    }
+
+    @Test
+    @DisplayName("confidential client without a client certificate is 400 invalid_request")
+    void confidentialClientMissingCertIsRejected() {
+        String verifier = newVerifier();
+        String code = authorizeAndExtractCode(FakeClientRepository.CONFIDENTIAL_CLIENT_ID,
+                verifier, "state-nc", "nonce-nc");
+
+        // Correct secret but no certificate — a confidential client cannot be sender-constrained.
         token(FakeClientRepository.CONFIDENTIAL_CLIENT_ID, code, REDIRECT_URI, verifier,
                 FakeClientSecretVerifier.CORRECT_SECRET)
-                .then().statusCode(200)
-                .body("access_token", org.hamcrest.Matchers.not(org.hamcrest.Matchers.emptyOrNullString()));
+                .then().statusCode(400)
+                .body("error", org.hamcrest.Matchers.equalTo("invalid_request"));
     }
 
     // ----------------------------------------------------------------- denial paths
@@ -128,10 +222,13 @@ class AuthorizationCodeFlowTest {
         String code = authorizeAndExtractCode(FakeClientRepository.PUBLIC_CLIENT_ID,
                 verifier, "state-r", "nonce-r");
 
-        token(FakeClientRepository.PUBLIC_CLIENT_ID, code, REDIRECT_URI, verifier, null)
+        tokenWithDpop(FakeClientRepository.PUBLIC_CLIENT_ID, code, REDIRECT_URI, verifier,
+                dpop.proof(TOKEN_ENDPOINT))
                 .then().statusCode(200);
 
-        token(FakeClientRepository.PUBLIC_CLIENT_ID, code, REDIRECT_URI, verifier, null)
+        // The code was consumed on first redemption, so the second misses before binding is checked.
+        tokenWithDpop(FakeClientRepository.PUBLIC_CLIENT_ID, code, REDIRECT_URI, verifier,
+                dpop.proof(TOKEN_ENDPOINT))
                 .then().statusCode(400)
                 .body("error", org.hamcrest.Matchers.equalTo("invalid_grant"));
     }
@@ -282,6 +379,21 @@ class AuthorizationCodeFlowTest {
             req.formParam("client_secret", secret);
         }
         return req.when().post("/token");
+    }
+
+    /** A public-client token request carrying a DPoP proof header. */
+    private Response tokenWithDpop(String clientId, String code, String redirectUri,
+            String verifier, String dpopProof) {
+        return given().config(noFollow())
+                .header("X-Tenant-Id", TENANT)
+                .header("DPoP", dpopProof)
+                .contentType("application/x-www-form-urlencoded")
+                .formParam("grant_type", "authorization_code")
+                .formParam("code", code)
+                .formParam("redirect_uri", redirectUri)
+                .formParam("client_id", clientId)
+                .formParam("code_verifier", verifier)
+                .when().post("/token");
     }
 
     private static RestAssuredConfig noFollow() {

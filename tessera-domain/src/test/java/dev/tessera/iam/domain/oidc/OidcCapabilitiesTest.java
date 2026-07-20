@@ -35,7 +35,9 @@ class OidcCapabilitiesTest {
         OidcCapabilities caps = OidcCapabilities.enforced();
 
         assertThat(caps.idTokenSigningAlgValuesSupported()).containsExactly("EdDSA", "ES256");
-        assertThat(caps.dpopSigningAlgValuesSupported()).containsExactly("EdDSA", "ES256");
+        // DPoP proof verification currently accepts ES256 (see NimbusDpopProofValidator); discovery
+        // advertises exactly that so it never claims an alg the token endpoint would reject.
+        assertThat(caps.dpopSigningAlgValuesSupported()).containsExactly("ES256");
         // Symmetric MACs are unrepresentable in the signing model, so they never leak in.
         assertThat(caps.idTokenSigningAlgValuesSupported())
                 .noneMatch(alg -> alg.startsWith("HS"));
