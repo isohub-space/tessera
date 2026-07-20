@@ -7,6 +7,7 @@ import com.nimbusds.jose.crypto.ECDSASigner;
 import com.nimbusds.jose.jwk.Curve;
 import com.nimbusds.jose.jwk.ECKey;
 import com.nimbusds.jose.jwk.gen.ECKeyGenerator;
+import com.nimbusds.jose.util.Base64URL;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 import java.time.Instant;
@@ -77,6 +78,40 @@ public final class DpopTestClient {
         } catch (Exception e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    /**
+     * A proof whose embedded {@code jwk} is this client's genuine public key, but whose
+     * signature was produced by a <em>different</em> key pair entirely — a proof cannot be
+     * forged by presenting someone else's public key without their private key.
+     */
+    public String proofSignedByWrongKey(String htu) {
+        try {
+            ECKey impostorKey = new ECKeyGenerator(Curve.P_256).generate();
+            JWSHeader header = new JWSHeader.Builder(JWSAlgorithm.ES256)
+                    .type(new JOSEObjectType("dpop+jwt"))
+                    .jwk(key.toPublicJWK())
+                    .build();
+            SignedJWT jwt = new SignedJWT(header,
+                    boundClaims("POST", htu, Instant.now(), UUID.randomUUID().toString()));
+            jwt.sign(new ECDSASigner(impostorKey));
+            return jwt.serialize();
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /**
+     * A hand-assembled, unsigned ({@code alg=none}) proof — bypasses the JOSE library's own
+     * signer/builder entirely (which refuse to produce this) to prove the validator itself
+     * rejects the classic "none" alg-confusion attack, however the rejection is reached.
+     */
+    public String proofWithNoneAlg(String htu) {
+        String header = "{\"typ\":\"dpop+jwt\",\"alg\":\"none\"}";
+        String payload = String.format(
+                "{\"htm\":\"POST\",\"htu\":\"%s\",\"iat\":%d,\"jti\":\"%s\"}",
+                htu, Instant.now().getEpochSecond(), UUID.randomUUID());
+        return Base64URL.encode(header) + "." + Base64URL.encode(payload) + ".";
     }
 
     private static JWTClaimsSet boundClaims(String htm, String htu, Instant iat, String jti) {

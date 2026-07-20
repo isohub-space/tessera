@@ -112,6 +112,21 @@ class NimbusDpopProofValidatorTest {
     // carrying private key material cannot be constructed through it to exercise the guard.
 
     @Test
+    @DisplayName("a hand-crafted alg=none proof is rejected, not treated as valid")
+    void noneAlgRejected() {
+        assertThat(validate(client.proofWithNoneAlg(HTU), Instant.now()))
+                .isInstanceOf(Result.Invalid.class);
+    }
+
+    @Test
+    @DisplayName("a proof signed by a key other than the one embedded in it is rejected")
+    void signatureByWrongKeyRejected() {
+        Result result = validate(client.proofSignedByWrongKey(HTU), Instant.now());
+        assertThat(result).isInstanceOf(Result.Invalid.class);
+        assertThat(((Result.Invalid) result).reason()).isEqualTo("signature");
+    }
+
+    @Test
     @DisplayName("a malformed proof string is rejected, not thrown")
     void malformedRejected() {
         assertThat(validate("not-a-jwt", Instant.now())).isInstanceOf(Result.Invalid.class);
