@@ -41,7 +41,6 @@ public class DbRefreshTokenStore implements RefreshTokenStorePort {
                     + "     current_token_hash = :newHash,"
                     + "     generation = generation + 1"
                     + " WHERE id = :id"
-                    + "   AND baseline_id = :baseline"
                     + "   AND current_token_hash = :presented"
                     + "   AND reused = false"
                     + "   AND (expires_at IS NULL OR expires_at > :now)";
@@ -89,7 +88,6 @@ public class DbRefreshTokenStore implements RefreshTokenStorePort {
                 session.createNativeQuery(CAS_ROTATE)
                         .setParameter("newHash", newTokenHash)
                         .setParameter("id", id.value())
-                        .setParameter("baseline", authoritativeRealm.baseline().value())
                         .setParameter("presented", presentedHash)
                         .setParameter("now", now)
                         .executeUpdate()
