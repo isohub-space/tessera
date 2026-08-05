@@ -102,6 +102,13 @@ public class DbRefreshTokenStore implements RefreshTokenStorePort {
                                                 new RefreshDecision.Unknown(), null));
                                     }
                                     RefreshTokenFamily snap = toSnapshot(entity);
+                                    if (!snap.realm().equals(authoritativeRealm)) {
+                                        // Same tenant (RLS-visible), different baseline: treat as
+                                        // not-found so neither the decision nor the family snapshot
+                                        // discloses a sibling baseline's family.
+                                        return Uni.createFrom().item(new RefreshConsumeOutcome(
+                                                new RefreshDecision.Unknown(), null));
+                                    }
                                     if (rowCount == 1) {
                                         // The CAS won: this transaction rotated the family.
                                         return Uni.createFrom().item(new RefreshConsumeOutcome(
