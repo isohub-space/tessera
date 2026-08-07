@@ -41,6 +41,7 @@ public class DbRefreshTokenStore implements RefreshTokenStorePort {
                     + "     current_token_hash = :newHash,"
                     + "     generation = generation + 1"
                     + " WHERE id = :id"
+                    + "   AND baseline_id = :baseline"
                     + "   AND current_token_hash = :presented"
                     + "   AND reused = false"
                     + "   AND (expires_at IS NULL OR expires_at > :now)";
@@ -48,7 +49,8 @@ public class DbRefreshTokenStore implements RefreshTokenStorePort {
     private static final String BURN =
             "UPDATE refresh_token_family"
                     + " SET reused = true, revoked_at = COALESCE(revoked_at, :now)"
-                    + " WHERE id = :id";
+                    + " WHERE id = :id"
+                    + "   AND baseline_id = :baseline";
 
     private static final String INSERT_DIRECTORY =
             "INSERT INTO refresh_family_directory (family_id, tenant_id, baseline_id)"
@@ -87,6 +89,7 @@ public class DbRefreshTokenStore implements RefreshTokenStorePort {
                 session.createNativeQuery(CAS_ROTATE)
                         .setParameter("newHash", newTokenHash)
                         .setParameter("id", id.value())
+                        .setParameter("baseline", authoritativeRealm.baseline().value())
                         .setParameter("presented", presentedHash)
                         .setParameter("now", now)
                         .executeUpdate()
@@ -99,6 +102,13 @@ public class DbRefreshTokenStore implements RefreshTokenStorePort {
                                                 new RefreshDecision.Unknown(), null));
                                     }
                                     RefreshTokenFamily snap = toSnapshot(entity);
+                                    if (!snap.realm().equals(authoritativeRealm)) {
+                                        // Same tenant (RLS-visible), different baseline: treat as
+                                        // not-found so neither the decision nor the family snapshot
+                                        // discloses a sibling baseline's family.
+                                        return Uni.createFrom().item(new RefreshConsumeOutcome(
+                                                new RefreshDecision.Unknown(), null));
+                                    }
                                     if (rowCount == 1) {
                                         // The CAS won: this transaction rotated the family.
                                         return Uni.createFrom().item(new RefreshConsumeOutcome(
@@ -108,7 +118,8 @@ public class DbRefreshTokenStore implements RefreshTokenStorePort {
                                     RefreshDecision decision =
                                             RefreshReuseDetection.classify(snap, presentedHash, now);
                                     if (decision instanceof RefreshDecision.Replay) {
-                                        return burn(session, id, now).replaceWith(
+                                        return burn(session, id, now,
+                                                authoritativeRealm.baseline().value()).replaceWith(
                                                 new RefreshConsumeOutcome(decision, snap));
                                     }
                                     if (decision instanceof RefreshDecision.Rotate) {
@@ -128,7 +139,8 @@ public class DbRefreshTokenStore implements RefreshTokenStorePort {
             throw new IllegalArgumentException("id and authoritativeRealm must not be null");
         }
         return scoped.inTenant(authoritativeRealm.tenant().value(),
-                session -> burn(session, id, Instant.now()).replaceWithVoid());
+                session -> burn(session, id, Instant.now(),
+                        authoritativeRealm.baseline().value()).replaceWithVoid());
     }
 
     @Override
@@ -138,14 +150,25 @@ public class DbRefreshTokenStore implements RefreshTokenStorePort {
         }
         return scoped.inTenant(realm.tenant().value(),
                 session -> session.find(RefreshTokenFamilyEntity.class, id.value())
-                        .map(entity -> entity == null ? null : toSnapshot(entity)));
+                        .map(entity -> {
+                            if (entity == null) {
+                                return null;
+                            }
+                            RefreshTokenFamily snap = toSnapshot(entity);
+                            // PK lookup only clears RLS's tenant scope; the baseline half of the
+                            // (tenant, baseline) realm must be checked explicitly (RLS parity with
+                            // InMemoryRefreshTokenStore.find()'s fam.realm().equals(realm)).
+                            return snap.realm().equals(realm) ? snap : null;
+                        }));
     }
 
     private static Uni<Integer> burn(
-            org.hibernate.reactive.mutiny.Mutiny.Session session, FamilyId id, Instant now) {
+            org.hibernate.reactive.mutiny.Mutiny.Session session, FamilyId id, Instant now,
+            UUID baselineId) {
         return session.createNativeQuery(BURN)
                 .setParameter("now", now)
                 .setParameter("id", id.value())
+                .setParameter("baseline", baselineId)
                 .executeUpdate();
     }
 
