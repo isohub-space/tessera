@@ -59,7 +59,7 @@
     <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
     <quarkus.platform.version>3.37.2</quarkus.platform.version>
 
-    <archunit.version>1.4.2</archunit.version>
+    <archunit.version>1.5.0</archunit.version>
     <assertj.version>3.27.7</assertj.version>
     <password4j.version>1.8.4</password4j.version>
     <jandex-maven-plugin.version>3.6.0</jandex-maven-plugin.version>
