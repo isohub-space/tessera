@@ -1,4 +1,4 @@
-# Runtime image for the Quarkus fast-jar build of tessera-server (IOS-960).
+# Runtime image for the Quarkus fast-jar build of tessera-server.
 #
 # Build from the REPOSITORY ROOT, after `mvn -pl tessera-server -am package`
 # (skip tests with -DskipTests/-DskipITs for a CI image build — this Dockerfile only
