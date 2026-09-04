@@ -30,7 +30,7 @@ import org.jboss.resteasy.reactive.server.ServerRequestFilter;
  * "decided explicitly, not defaulted" discipline this codebase applies to session-cookie flags,
  * rate limits and the signing-key master key.
  *
- * <p>This is the piece IAM-49 AC2 calls for: {@code AuthorizeResource} (and any other
+ * <p>This is the seam-filling piece the login flow needs: {@code AuthorizeResource} (and any other
  * tenant-scoped endpoint) keeps reading the authenticated subject from {@code X-Subject-Id}
  * exactly as before — that seam is untouched — and this filter is what now sits upstream of it,
  * translating an established session cookie into that header <em>before</em> the resource method

@@ -14,7 +14,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Proves IAM-49 AC7: the login path reuses the existing credential failure-budget throttle
+ * Proves the login path reuses the existing credential failure-budget throttle
  * ({@link dev.tessera.iam.adapter.rest.ratelimit.ThrottlingPasswordCredentialVerifier}, the
  * same mechanism as the client-secret path's
  * {@code ThrottlingClientSecretVerifier}/{@code CredentialThrottleTest}) rather than a second

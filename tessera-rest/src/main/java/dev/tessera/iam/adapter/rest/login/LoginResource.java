@@ -36,7 +36,7 @@ import org.eclipse.microprofile.openapi.annotations.tags.Tag;
  * entirely represented by the cookie.
  */
 @Path("/login")
-@Tag(name = "login", description = "End-user login (IAM-49): verifies a credential and establishes a session.")
+@Tag(name = "login", description = "End-user login: verifies a credential and establishes a session.")
 @TenantScoped
 @RateLimited
 public class LoginResource {
