@@ -1,5 +1,6 @@
 package dev.tessera.iam.adapter.rest.session;
 
+import dev.tessera.iam.adapter.rest.tenancy.SubjectHeaders;
 import dev.tessera.iam.adapter.rest.tenancy.TenantContext;
 import dev.tessera.iam.application.port.in.SessionUseCase;
 import dev.tessera.iam.domain.session.SessionId;
@@ -26,6 +27,13 @@ import org.jboss.resteasy.reactive.server.ServerRequestFilter;
  * (e.g. a gateway that authenticates independently) is left alone: this filter never
  * overrides an explicitly asserted subject.
  *
+ * <p><strong>This filter does NOT strip a client-supplied {@code X-Subject-Id} — it only ever
+ * ADDS one when absent.</strong> See {@link SubjectHeaders} for why that header must never
+ * reach this server from an untrusted caller in the first place: this filter fills the seam
+ * for the legitimate case (a real session cookie, no header yet), it is not, and cannot be, a
+ * defence against a forged header arriving alongside — or instead of — a cookie. That defence
+ * has to live at the network edge, not here.
+ *
  * <p>Runs after {@code TenantResolutionFilter} ({@link Priorities#AUTHENTICATION}) so the
  * realm is bound, and before {@code RateLimitFilter} ({@code AUTHENTICATION + 100}). Skips
  * silently (never a 4xx) whenever there is nothing to translate: no tenant bound, no cookie,
@@ -36,8 +44,6 @@ import org.jboss.resteasy.reactive.server.ServerRequestFilter;
 @Singleton
 public class SessionCookieFilter {
 
-    private static final String SUBJECT_HEADER = "X-Subject-Id";
-
     @Inject
     TenantContext tenantContext;
 
@@ -46,7 +52,7 @@ public class SessionCookieFilter {
 
     @ServerRequestFilter(priority = Priorities.AUTHENTICATION + 10)
     public Uni<Void> filter(ContainerRequestContext request) {
-        if (request.getHeaderString(SUBJECT_HEADER) != null) {
+        if (request.getHeaderString(SubjectHeaders.SUBJECT) != null) {
             return Uni.createFrom().voidItem();
         }
         Optional<RealmKey> realm = tenantContext.realmIfPresent();
@@ -65,7 +71,7 @@ public class SessionCookieFilter {
         }
         return sessions.resolveSubject(realm.get(), sessionId)
                 .invoke(subject -> subject.ifPresent(
-                        sub -> request.getHeaders().putSingle(SUBJECT_HEADER, sub)))
+                        sub -> request.getHeaders().putSingle(SubjectHeaders.SUBJECT, sub)))
                 .replaceWithVoid();
     }
 }

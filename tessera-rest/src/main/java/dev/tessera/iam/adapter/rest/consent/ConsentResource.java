@@ -2,6 +2,7 @@ package dev.tessera.iam.adapter.rest.consent;
 
 import dev.tessera.iam.adapter.rest.dto.OAuthErrorDto;
 import dev.tessera.iam.adapter.rest.problem.ProblemResponse;
+import dev.tessera.iam.adapter.rest.tenancy.SubjectHeaders;
 import dev.tessera.iam.adapter.rest.tenancy.TenantContext;
 import dev.tessera.iam.adapter.rest.tenancy.TenantScoped;
 import dev.tessera.iam.application.port.in.ConsentUseCase;
@@ -33,6 +34,10 @@ import org.eclipse.microprofile.openapi.annotations.tags.Tag;
  * {@code /authorize} — no established session — and is refused identically
  * ({@code access_denied}), never a distinguishable error that would help a caller probe for a
  * live session.
+ *
+ * <p>See {@link SubjectHeaders} for that header's trust boundary — it must never be trusted
+ * unless the deployment's edge strips any client-supplied value, or this endpoint (like
+ * {@code /authorize}) is a full authentication bypass.
  */
 @Path("/consent")
 @Tag(name = "consent", description = "Records end-user consent for a client's requested scopes (IAM-49).")
@@ -50,7 +55,7 @@ public class ConsentResource {
     @Produces(MediaType.APPLICATION_JSON)
     @Operation(operationId = "consent", summary = "Record the caller's consent for a client's requested scopes")
     public Uni<Response> grant(
-            @HeaderParam("X-Subject-Id") String subjectId,
+            @HeaderParam(SubjectHeaders.SUBJECT) String subjectId,
             @FormParam("client_id") String clientId,
             @FormParam("scope") String scope) {
         if (isBlank(subjectId)) {
