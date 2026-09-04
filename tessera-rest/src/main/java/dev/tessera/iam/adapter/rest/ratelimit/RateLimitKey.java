@@ -25,6 +25,8 @@ record RateLimitKey(Surface surface, UUID tenant, String principal) {
         /** {@code /authorize}, keyed on source IP — a coarse backstop when {@code client_id} rotates. */
         AUTHORIZE_IP,
         /** {@code /token}, keyed on the HTTP-Basic {@code client_id} when present, else source IP. */
-        TOKEN
+        TOKEN,
+        /** {@code /login}, keyed on source IP — the credential-guessing surface for end users. */
+        LOGIN
     }
 }

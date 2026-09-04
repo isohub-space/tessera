@@ -1,0 +1,6 @@
+.git
+.idea
+.claude-flow
+**/target/**
+!**/target/quarkus-app/**
+*.md

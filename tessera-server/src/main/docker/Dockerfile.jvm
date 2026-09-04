@@ -1,0 +1,37 @@
+# Runtime image for the Quarkus fast-jar build of tessera-server (IOS-960).
+#
+# Build from the REPOSITORY ROOT, after `mvn -pl tessera-server -am package`
+# (skip tests with -DskipTests/-DskipITs for a CI image build — this Dockerfile only
+# packages the already-built target/quarkus-app, it does not run Maven itself):
+#
+#   docker build -f tessera-server/src/main/docker/Dockerfile.jvm -t tessera:local .
+#
+# Cloud Run is amd64-only; if building on an arm64 workstation (e.g. Apple Silicon) for a
+# LOCAL smoke test, add `--platform linux/amd64`. The real deploy build runs in Cloud Build
+# (see docker/cloudbuild.yaml at the repo root), which is natively amd64 — no cross-build
+# needed there.
+#
+# Cloud Run injects the listen port via the $PORT env var (defaulting to 8080), which does
+# not match this app's own default (quarkus.http.port=8090, see application.properties) — the
+# shell-form ENTRYPOINT below re-points Quarkus at whatever $PORT Cloud Run supplies, falling
+# back to 8090 for a plain `docker run` with no $PORT set.
+FROM eclipse-temurin:25-jre
+
+ENV LANG='en_US.UTF-8' LANGUAGE='en_US:en'
+WORKDIR /deployments
+
+# Ownership matches the well-known Quarkus UBI base images' unprivileged uid (185), so the
+# same COPY/USER shape works whether or not the base image already has that user; running as
+# non-root here regardless of base image.
+RUN groupadd -r -g 185 quarkus && useradd -r -u 185 -g quarkus quarkus
+
+COPY --chown=185:185 tessera-server/target/quarkus-app/lib/ /deployments/lib/
+COPY --chown=185:185 tessera-server/target/quarkus-app/*.jar /deployments/
+COPY --chown=185:185 tessera-server/target/quarkus-app/app/ /deployments/app/
+COPY --chown=185:185 tessera-server/target/quarkus-app/quarkus/ /deployments/quarkus/
+
+USER 185
+
+EXPOSE 8090
+
+ENTRYPOINT ["sh", "-c", "exec java -Dquarkus.http.host=0.0.0.0 -Dquarkus.http.port=${PORT:-8090} -jar /deployments/quarkus-run.jar"]
