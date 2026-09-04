@@ -26,7 +26,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Proves the IAM-49 AC3 requirement — "the session is tenant-scoped: a session in one realm is
+ * Proves the requirement that "the session is tenant-scoped: a session in one realm is
  * never valid in another" — through the actual outbound ports the login/authorize flow uses
  * ({@link PersistentSessionStore}, {@link PersistentConsentStore}), not just the raw entities.
  *

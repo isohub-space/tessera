@@ -14,7 +14,7 @@ import org.junit.jupiter.api.Test;
 
 /**
  * {@code POST /login} — verifies a credential and establishes a session, with the security
- * flags on the resulting cookie pinned down (IAM-49 AC5).
+ * flags on the resulting cookie pinned down explicitly, not defaulted.
  */
 @QuarkusTest
 @DisplayName("POST /login — credential verification and session cookie")

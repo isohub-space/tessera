@@ -9,7 +9,7 @@ import java.util.Set;
  * Inbound port for the consent step of the login flow: records, and later checks, which
  * scopes an authenticated end user has agreed to release to a given client.
  *
- * <p><strong>Granularity (IAM-49 AC4).</strong> Consent is recorded per {@code (subject,
+ * <p><strong>Granularity.</strong> Consent is recorded per {@code (subject,
  * client)}, not per {@code (subject, client, scope)}: {@link #hasConsented} asks whether the
  * user has already agreed to <em>at least</em> the requested scope set, and
  * {@link #recordConsent} replaces whatever the user previously agreed to for that client with

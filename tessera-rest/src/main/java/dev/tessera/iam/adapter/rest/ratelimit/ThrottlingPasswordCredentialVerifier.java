@@ -20,7 +20,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * {@link ThrottlingClientSecretVerifier}, reusing the exact same mechanism (a {@link TokenBucket}
  * failure budget, {@link RateLimitConfig#credentialFailureBurst()} /
  * {@link RateLimitConfig#credentialRefillPerMinute()}, and {@link RateLimitMetrics#credentialThrottled})
- * rather than inventing a second one for IAM-49 AC7.
+ * rather than inventing a second one.
  *
  * <p>See {@link ThrottlingClientSecretVerifier}'s javadoc for the full rationale (throttle, not
  * lockout; uniform-cost short-circuit; residual risk of a client/username-keyed control) — it

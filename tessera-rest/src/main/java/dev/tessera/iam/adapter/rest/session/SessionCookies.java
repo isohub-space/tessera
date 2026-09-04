@@ -5,8 +5,8 @@ import jakarta.ws.rs.core.NewCookie;
 /**
  * Builds the {@code Set-Cookie} response for the session cookie.
  *
- * <p>Flags are fixed, not configurable, per IAM-49 AC5 ("decided explicitly, not
- * defaulted"): {@code HttpOnly} (the cookie is never readable from script — this is a
+ * <p>Flags are fixed, not configurable, decided explicitly rather than defaulted:
+ * {@code HttpOnly} (the cookie is never readable from script — this is a
  * session credential, not UI state), {@code Secure} (never sent over plain HTTP; every real
  * deployment of this server sits behind a TLS-terminating gateway, and dev/test tolerate the
  * cookie simply not being echoed back by a non-TLS client) and {@code SameSite=Strict} (the

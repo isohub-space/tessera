@@ -26,7 +26,7 @@ import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 
 /**
  * The consent endpoint ({@code POST /consent}) — records which scopes an already-authenticated
- * end user agrees to release to a client (IAM-49 AC4).
+ * end user agrees to release to a client.
  *
  * <p>Reuses the same {@code X-Subject-Id} seam as {@code /authorize}: this endpoint only runs
  * after {@link dev.tessera.iam.adapter.rest.session.SessionCookieFilter} has (potentially)
@@ -40,7 +40,7 @@ import org.eclipse.microprofile.openapi.annotations.tags.Tag;
  * {@code /authorize}) is a full authentication bypass.
  */
 @Path("/consent")
-@Tag(name = "consent", description = "Records end-user consent for a client's requested scopes (IAM-49).")
+@Tag(name = "consent", description = "Records end-user consent for a client's requested scopes.")
 @TenantScoped
 public class ConsentResource {
 

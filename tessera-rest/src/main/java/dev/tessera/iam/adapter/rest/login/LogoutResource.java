@@ -23,7 +23,7 @@ import org.eclipse.microprofile.openapi.annotations.tags.Tag;
  * session all succeed identically (a {@code 204} and a cleared cookie).
  */
 @Path("/logout")
-@Tag(name = "login", description = "End-user login (IAM-49): verifies a credential and establishes a session.")
+@Tag(name = "login", description = "End-user login: verifies a credential and establishes a session.")
 @TenantScoped
 public class LogoutResource {
 

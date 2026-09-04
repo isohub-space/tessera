@@ -18,8 +18,8 @@ import org.jboss.resteasy.reactive.server.ServerRequestFilter;
  * Fills the {@code X-Subject-Id} seam from the session cookie, for any tenant-scoped request
  * that does not already carry the header.
  *
- * <p>This is the piece IAM-49 AC2 calls for: {@code AuthorizeResource} (and any other
- * tenant-scoped endpoint) keeps reading the authenticated subject from
+ * <p>This is the piece the login flow's acceptance criteria call for: {@code AuthorizeResource}
+ * (and any other tenant-scoped endpoint) keeps reading the authenticated subject from
  * {@code X-Subject-Id} exactly as before — that seam is untouched — and this filter is what
  * now sits upstream of it, translating an established session cookie into that header
  * <em>before</em> the resource method runs, playing the role its javadoc describes for "an

@@ -5,7 +5,7 @@ import io.smallrye.config.WithDefault;
 import java.time.Duration;
 
 /**
- * Configuration for the login/session surface (IAM-49).
+ * Configuration for the login/session surface.
  */
 @ConfigMapping(prefix = "iam.login")
 public interface LoginConfig {

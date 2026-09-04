@@ -19,7 +19,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Proves the IAM-49 AC2 seam integration end to end: a session established at
+ * Proves the login/authorize seam integration end to end: a session established at
  * {@code POST /login} is what {@link SessionCookieFilter} translates into the
  * {@code X-Subject-Id} header {@code /authorize} has always read — with NO change to
  * {@code AuthorizeResource} or {@code AuthorizeUseCase} — so a caller who never sets
