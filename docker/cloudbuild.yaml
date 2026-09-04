@@ -1,0 +1,61 @@
+# Cloud Build definition for tessera — builds and pushes the runtime image for the first
+# deploy at iam.isohub.space.
+#
+# Builds the Quarkus fast-jar and packages it into the runtime image
+# (tessera-server/src/main/docker/Dockerfile.jvm), then pushes it to Artifact Registry.
+# This file does NOT deploy anything — it only produces and publishes the image. The Cloud
+# Run service, its revision, and the traffic split are Terraform's job
+# (isohub-space/infra, the cloud-run-service module), not Cloud Build's, matching the
+# pattern the rest of this environment's services already use.
+#
+# WHAT MUST BE SUPPLIED AT TRIGGER/SUBMIT TIME (placeholders below, deliberately not
+# hardcoded — this repo does not own the isohub-infra project/registry configuration):
+#   _AR_LOCATION   Artifact Registry region, e.g. "europe-west1"
+#   _AR_REPO       Artifact Registry repository name for isohub-space images
+#   _IMAGE_NAME    defaults to "tessera" below — override only if the registry uses a
+#                  different naming convention
+#
+# Example one-off submit (adjust the substitutions to the real project's values):
+#
+#   gcloud builds submit \
+#     --config=docker/cloudbuild.yaml \
+#     --substitutions=_AR_LOCATION=europe-west1,_AR_REPO=isohub-images \
+#     --project=<the isohub-space GCP project id>
+#
+# amd64 only: Cloud Build's default worker pool is amd64, which matches Cloud Run's
+# requirement — no --platform flag needed here (unlike a local arm64-workstation build).
+
+steps:
+  # Build the Quarkus fast-jar. Tests are skipped here deliberately: this pipeline builds
+  # what CI already verified on the PR (mvn verify, including the Postgres-backed ITs) —
+  # re-running the full Testcontainers suite on every image build would just slow deploys
+  # without adding coverage.
+  - name: 'maven:3.9-eclipse-temurin-25'
+    entrypoint: mvn
+    args: ['-pl', 'tessera-server', '-am', 'package', '-DskipTests', '-DskipITs']
+    id: build-jar
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-f'
+      - 'tessera-server/src/main/docker/Dockerfile.jvm'
+      - '-t'
+      - '${_AR_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/${_IMAGE_NAME}:${SHORT_SHA}'
+      - '-t'
+      - '${_AR_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/${_IMAGE_NAME}:latest'
+      - '.'
+    id: build-image
+    waitFor: ['build-jar']
+
+images:
+  - '${_AR_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/${_IMAGE_NAME}:${SHORT_SHA}'
+  - '${_AR_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/${_IMAGE_NAME}:latest'
+
+substitutions:
+  _AR_LOCATION: 'REPLACE_WITH_AR_REGION'
+  _AR_REPO: 'REPLACE_WITH_AR_REPO'
+  _IMAGE_NAME: 'tessera'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
