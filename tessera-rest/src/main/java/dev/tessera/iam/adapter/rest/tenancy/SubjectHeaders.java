@@ -6,28 +6,28 @@ package dev.tessera.iam.adapter.rest.tenancy;
  * <p><strong>Trust boundary — read this before deploying tessera as a public origin.</strong>
  * {@link #SUBJECT} ({@value #SUBJECT}) rests on exactly the same edge contract as
  * {@link TenantHeaders#TENANT}, and that contract is <strong>not enforced anywhere in
- * code</strong> for either header today: {@code TenantResolutionFilter} contains no trust
- * check at all — it resolves whatever is in {@code X-Tenant-Id} and binds it — and the same
- * is true here: {@link #SUBJECT} is populated either by an upstream authenticating proxy
- * that has already established the caller's identity, or (once wired) a verified session —
- * and in both cases the deployment's edge (gateway, load balancer, or equivalent ingress
- * component) <strong>must strip any client-supplied value for this header before the request
- * reaches this server</strong>. Both headers are stated as gateway-asserted only in prose
- * ({@code TenantHeaders}'s javadoc, and {@code AuthorizeResource}'s "an upstream
+ * code</strong> for either header: {@code TenantResolutionFilter} contains no trust check at
+ * all — it resolves whatever is in {@code X-Tenant-Id} and binds it — and, absent the filter
+ * below, the same would be true here. Both headers are stated as gateway-asserted only in
+ * prose ({@code TenantHeaders}'s javadoc, and {@code AuthorizeResource}'s "an upstream
  * authenticating proxy" language for this one); a deployment that exposes either header to
  * callers whose edge does not strip client-supplied values is not a supported mode, but
- * nothing in this codebase currently makes that unsupported mode impossible to reach.
+ * nothing in this codebase makes that unsupported mode impossible to reach.
  *
- * <p><strong>This is not merely a convention — it is the entire authentication boundary for
- * every endpoint that reads it</strong> ({@code /authorize}, {@code /consent}): unlike
- * {@code X-Tenant-Id}, this value is an opaque, unparsed string with no format to validate, so
- * there is no code-level check that could ever distinguish a genuine upstream-asserted value
- * from one a caller fabricated by simply setting the header on a direct HTTP request — tessera
- * cannot tell the two apart once both reach the JAX-RS layer over the same connection. If a
- * deployment exposes tessera to callers who are not behind an edge that scrubs this header
- * (for example, a standalone public Cloud Run origin with no such stripping rule configured),
- * {@code X-Subject-Id} becomes a complete, trivial authentication bypass: any caller can set
- * {@code X-Subject-Id: <victim-sub>} and be treated as that user with no credential at all.
+ * <p>{@link dev.tessera.iam.adapter.rest.session.SessionCookieFilter} is the one exception:
+ * it enforces this header's boundary at the application layer too, <strong>default-closed</strong>
+ * — unless a deployment explicitly sets {@code iam.subject.trust-header=true}, any inbound
+ * value for {@code X-Subject-Id} is stripped before anything reads it, and a verified session
+ * cookie is the only remaining way to establish a subject. Setting that flag re-opens the
+ * older "upstream authenticating proxy injects this header directly" mode, and doing so is
+ * exactly as consequential as it sounds: with it set, tessera again trusts the header
+ * verbatim, so the deployment's edge MUST strip any client-supplied value, or
+ * {@code X-Subject-Id} becomes a complete, trivial authentication bypass — any caller sets
+ * {@code X-Subject-Id: <victim-sub>} and is treated as that user with no credential at all.
+ * {@code X-Tenant-Id} has no equivalent application-layer check: on a standalone public
+ * origin, a forged tenant header is exactly as live a risk as a forged subject header was
+ * before this filter existed, and closing it (if closed at all) is an edge/ingress decision,
+ * not something this class or {@code TenantResolutionFilter} currently does.
  *
  * <p>Centralising the header name here (rather than the bare string literal previously
  * repeated at each {@code @HeaderParam}) is so this trust-boundary requirement is discoverable
