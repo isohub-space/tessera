@@ -1,26 +1,26 @@
-# Cloud Build definition for tessera — builds and pushes the runtime image for the first
-# deploy at iam.isohub.space.
+# Cloud Build definition for tessera — builds and pushes the runtime image for a
+# deployment of your choosing.
 #
 # Builds the Quarkus fast-jar and packages it into the runtime image
 # (tessera-server/src/main/docker/Dockerfile.jvm), then pushes it to Artifact Registry.
-# This file does NOT deploy anything — it only produces and publishes the image. The Cloud
-# Run service, its revision, and the traffic split are Terraform's job
-# (isohub-space/infra, the cloud-run-service module), not Cloud Build's, matching the
-# pattern the rest of this environment's services already use.
+# This file does NOT deploy anything — it only produces and publishes the image. Standing
+# up the Cloud Run service, its revision, and the traffic split is your own
+# infrastructure-as-code's job, not Cloud Build's.
 #
 # WHAT MUST BE SUPPLIED AT TRIGGER/SUBMIT TIME (placeholders below, deliberately not
-# hardcoded — this repo does not own the isohub-infra project/registry configuration):
+# hardcoded — this repo does not own any particular deployer's project/registry
+# configuration):
 #   _AR_LOCATION   Artifact Registry region, e.g. "europe-west1"
-#   _AR_REPO       Artifact Registry repository name for isohub-space images
+#   _AR_REPO       your Artifact Registry repository name
 #   _IMAGE_NAME    defaults to "tessera" below — override only if the registry uses a
 #                  different naming convention
 #
-# Example one-off submit (adjust the substitutions to the real project's values):
+# Example one-off submit (adjust the substitutions to your own project's values):
 #
 #   gcloud builds submit \
 #     --config=docker/cloudbuild.yaml \
-#     --substitutions=_AR_LOCATION=europe-west1,_AR_REPO=isohub-images \
-#     --project=<the isohub-space GCP project id>
+#     --substitutions=_AR_LOCATION=europe-west1,_AR_REPO=your-images \
+#     --project=<your GCP project id>
 #
 # amd64 only: Cloud Build's default worker pool is amd64, which matches Cloud Run's
 # requirement — no --platform flag needed here (unlike a local arm64-workstation build).
