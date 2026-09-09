@@ -11,15 +11,16 @@ import org.junit.jupiter.api.Test;
 
 /**
  * End-to-end edge security baseline (RFC 9700 §2): every response carries the strict
- * security-header set, and CORS denies by default. Asserted against the always-on sample
- * resource so the checks are independent of any one protocol endpoint. HSTS is verified
- * absent here because it is emitted only when served over TLS (production profile).
+ * security-header set, and CORS denies by default. Asserted against the health probe — an
+ * always-on, tenant-unscoped route — so the checks are independent of any one protocol
+ * endpoint's own {@code X-Tenant-Id} requirement. HSTS is verified absent here because it is
+ * emitted only when served over TLS (production profile).
  */
 @QuarkusTest
 @DisplayName("Edge security baseline — headers + CORS deny-by-default")
 class EdgeSecurityBaselineTest {
 
-    private static final String ENDPOINT = "/api/v1/items";
+    private static final String ENDPOINT = "/q/health";
 
     @Test
     @DisplayName("every response carries the strict security-header baseline")

@@ -75,4 +75,28 @@
       <scope>test</scope>
     </dependency>
   </dependencies>
+
+  <build>
+    <plugins>
+      <!--
+        SessionCookieFilter's @ConfigProperty (MicroProfile Config) pulls in a dependency
+        chain carrying OSGi bundle annotations whose definitions are not on the compile
+        classpath; javac emits harmless "class file not found" (classfile) lint warnings for
+        those, which the inherited -Werror would otherwise fail on. Same exclusion, same
+        reason, as tessera-server's composition-root pom.
+      -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <configuration>
+          <compilerArgs>
+            <arg>-Xlint:all</arg>
+            <arg>-Xlint:-processing</arg>
+            <arg>-Xlint:-classfile</arg>
+            <arg>-Werror</arg>
+          </compilerArgs>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
 </project>
