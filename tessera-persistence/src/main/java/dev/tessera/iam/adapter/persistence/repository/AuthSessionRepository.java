@@ -42,4 +42,26 @@ public class AuthSessionRepository {
         return scoped.inTenant(tenantId,
                 session -> session.persist(authSession).replaceWith(authSession));
     }
+
+    /**
+     * Updates the lifecycle {@code state} of a session within the tenant (e.g. ending it on
+     * logout). A no-op — not an error — if no such session exists in this tenant, so callers
+     * can invalidate idempotently without a prior existence check.
+     *
+     * @param tenantId the owning tenant (the RLS scoping key)
+     * @param id       the session id
+     * @param state    the new lifecycle state
+     * @return a {@link Uni} completing once the update (if any) is applied
+     */
+    public Uni<Void> updateState(UUID tenantId, UUID id, String state) {
+        return scoped.inTenant(tenantId, session ->
+                session.find(AuthSessionEntity.class, id).invoke(entity -> {
+                    if (entity != null) {
+                        // A managed entity: the field change is picked up by dirty checking
+                        // and flushed when the enclosing transaction commits — no explicit
+                        // persist/merge call needed.
+                        entity.state = state;
+                    }
+                }).replaceWithVoid());
+    }
 }

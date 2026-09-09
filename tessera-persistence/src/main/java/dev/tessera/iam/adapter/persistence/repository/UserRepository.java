@@ -48,6 +48,21 @@ public class UserRepository {
     }
 
     /**
+     * Finds a user by its login identifier within the tenant.
+     *
+     * @param tenantId the owning tenant (the RLS scoping key)
+     * @param username the login identifier to match
+     * @return a {@link Uni} emitting the user, or {@code null} if none matches
+     */
+    public Uni<UserEntity> findByUsername(UUID tenantId, String username) {
+        return scoped.inTenant(tenantId, session ->
+                session.createQuery(
+                                "from UserEntity u where u.username = :username", UserEntity.class)
+                        .setParameter("username", username)
+                        .getSingleResultOrNull());
+    }
+
+    /**
      * Persists a new user.
      *
      * @param tenantId the owning tenant (the RLS scoping key)

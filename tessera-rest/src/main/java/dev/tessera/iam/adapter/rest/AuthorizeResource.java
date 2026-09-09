@@ -4,6 +4,7 @@ import io.smallrye.mutiny.Uni;
 import dev.tessera.iam.adapter.rest.config.OidcDiscoveryConfig;
 import dev.tessera.iam.adapter.rest.dto.OAuthErrorDto;
 import dev.tessera.iam.adapter.rest.ratelimit.RateLimited;
+import dev.tessera.iam.adapter.rest.tenancy.SubjectHeaders;
 import dev.tessera.iam.adapter.rest.tenancy.TenantContext;
 import dev.tessera.iam.adapter.rest.tenancy.TenantScoped;
 import dev.tessera.iam.application.port.in.AuthorizeUseCase;
@@ -54,6 +55,11 @@ import org.eclipse.microprofile.openapi.annotations.tags.Tag;
  * from the {@code X-Subject-Id} header, which is where the login/consent front-end (or an
  * upstream authenticating proxy) injects the established identity. A request with no subject
  * is refused ({@code login_required} is out of scope here — it is an {@code access_denied}).
+ *
+ * <p><strong>See {@link SubjectHeaders} for this header's trust boundary</strong> — it must
+ * never be trusted unless the deployment's edge strips any client-supplied value, exactly
+ * like {@code X-Tenant-Id}. There is no code-level way to distinguish a genuine value from a
+ * forged one once it reaches this method.
  */
 @Path("/authorize")
 @Tag(name = "authorization", description = "OAuth 2.0 / OIDC authorization endpoint.")
@@ -82,7 +88,7 @@ public class AuthorizeResource {
             operationId = "authorize",
             summary = "Authorize a request and issue a single-use code (Authorization Code + PKCE)")
     public Uni<Response> authorize(
-            @HeaderParam("X-Subject-Id") String subjectId,
+            @HeaderParam(SubjectHeaders.SUBJECT) String subjectId,
             @QueryParam("response_type") String responseType,
             @QueryParam("client_id") String clientId,
             @QueryParam("redirect_uri") String redirectUri,
