@@ -64,7 +64,7 @@
     <password4j.version>1.8.4</password4j.version>
     <jandex-maven-plugin.version>3.6.0</jandex-maven-plugin.version>
     <maven-compiler-plugin.version>3.15.0</maven-compiler-plugin.version>
-    <maven-surefire-plugin.version>3.5.6</maven-surefire-plugin.version>
+    <maven-surefire-plugin.version>3.6.0</maven-surefire-plugin.version>
     <maven-failsafe-plugin.version>3.5.6</maven-failsafe-plugin.version>
 
     <!--
