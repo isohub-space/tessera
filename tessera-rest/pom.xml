@@ -53,6 +53,16 @@
       <artifactId>nimbus-jose-jwt</artifactId>
     </dependency>
 
+    <!--
+      Shared-cache backend for the single-use authorization-code store, so a code minted at
+      /authorize on one node is redeemable at /token on another. Confined to this adapter —
+      the port it implements lives in tessera-api and stays client-library-free.
+    -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-infinispan-client</artifactId>
+    </dependency>
+
     <!-- Test: boot the adapter as a Quarkus app and exercise it over HTTP. -->
     <dependency>
       <groupId>io.quarkus</groupId>
@@ -62,6 +72,22 @@
     <dependency>
       <groupId>io.rest-assured</groupId>
       <artifactId>rest-assured</artifactId>
+      <scope>test</scope>
+    </dependency>
+
+    <!--
+      Testcontainers runs a real Infinispan server for AuthorizationCodeStoreIT. There is no
+      Testcontainers module for Infinispan, so the IT drives the official server image through
+      the core GenericContainer; only the core and the JUnit 5 integration are needed.
+    -->
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers-junit-jupiter</artifactId>
       <scope>test</scope>
     </dependency>
     <dependency>
@@ -96,6 +122,12 @@
             <arg>-Werror</arg>
           </compilerArgs>
         </configuration>
+      </plugin>
+
+      <!-- Runs AuthorizationCodeStoreIT (Testcontainers Infinispan) in the verify phase. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-failsafe-plugin</artifactId>
       </plugin>
     </plugins>
   </build>

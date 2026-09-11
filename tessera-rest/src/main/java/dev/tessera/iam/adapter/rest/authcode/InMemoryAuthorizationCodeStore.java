@@ -4,6 +4,7 @@ import io.smallrye.mutiny.Uni;
 import dev.tessera.iam.application.port.out.AuthorizationCodeStorePort;
 import dev.tessera.iam.domain.authcode.AuthorizationGrant;
 import dev.tessera.iam.domain.tenancy.RealmKey;
+import io.quarkus.arc.DefaultBean;
 import jakarta.enterprise.context.ApplicationScoped;
 import java.time.Clock;
 import java.time.Instant;
@@ -15,10 +16,12 @@ import java.util.concurrent.ConcurrentMap;
  * In-memory, single-use authorization-code store.
  *
  * <p>This is the development / single-node implementation of
- * {@link AuthorizationCodeStorePort}. A clustered deployment would back this port with a
- * distributed cache (e.g. Infinispan) so a code minted on one node can be redeemed on
- * another; the contract — tenant-scoped, fail-closed, consume-exactly-once, TTL — is the
- * same, so swapping the backing store is a CDI-bean change with no caller impact.
+ * {@link AuthorizationCodeStorePort}, and the {@link DefaultBean} fallback: a clustered
+ * deployment gets {@link InfinispanAuthorizationCodeStore} instead, which is the non-test
+ * default and wins over this one wherever it is present. The contract — tenant-scoped,
+ * fail-closed, consume-exactly-once, TTL — is identical, so which store is wired has no
+ * caller impact. Under the {@code test} profile the shared-cache adapter is absent, so this
+ * one resolves and the flow tests need no Infinispan server.
  *
  * <p>The two security properties the port mandates are both enforced here:
  * <ul>
@@ -36,6 +39,7 @@ import java.util.concurrent.ConcurrentMap;
  * instant lives on the {@link AuthorizationGrant} itself, set by the issuing service.
  */
 @ApplicationScoped
+@DefaultBean
 public class InMemoryAuthorizationCodeStore implements AuthorizationCodeStorePort {
 
     private final ConcurrentMap<CodeKey, AuthorizationGrant> entries = new ConcurrentHashMap<>();

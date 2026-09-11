@@ -8,8 +8,10 @@ import dev.tessera.iam.domain.tenancy.RealmKey;
  * Outbound port for the short-lived, single-use authorization-code store.
  *
  * <p>An authorization code is an opaque handle issued at {@code /authorize} and redeemed
- * once at {@code /token}. This port abstracts the store (an Infinispan cache in the
- * shipped adapter, with a per-entry TTL); the application depends only on the contract:
+ * once at {@code /token}. This port abstracts the store — two adapters ship: a shared
+ * Infinispan cache with a per-entry TTL (the multi-node default) and a process-local
+ * concurrent map (the fallback, used under the {@code test} profile and single-node
+ * development). The application depends only on the contract:
  *
  * <ul>
  *   <li><strong>Tenant-scoped, fail-closed.</strong> Every entry is keyed by
