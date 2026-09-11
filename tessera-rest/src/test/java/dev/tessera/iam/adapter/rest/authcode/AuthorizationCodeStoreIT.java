@@ -25,6 +25,7 @@ import java.util.concurrent.TimeUnit;
 import org.infinispan.client.hotrod.RemoteCache;
 import org.infinispan.client.hotrod.RemoteCacheManager;
 import org.infinispan.client.hotrod.configuration.ConfigurationBuilder;
+import org.infinispan.commons.IllegalLifecycleStateException;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
@@ -56,17 +57,56 @@ class AuthorizationCodeStoreIT {
                     .withExposedPorts(11222)
                     .withEnv("USER", USER)
                     .withEnv("PASS", PASSWORD)
-                    .waitingFor(Wait.forListeningPort().withStartupTimeout(Duration.ofMinutes(5)));
+                    // The port accepts connections before the server can serve a cache, so waiting
+                    // on the port alone races cache creation (ISPN005066 "Cache is not ready").
+                    // Wait for the server's own started banner instead.
+                    .waitingFor(Wait.forLogMessage(".*Infinispan Server.*started in.*\\n", 1)
+                            .withStartupTimeout(Duration.ofMinutes(5)));
 
     /** The two "nodes": independent clients against the same server and cache. */
     private static RemoteCacheManager nodeA;
     private static RemoteCacheManager nodeB;
+    private static RemoteCache<String, String> cacheA;
+    private static RemoteCache<String, String> cacheB;
 
     @BeforeAll
     static void startServer() {
         INFINISPAN.start();
         nodeA = client();
         nodeB = client();
+        // Resolve each client's cache once, here, rather than per test: the first resolution is
+        // what creates the cache from the supplied configuration, and it completes asynchronously.
+        cacheA = awaitUsableCache(nodeA);
+        cacheB = awaitUsableCache(nodeB);
+    }
+
+    /**
+     * Returns the cache once it will actually serve an operation. Creating it from the client
+     * configuration is asynchronous, so a cache handle can exist while the server still rejects
+     * operations against it.
+     */
+    private static RemoteCache<String, String> awaitUsableCache(RemoteCacheManager manager) {
+        IllegalLifecycleStateException last = null;
+        Instant deadline = Instant.now().plus(Duration.ofMinutes(2));
+        while (Instant.now().isBefore(deadline)) {
+            try {
+                RemoteCache<String, String> cache =
+                        manager.getCache(InfinispanAuthorizationCodeStore.CACHE_NAME);
+                // A real write proves readiness; a non-null handle does not.
+                cache.put("warmup", "1", 5, TimeUnit.SECONDS);
+                cache.remove("warmup");
+                return cache;
+            } catch (IllegalLifecycleStateException e) {
+                last = e;
+                try {
+                    Thread.sleep(500);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("interrupted waiting for the cache", interrupted);
+                }
+            }
+        }
+        throw new IllegalStateException("cache never became usable", last);
     }
 
     @AfterAll
@@ -97,13 +137,9 @@ class AuthorizationCodeStoreIT {
         return new RemoteCacheManager(config.build());
     }
 
-    private static RemoteCache<String, String> cache(RemoteCacheManager manager) {
-        return manager.getCache(InfinispanAuthorizationCodeStore.CACHE_NAME);
-    }
-
-    private static InfinispanAuthorizationCodeStore storeOn(RemoteCacheManager manager, Instant now) {
-        return new InfinispanAuthorizationCodeStore(
-                cache(manager), Clock.fixed(now, ZoneOffset.UTC));
+    private static InfinispanAuthorizationCodeStore storeOn(
+            RemoteCache<String, String> cache, Instant now) {
+        return new InfinispanAuthorizationCodeStore(cache, Clock.fixed(now, ZoneOffset.UTC));
     }
 
     private static RealmKey realm() {
@@ -134,10 +170,10 @@ class AuthorizationCodeStoreIT {
         String code = freshCode();
         AuthorizationGrant grant = grant(realm, T0, Duration.ofMinutes(2));
 
-        storeOn(nodeA, T0).store(code, grant).await().atMost(Duration.ofSeconds(10));
+        storeOn(cacheA, T0).store(code, grant).await().atMost(Duration.ofSeconds(10));
 
         AuthorizationGrant redeemed =
-                storeOn(nodeB, T0).consume(realm, code).await().atMost(Duration.ofSeconds(10));
+                storeOn(cacheB, T0).consume(realm, code).await().atMost(Duration.ofSeconds(10));
 
         // The whole grant survives the round-trip — not just "something was found". A lossy
         // field here would be a silently wrong binding check at the token endpoint.
@@ -150,12 +186,12 @@ class AuthorizationCodeStoreIT {
         RealmKey realm = realm();
         String code = freshCode();
         AuthorizationGrant grant = grant(realm, T0, Duration.ofMinutes(2));
-        storeOn(nodeA, T0).store(code, grant).await().atMost(Duration.ofSeconds(10));
+        storeOn(cacheA, T0).store(code, grant).await().atMost(Duration.ofSeconds(10));
 
         int attempts = 8;
         // Half the redemptions go through each node, so the race is across clients too.
-        InfinispanAuthorizationCodeStore a = storeOn(nodeA, T0);
-        InfinispanAuthorizationCodeStore b = storeOn(nodeB, T0);
+        InfinispanAuthorizationCodeStore a = storeOn(cacheA, T0);
+        InfinispanAuthorizationCodeStore b = storeOn(cacheB, T0);
 
         ExecutorService pool = Executors.newFixedThreadPool(attempts);
         try {
@@ -186,18 +222,18 @@ class AuthorizationCodeStoreIT {
         RealmKey realmA = realm();
         RealmKey realmB = realm();
         String code = freshCode();
-        storeOn(nodeA, T0)
+        storeOn(cacheA, T0)
                 .store(code, grant(realmA, T0, Duration.ofMinutes(2)))
                 .await()
                 .atMost(Duration.ofSeconds(10));
 
         AuthorizationGrant crossTenant =
-                storeOn(nodeB, T0).consume(realmB, code).await().atMost(Duration.ofSeconds(10));
+                storeOn(cacheB, T0).consume(realmB, code).await().atMost(Duration.ofSeconds(10));
         assertThat(crossTenant).isNull();
 
         // ...and the failed cross-tenant attempt did not consume the real entry.
         AuthorizationGrant owner =
-                storeOn(nodeB, T0).consume(realmA, code).await().atMost(Duration.ofSeconds(10));
+                storeOn(cacheB, T0).consume(realmA, code).await().atMost(Duration.ofSeconds(10));
         assertThat(owner).isNotNull();
     }
 
@@ -207,14 +243,14 @@ class AuthorizationCodeStoreIT {
         RealmKey realm = realm();
         String code = freshCode();
         // A 1-second lifetime keeps the test honest (a real server-side expiry) and quick.
-        storeOn(nodeA, T0)
+        storeOn(cacheA, T0)
                 .store(code, grant(realm, T0, Duration.ofSeconds(1)))
                 .await()
                 .atMost(Duration.ofSeconds(10));
 
         // Read back with a clock past the expiry: the entry is gone server-side, and even if the
         // server had not swept it yet, consume re-checks expiry, so this is a miss either way.
-        AuthorizationGrant expired = storeOn(nodeB, T0.plusSeconds(5))
+        AuthorizationGrant expired = storeOn(cacheB, T0.plusSeconds(5))
                 .consume(realm, code)
                 .await()
                 .atMost(Duration.ofSeconds(10));
@@ -225,7 +261,7 @@ class AuthorizationCodeStoreIT {
     @DisplayName("an already-expired grant is refused rather than stored without a lifespan")
     void refusesToStoreAnExpiredGrant() {
         RealmKey realm = realm();
-        InfinispanAuthorizationCodeStore store = storeOn(nodeA, T0.plusSeconds(600));
+        InfinispanAuthorizationCodeStore store = storeOn(cacheA, T0.plusSeconds(600));
 
         // Infinispan reads a non-positive lifespan as "use the default" (and -1 as immortal), so
         // storing an expired grant would outlive the code it stands for. It must be refused.
