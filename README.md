@@ -130,7 +130,7 @@ replacing the bundled adapters:
 
 | Port | Description |
 |------|-------------|
-| `AuthorizationCodeStorePort` | Store and consume authorization codes with **exactly-once** semantics — `store(code, grant)` / `consume(realm, code)`. The bundled adapter is an in-process concurrent map (single-node only; a shared-cache adapter is on the roadmap). |
+| `AuthorizationCodeStorePort` | Store and consume authorization codes with **exactly-once** semantics — `store(code, grant)` / `consume(realm, code)`. Two adapters ship: a shared Infinispan cache with a per-entry TTL (the multi-node default) and an in-process concurrent map (the `@DefaultBean` fallback, used under the `test` profile and for single-node development). |
 | `ClientRepositoryPort` | Load a registered client by realm and client ID — `findByClientId(realm, clientId)`. The bundled adapter is the reactive-Postgres `OAuthClientRepository`. |
 | `ClientSecretVerifierPort` | Verify a presented client secret without exposing the stored hash — `verifySecret(realm, clientId, presentedSecret)`. The bundled adapter verifies Argon2id hashes on a dedicated worker pool. |
 | `RefreshTokenStorePort` | Persist and rotate refresh-token families with reuse-detection. The bundled adapter is durable (reactive Postgres, per-tenant RLS). |
@@ -352,6 +352,7 @@ tagged when the wave's integration test suite passes an end-to-end OIDC flow.
 - [x] EdDSA (Ed25519) signing keys with `PENDING → ACTIVE → RETIRING → RETIRED` lifecycle
 - [x] OIDC discovery (`/.well-known/openid-configuration`) + JWKS endpoint
 - [x] Multi-tenant PostgreSQL adapter with fail-closed row-level security
+- [x] Shared-cache (Infinispan) authorization-code store — a code minted at `/authorize` on one node is redeemable at `/token` on another
 - [x] Edge hardening: deny-by-default CORS, security headers, TLS redirect, ingress rate limiting, credential-verification throttle
 - [x] Tamper-evident per-tenant audit log with signed checkpoints
 - [x] First-class observability: Micrometer, OpenTelemetry, SmallRye Health
@@ -367,7 +368,6 @@ tagged when the wave's integration test suite passes an end-to-end OIDC flow.
 - [ ] Realm management API
 
 ### Ongoing
-- [ ] Distributed authorization-code store (the shipped store is single-node in-memory; a shared-cache adapter is needed for multi-node)
 - [ ] Distributed rate limiting (the shipped ingress limiter and credential-verification throttle are single-node in-memory; a shared-cache backend enforces limits fleet-wide)
 - [ ] Native-image build measurements and CI publication
 - [ ] OpenID Connect conformance test suite
