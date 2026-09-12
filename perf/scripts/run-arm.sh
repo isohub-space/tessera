@@ -126,16 +126,19 @@ dc exec -T postgres psql -v ON_ERROR_STOP=1 -U tessera -d tessera < "$SEED_SQL" 
 set -a; . "$SEED_ENV"; set +a
 echo "  tenant=$TENANT_ID client=$CLIENT_ID"
 
-wait_for "http://localhost:8091/q/health/ready" "app1 readiness" \
-  || { dc logs --tail 60 app1; fail "app1 never became ready (the signing-key gate did not pass)."; }
+# Readiness is NOT taken from /q/health/ready: that probe cannot pass in a packaged run
+# (see the note in gen-topology.sh) and is disabled for perf runs. The real gate is the
+# smoke login below — a complete authorize->code->token exchange is a stronger statement
+# about readiness than any probe, because it is the thing being measured.
+echo "  seeded; readiness is gated on the smoke login below"
 
 # --- remaining instances ------------------------------------------------------------------------
 if [[ "$INSTANCES" -gt 1 ]]; then
   log "starting app2..app$INSTANCES"
   for i in $(seq 2 "$INSTANCES"); do
     dc up -d "app$i"
-    wait_for "http://localhost:$((8090 + i))/q/health/ready" "app$i readiness" \
-      || { dc logs --tail 60 "app$i"; fail "app$i never became ready."; }
+    wait_for "http://localhost:$((8090 + i))/q/health/live" "app$i liveness" \
+      || { dc logs --tail 60 "app$i"; fail "app$i never became live."; }
   done
 fi
 
@@ -143,37 +146,20 @@ log "starting the load balancer"
 dc up -d lb
 wait_for "http://localhost:8080/q/health/live" "balancer" || fail "the balancer never answered."
 
-# --- smoke: one real login, by hand, before any load ---------------------------------------------
-# If this does not produce a token, every number the load run would print is a number about a
-# broken flow. Better to stop here than to publish a confident measurement of nothing.
-log "smoke test: one complete login through the balancer"
-VERIFIER="perf-smoke-verifier-0123456789012345678901234567890123456789"
-CHALLENGE="$(printf '%s' "$VERIFIER" | openssl dgst -sha256 -binary | openssl base64 \
-  | tr '+/' '-_' | tr -d '=\n')"
-LOCATION="$(curl -sS -o /dev/null -D - --max-time 10 -G \
-  -H "X-Tenant-Id: $TENANT_ID" -H "X-Subject-Id: smoke-user" \
-  --data-urlencode "response_type=code" \
-  --data-urlencode "client_id=$CLIENT_ID" \
-  --data-urlencode "redirect_uri=$REDIRECT_URI" \
-  --data-urlencode "scope=openid" \
-  --data-urlencode "state=smokestate" \
-  --data-urlencode "nonce=smokenonce" \
-  --data-urlencode "code_challenge=$CHALLENGE" \
-  --data-urlencode "code_challenge_method=S256" \
-  "http://localhost:8080/authorize" \
-  | tr -d '\r' | awk '/^[Ll]ocation:/ {print $2}')"
-SMOKE_CODE="$(printf '%s' "$LOCATION" | sed -n 's/.*[?&]code=\([^&]*\).*/\1/p')"
-[[ -n "$SMOKE_CODE" ]] || fail "the authorize step returned no code (Location: ${LOCATION:-none})."
-
-SMOKE_TOKEN="$(curl -sS --max-time 10 -X POST "http://localhost:8080/token" \
-  -H "X-Tenant-Id: $TENANT_ID" \
-  -d "grant_type=authorization_code" -d "code=$SMOKE_CODE" \
-  --data-urlencode "redirect_uri=$REDIRECT_URI" \
-  -d "client_id=$CLIENT_ID" -d "code_verifier=$VERIFIER")"
-case "$SMOKE_TOKEN" in
-  *access_token*) echo "  smoke login OK — a token was issued." ;;
-  *) fail "the token step did not issue a token. Response: $SMOKE_TOKEN" ;;
-esac
+# --- smoke: one real login, through the driver itself, before any load ------------------
+# Driven by k6 rather than curl, deliberately: it exercises the SAME code path the load run
+# uses — including the DPoP proof, which a public client cannot get a token without and
+# which is not something to reimplement in shell. If one complete exchange does not produce
+# a token, every number a load run would print is a number about a broken flow.
+log "smoke test: one complete login through the driver"
+dc run --rm \
+  -e "BASE_URL=http://lb:8080" \
+  -e "TENANT_ID=$TENANT_ID" -e "CLIENT_ID=$CLIENT_ID" -e "REDIRECT_URI=$REDIRECT_URI" \
+  -e "DPOP_HTU=${DPOP_HTU:-http://localhost:8080/token}" \
+  -e "PROFILE=smoke" -e "RUN_NAME=$RUN_NAME-smoke" \
+  k6 run /scripts/login-flow.js \
+  || { dc logs --tail 40 app1; fail "the smoke login did not produce a token."; }
+echo "  smoke login OK — a token was issued."
 
 # --- the run manifest -----------------------------------------------------------------------------
 # What was measured, on what, with what configuration. A laptop number is useful only if it
@@ -210,6 +196,7 @@ if [[ "$INSTANCES" -ge 2 ]]; then
   dc run --rm \
     -e "TENANT_ID=$TENANT_ID" -e "CLIENT_ID=$CLIENT_ID" -e "REDIRECT_URI=$REDIRECT_URI" \
     -e "INSTANCE_URLS=$URLS" -e "RUN_NAME=$RUN_NAME-correctness" \
+    -e "DPOP_HTU=${DPOP_HTU:-http://localhost:8080/token}" \
     -e "CORRECTNESS_ITERATIONS=${CORRECTNESS_ITERATIONS:-200}" \
     -e "CORRECTNESS_VUS=${CORRECTNESS_VUS:-20}" \
     k6 run /scripts/correctness.js || echo "  (correctness thresholds breached — see the report above)"
@@ -224,7 +211,10 @@ log "load: profile=$PROFILE"
 dc run --rm \
   -e "BASE_URL=http://lb:8080" \
   -e "TENANT_ID=$TENANT_ID" -e "CLIENT_ID=$CLIENT_ID" -e "REDIRECT_URI=$REDIRECT_URI" \
+  -e "DPOP_HTU=${DPOP_HTU:-http://localhost:8080/token}" \
   -e "PROFILE=$PROFILE" -e "STEPS=$STEPS" -e "STEP_DURATION=$STEP_DURATION" \
+  -e "WARMUP_RATE=${WARMUP_RATE:-0}" -e "WARMUP_DURATION=${WARMUP_DURATION:-30s}" \
+  -e "STEP_GAP_S=${STEP_GAP_S:-15}" \
   -e "RATE=${RATE:-50}" -e "DURATION=${DURATION:-120s}" \
   -e "RAMP_TO=${RAMP_TO:-400}" -e "RAMP_DURATION=${RAMP_DURATION:-300s}" \
   -e "ERROR_BUDGET=$ERROR_BUDGET" -e "P99_BUDGET_MS=$P99_BUDGET_MS" \

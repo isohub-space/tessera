@@ -24,6 +24,11 @@
 import http from 'k6/http';
 import crypto from 'k6/crypto';
 import { Counter } from 'k6/metrics';
+import { dpopProof } from './dpop.js';
+
+// See login-flow.js: the proof is bound to the server's configured token endpoint, not to
+// the address dialled, so every instance validates against this same value.
+const DPOP_HTU = __ENV.DPOP_HTU || 'http://localhost:8080/token';
 
 const INSTANCE_URLS = (__ENV.INSTANCE_URLS || '').split(',').map((s) => s.trim()).filter(Boolean);
 const TENANT_ID = __ENV.TENANT_ID;
@@ -84,14 +89,14 @@ export const options = {
 
 // ---------------------------------------------------------------- the three checks
 
-export function crossInstance() {
+export async function crossInstance() {
   const issuer = pick(0);
   const redeemer = pick(1);
   const grant = issueCode(issuer);
   if (!grant) {
     return;
   }
-  const response = redeem(redeemer, grant);
+  const response = await redeem(redeemer, grant);
   if (response.status === 200) {
     crossInstanceOk.add(1);
   } else {
@@ -99,7 +104,7 @@ export function crossInstance() {
   }
 }
 
-export function race() {
+export async function race() {
   const issuer = pick(0);
   const redeemer = pick(1);
   const grant = issueCode(issuer);
@@ -109,10 +114,11 @@ export function race() {
 
   // Same batch, so both redemptions are in flight together — the closest this harness can
   // get to a genuine simultaneous double redemption across two instances.
-  const responses = http.batch([
-    redeemRequest(issuer, grant),
-    redeemRequest(redeemer, grant),
-  ]);
+  // Both proofs are minted BEFORE the batch so the two redemptions leave together; doing
+  // the async work inside the batch would stagger them and weaken the race.
+  const first = await redeemRequest(issuer, grant);
+  const second = await redeemRequest(redeemer, grant);
+  const responses = http.batch([first, second]);
 
   const successes = responses.filter((r) => r.status === 200).length;
   if (successes > 1) {
@@ -124,15 +130,15 @@ export function race() {
   }
 }
 
-export function replay() {
+export async function replay() {
   const issuer = pick(0);
   const redeemer = pick(1);
   const grant = issueCode(issuer);
   if (!grant) {
     return;
   }
-  const first = redeem(redeemer, grant);
-  const second = redeem(issuer, grant);
+  const first = await redeem(redeemer, grant);
+  const second = await redeem(issuer, grant);
   // A code that was never redeemable at all (the in-memory case) says nothing about replay,
   // so only count the replay verdict when the first redemption actually succeeded.
   if (first.status !== 200) {
@@ -170,7 +176,17 @@ function issueCode(baseUrl) {
   return match ? { code: decodeURIComponent(match[1]), verifier: verifier } : null;
 }
 
-function redeemRequest(baseUrl, grant) {
+/**
+ * Builds one redemption request, carrying its OWN freshly minted DPoP proof.
+ *
+ * The separate proof per request is load-bearing for the race check. The server treats a
+ * DPoP `jti` as single-use, so if both redemptions in a race shared one proof the second
+ * would be refused for REPLAYED PROOF rather than for an already-consumed code — and
+ * "exactly one succeeded" would pass for entirely the wrong reason, telling us nothing
+ * about the authorization-code store. Distinct proofs make the code the only thing the two
+ * requests contend over.
+ */
+async function redeemRequest(baseUrl, grant) {
   return {
     method: 'POST',
     url: `${baseUrl}/token`,
@@ -181,12 +197,14 @@ function redeemRequest(baseUrl, grant) {
       client_id: CLIENT_ID,
       code_verifier: grant.verifier,
     },
-    params: { headers: authHeaders() },
+    params: {
+      headers: Object.assign({}, authHeaders(), { DPoP: await dpopProof('POST', DPOP_HTU) }),
+    },
   };
 }
 
-function redeem(baseUrl, grant) {
-  const request = redeemRequest(baseUrl, grant);
+async function redeem(baseUrl, grant) {
+  const request = await redeemRequest(baseUrl, grant);
   return http.post(request.url, request.body, request.params);
 }
 
