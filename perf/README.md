@@ -58,6 +58,33 @@ The instance count is a **parameter**, not a hard-coded assumption: the compose 
 balancer config are generated from `INSTANCES`, so comparing 1 against 2 against N never means
 maintaining two topologies that can drift apart.
 
+## Verifying the harness without a daemon
+
+```bash
+perf/scripts/dry-run.sh
+```
+
+Checks everything that does not need a container runtime, so the harness does not fail on
+its third step after a ten-minute build:
+
+1. shell syntax of every script;
+2. topology generation at 1, 2 and 4 instances — each compose file parsed by the compose CLI
+   (which validates client-side), and the balancer asserted to name *every* instance, because
+   an arm that silently runs narrower than it claims is worse than one that fails;
+3. the seeder runs, emits both inserts, and binds `app.tenant_id` — without which the RLS
+   `WITH CHECK` policy rejects the rows;
+4. the seeded private key is opened, decoded and used to sign **by the server's own
+   `EnvelopeCipher`**. This is the failure that no syntax check catches: a mismatched envelope
+   format means every token request 500s at full speed;
+5. the PKCE challenge is 43 unpadded base64url characters by both routes that produce one
+   (the shell smoke test and the driver), matching the domain's `CodeChallenge` rule;
+6. the driver's request construction and verdict logic against stubbed HTTP —
+   including the one that matters most: a **synthetic double issuance**, to prove the
+   zero-double-issuance assertion actually fires. An assertion that cannot fail is worse
+   than no assertion.
+
+Step 4 is skipped until `mvn -DskipTests package` has been run, and says so.
+
 ## Design decisions
 
 **Driver: k6.** It is containerised, so no local install and no version skew; it scripts the
