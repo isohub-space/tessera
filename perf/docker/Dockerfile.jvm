@@ -1,0 +1,29 @@
+# Perf-only JVM image for the assembled server.
+#
+# Deliberately NOT src/main/docker/Dockerfile.* : this image exists to put N identical
+# instances behind a load balancer on a laptop, not to ship anything. It consumes the
+# quarkus-app layout that `mvn package` already produced on the host, so the container
+# build never re-runs Maven (host Maven cache, and every instance boots the same bytes
+# that the host build produced — the artifact under test is unambiguous).
+#
+# Build context is the repository root:
+#   docker build -f perf/docker/Dockerfile.jvm -t tessera-perf:local .
+FROM eclipse-temurin:25-jre
+
+WORKDIR /app
+
+# The four parts of the Quarkus fast-jar layout, copied most-stable-first so the layers
+# that rarely change (third-party libs) cache independently of application code.
+COPY tessera-server/target/quarkus-app/lib/     /app/lib/
+COPY tessera-server/target/quarkus-app/quarkus/ /app/quarkus/
+COPY tessera-server/target/quarkus-app/app/     /app/app/
+COPY tessera-server/target/quarkus-app/quarkus-run.jar /app/
+
+EXPOSE 8090
+
+# JAVA_OPTS is set per-instance by the generated compose file so every arm runs each
+# instance under an identical, explicitly recorded heap — an unstated heap would make the
+# arms incomparable.
+ENV JAVA_OPTS=""
+
+CMD ["sh", "-c", "exec java $JAVA_OPTS -jar /app/quarkus-run.jar"]

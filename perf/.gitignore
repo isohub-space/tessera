@@ -1,0 +1,4 @@
+# Generated per run: compose file, balancer config, the seed SQL (which carries private
+# signing-key material encrypted under that run's throwaway master key) and the results.
+# Nothing in here is reproducible input — regenerate it with scripts/run-arm.sh.
+.run/
