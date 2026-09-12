@@ -26,8 +26,24 @@ const mod = (name, body) => writeFileSync(join(dir, 'node_modules', 'k6', name),
 writeFileSync(join(dir, 'package.json'), '{"type":"module"}');
 mod('package.json', JSON.stringify({
   name: 'k6', version: '0.0.0', type: 'module',
-  exports: { '.': './index.js', './crypto': './crypto.js', './metrics': './metrics.js', './http': './http.js' },
+  exports: {
+    '.': './index.js', './crypto': './crypto.js', './metrics': './metrics.js',
+    './http': './http.js', './encoding': './encoding.js',
+    './experimental/webcrypto': './webcrypto.js',
+  },
 }));
+// Node's own WebCrypto stands in for k6's: same algorithm names, same JWK export shape, and
+// the same raw r||s signature for ECDSA — so a proof built here is built the same way.
+mod('webcrypto.js', "export { webcrypto as crypto } from 'node:crypto';");
+mod('encoding.js', `
+export default {
+  b64encode(input, variant) {
+    const buf = typeof input === 'string' ? Buffer.from(input, 'binary') : Buffer.from(input);
+    const b64 = buf.toString('base64');
+    return variant === 'rawurl' ? b64.replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '') : b64;
+  },
+};
+`);
 mod('index.js', 'export function check(){return true} export function sleep(){} export default {}');
 mod('crypto.js', `
 import { createHash } from 'node:crypto';
@@ -54,7 +70,7 @@ export default {
 };
 `);
 
-for (const file of ['login-flow.js', 'correctness.js']) {
+for (const file of ['login-flow.js', 'correctness.js', 'dpop.js']) {
   copyFileSync(join(SRC, file), join(dir, file));
 }
 
@@ -71,6 +87,7 @@ globalThis.__ENV = {
 
 const loginFlow = await import(pathToFileURL(join(dir, 'login-flow.js')).href);
 const correctness = await import(pathToFileURL(join(dir, 'correctness.js')).href);
+const dpopModule = await import(pathToFileURL(join(dir, 'dpop.js')).href);
 
 // ---------------------------------------------------------------- harness
 
@@ -106,7 +123,7 @@ globalThis.__stub = {
 };
 
 let before = snapshot();
-loginFlow.login();
+await loginFlow.login();
 
 const params = new URL(authorizeUrl).searchParams;
 check('authorize requests response_type=code', params.get('response_type') === 'code');
@@ -139,6 +156,47 @@ check('tenant header is sent on authorize and token',
 check('subject header is sent', !!tokenCall.params.headers['X-Subject-Id']);
 check('a successful login is counted as a success', delta('login_success:true', before) === 1);
 
+// ---------------------------------------------------------------- 1b. the DPoP proof
+//
+// A public client cannot get a token without one, and a malformed proof would fail every
+// redemption at full speed — which reads exactly like server saturation. So the proof is
+// decoded and checked against what the server's validator actually requires.
+
+const proofHeaderRaw = tokenCall.params.headers['DPoP'];
+check('token request carries a DPoP proof', !!proofHeaderRaw);
+
+const parts = (proofHeaderRaw || '').split('.');
+check('proof is a three-part compact JWS', parts.length === 3, `got ${parts.length} parts`);
+
+const decode = (seg) => JSON.parse(Buffer.from(seg, 'base64url').toString('utf8'));
+const jh = decode(parts[0]);
+const jc = decode(parts[1]);
+
+check('proof typ is dpop+jwt', jh.typ === 'dpop+jwt', jh.typ);
+check('proof alg is ES256 (the only algorithm accepted)', jh.alg === 'ES256', jh.alg);
+check('proof embeds an EC P-256 public JWK',
+  jh.jwk && jh.jwk.kty === 'EC' && jh.jwk.crv === 'P-256' && !!jh.jwk.x && !!jh.jwk.y);
+check('embedded JWK carries NO private member (the server refuses a private jwk)',
+  jh.jwk && jh.jwk.d === undefined);
+check('proof htm is POST', jc.htm === 'POST', jc.htm);
+check('proof htu is the configured token endpoint, not the dialled host',
+  jc.htu === 'http://localhost:8080/token', jc.htu);
+check('proof iat is fresh', Math.abs(Math.floor(Date.now() / 1000) - jc.iat) < 5, String(jc.iat));
+check('proof carries a jti', typeof jc.jti === 'string' && jc.jti.length > 0);
+check('signature is 64 raw bytes (ES256 r||s)',
+  Buffer.from(parts[2], 'base64url').length === 64,
+  `${Buffer.from(parts[2], 'base64url').length} bytes`);
+
+// jti is single-use server-side: a repeat would be refused as a replayed proof and misread
+// as the server shedding load.
+{
+  const seen = new Set();
+  for (let i = 0; i < 50; i++) {
+    seen.add(decode((await dpopModule.dpopProof('POST', 'http://localhost:8080/token')).split('.')[1]).jti);
+  }
+  check('jti is unique across proofs (50 sampled)', seen.size === 50, `${seen.size} distinct`);
+}
+
 // ---------------------------------------------------------------- 2. failure paths
 
 before = snapshot();
@@ -147,7 +205,7 @@ globalThis.__stub = {
   post() { throw new Error('token must not be called when authorize failed'); },
   batch() { return []; },
 };
-loginFlow.login();
+await loginFlow.login();
 check('a throttled authorize is a failed login', delta('login_success:false', before) === 1);
 check('a throttled authorize is counted against authorize', delta('login_authorize_failed', before) === 1);
 
@@ -157,7 +215,7 @@ globalThis.__stub = {
   post() { throw new Error('token must not be called without a code'); },
   batch() { return []; },
 };
-loginFlow.login();
+await loginFlow.login();
 check('a 302 carrying an error, not a code, is a failed login',
   delta('login_success:false', before) === 1);
 
@@ -167,7 +225,7 @@ globalThis.__stub = {
   post() { return { status: 400, body: '{"error":"invalid_grant"}', timings: { duration: 3 } }; },
   batch() { return []; },
 };
-loginFlow.login();
+await loginFlow.login();
 check('a refused token redemption is a failed login', delta('login_success:false', before) === 1);
 check('a refused token redemption is counted against token', delta('login_token_failed', before) === 1);
 
@@ -188,20 +246,20 @@ globalThis.__stub = {
     return [{ status: 200, body: 'a' }, { status: 200, body: 'b' }];
   },
 };
-correctness.race();
+await correctness.race();
 check('DOUBLE ISSUANCE is detected when two instances both issue a token',
   delta('double_issuance', before) === 1);
 
 before = snapshot();
 globalThis.__stub.batch = () => [{ status: 200, body: 'a' }, { status: 400, body: 'b' }];
-correctness.race();
+await correctness.race();
 check('exactly-one redemption is recorded as correct', delta('exactly_once_ok', before) === 1);
 check('exactly-one redemption raises no double-issuance alarm',
   delta('double_issuance', before) === 0);
 
 before = snapshot();
 globalThis.__stub.batch = () => [{ status: 400, body: 'a' }, { status: 400, body: 'b' }];
-correctness.race();
+await correctness.race();
 check('a code redeemed nowhere is recorded, not silently dropped',
   delta('zero_issuance', before) === 1);
 
@@ -213,13 +271,13 @@ globalThis.__stub = {
   post() { return okToken; },
   batch() { return []; },
 };
-correctness.crossInstance();
+await correctness.crossInstance();
 check('a code redeemable on another instance counts as shared-store evidence',
   delta('cross_instance_redeemable_ok', before) === 1);
 
 before = snapshot();
 globalThis.__stub.post = () => ({ status: 400, body: '{"error":"invalid_grant"}' });
-correctness.crossInstance();
+await correctness.crossInstance();
 check('a code refused by another instance counts as NOT shared',
   delta('cross_instance_redeemable_failed', before) === 1);
 
@@ -229,13 +287,13 @@ let redemption = 0;
 globalThis.__stub.post = () => (++redemption === 1
   ? okToken
   : { status: 200, body: '{"access_token":"second"}' });
-correctness.replay();
+await correctness.replay();
 check('an accepted replay is flagged', delta('replay_accepted', before) === 1);
 
 before = snapshot();
 redemption = 0;
 globalThis.__stub.post = () => (++redemption === 1 ? okToken : { status: 400, body: 'no' });
-correctness.replay();
+await correctness.replay();
 check('a rejected replay is recorded as correct', delta('replay_rejected_ok', before) === 1);
 
 // ---------------------------------------------------------------- report

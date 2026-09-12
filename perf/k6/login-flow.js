@@ -21,6 +21,7 @@
 import http from 'k6/http';
 import crypto from 'k6/crypto';
 import { Trend, Rate, Counter } from 'k6/metrics';
+import { dpopProof } from './dpop.js';
 
 // ---------------------------------------------------------------- configuration
 
@@ -28,12 +29,24 @@ const BASE_URL = __ENV.BASE_URL || 'http://lb:8080';
 const TENANT_ID = __ENV.TENANT_ID;
 const CLIENT_ID = __ENV.CLIENT_ID || 'perf-client';
 const REDIRECT_URI = __ENV.REDIRECT_URI || 'http://perf.invalid/callback';
+// The DPoP `htu` must match the token endpoint the SERVER derived from its configured
+// issuer, not the address the driver dialled — the server binds proofs to its own authority
+// on purpose, so a proof carrying the balancer's internal hostname would be rejected.
+const DPOP_HTU = __ENV.DPOP_HTU || 'http://localhost:8080/token';
 
 const PROFILE = __ENV.PROFILE || 'steps';
 const STEP_DURATION = __ENV.STEP_DURATION || '60s';
 const STEP_GAP_S = parseInt(__ENV.STEP_GAP_S || '15', 10);
 const STEPS = (__ENV.STEPS || '10,25,50,100,200,400')
   .split(',').map((s) => parseInt(s.trim(), 10)).filter((n) => n > 0);
+
+// A warmup burst that is measured but NOT counted toward the ceiling. Without it the first
+// step of a ladder pays the JVM's JIT and connection-pool warmup and reports a worse tail
+// than steps offered later at HIGHER rates — which is exactly what the first ceiling run
+// showed (p99 642ms at 200/s, then 243ms at 400/s). A ceiling read off an unwarmed first
+// step understates the system; a warmup level makes the ladder comparable across its rungs.
+const WARMUP_RATE = parseInt(__ENV.WARMUP_RATE || '0', 10);
+const WARMUP_DURATION = __ENV.WARMUP_DURATION || '30s';
 
 const RATE = parseInt(__ENV.RATE || '50', 10);
 const DURATION = __ENV.DURATION || '120s';
@@ -79,18 +92,40 @@ function levelThresholds(level) {
 // out of VUs it silently under-delivers and the run measures k6 rather than the server.
 // Dropped iterations are reported in the summary so that failure mode is visible, not silent.
 function vusFor(rate) {
-  return { preAllocatedVUs: Math.max(rate, 50), maxVUs: Math.max(rate * 20, 200) };
+  // Bounded on purpose. At saturation responses stall, k6 allocates VUs to keep the offered
+  // rate, and an unbounded ceiling lets the DRIVER exhaust memory and die before it can
+  // report — which is what happened at 2400/s on the first attempt: the run found the knee
+  // and then lost the summary. A bounded pool means k6 instead records dropped iterations,
+  // which the report surfaces as "the offered rate was not delivered".
+  return {
+    preAllocatedVUs: Math.min(Math.max(rate, 50), 1000),
+    maxVUs: Math.min(Math.max(rate * 10, 200), 3000),
+  };
 }
 
 if (PROFILE === 'steps') {
   const stepSeconds = parseDurationSeconds(STEP_DURATION);
+  let offset = 0;
+  if (WARMUP_RATE > 0) {
+    scenarios.warmup = {
+      executor: 'constant-arrival-rate',
+      rate: WARMUP_RATE,
+      timeUnit: '1s',
+      duration: WARMUP_DURATION,
+      startTime: '0s',
+      tags: { level: 'warmup' },
+      exec: 'login',
+      ...vusFor(WARMUP_RATE),
+    };
+    offset = parseDurationSeconds(WARMUP_DURATION) + STEP_GAP_S;
+  }
   STEPS.forEach((rate, i) => {
     scenarios[`level_${rate}`] = {
       executor: 'constant-arrival-rate',
       rate: rate,
       timeUnit: '1s',
       duration: STEP_DURATION,
-      startTime: `${i * (stepSeconds + STEP_GAP_S)}s`,
+      startTime: `${offset + i * (stepSeconds + STEP_GAP_S)}s`,
       tags: { level: String(rate) },
       exec: 'login',
       ...vusFor(rate),
@@ -122,8 +157,20 @@ if (PROFILE === 'steps') {
     ...vusFor(RAMP_TO),
   };
   levelThresholds('ramp');
+} else if (PROFILE === 'smoke') {
+  // One login, by the same code path the load run uses. This is the harness's readiness
+  // gate: if a single complete exchange does not produce a token, every number a load run
+  // would print is a number about a broken flow, so the run stops here instead.
+  scenarios.smoke = {
+    executor: 'shared-iterations',
+    vus: 1,
+    iterations: 1,
+    tags: { level: 'smoke' },
+    exec: 'login',
+  };
+  thresholds['login_success{level:smoke}'] = [{ threshold: 'rate==1', abortOnFail: true }];
 } else {
-  throw new Error(`unknown PROFILE '${PROFILE}' (expected steps|steady|ramp)`);
+  throw new Error(`unknown PROFILE '${PROFILE}' (expected steps|steady|ramp|smoke)`);
 }
 
 export const options = {
@@ -138,7 +185,7 @@ export const options = {
 
 // ---------------------------------------------------------------- the login flow
 
-export function login() {
+export async function login() {
   const verifier = pkceVerifier();
   const challenge = crypto.sha256(verifier, 'base64rawurl');
   const state = randomToken(16);
@@ -169,7 +216,7 @@ export function login() {
   const authorizeResponse = http.get(authorizeUrl, {
     headers: headers,
     redirects: 0,
-    tags: { step: 'authorize' },
+    tags: { step: 'authorize', name: 'authorize' },
   });
   authorizeDuration.add(authorizeResponse.timings.duration);
 
@@ -181,6 +228,11 @@ export function login() {
     return;
   }
 
+  // A public client MUST sender-constrain its token with a DPoP proof; the server refuses
+  // the redemption outright without one. The proof is minted per request because the server
+  // treats jti as single-use.
+  const proof = await dpopProof('POST', DPOP_HTU);
+
   const tokenResponse = http.post(
     `${BASE_URL}/token`,
     {
@@ -190,7 +242,10 @@ export function login() {
       client_id: CLIENT_ID,
       code_verifier: verifier,
     },
-    { headers: headers, tags: { step: 'token' } },
+    {
+      headers: Object.assign({}, headers, { DPoP: proof }),
+      tags: { step: 'token', name: 'token' },
+    },
   );
   tokenDuration.add(tokenResponse.timings.duration);
 
@@ -202,8 +257,8 @@ export function login() {
   loginTotal.add(Date.now() - started);
 }
 
-export default function () {
-  login();
+export default async function () {
+  await login();
 }
 
 // ---------------------------------------------------------------- helpers
@@ -260,10 +315,15 @@ export function handleSummary(data) {
   lines.push(`profile=${PROFILE} target=${BASE_URL}`);
   lines.push(`criterion: a level HOLDS iff error rate <= ${(ERROR_BUDGET * 100).toFixed(1)}% AND p99 < ${P99_BUDGET_MS}ms`);
   lines.push('');
-  lines.push('level(req/s) | logins | err%   | p50(ms) | p95(ms) | p99(ms) | holds');
-  lines.push('-------------|--------|--------|---------|---------|---------|------');
+  lines.push('level(req/s) | logins | deliv% | err%   | p50(ms) | p95(ms) | p99(ms) | holds');
+  lines.push('-------------|--------|--------|--------|---------|---------|---------|------');
 
-  const levels = PROFILE === 'steps' ? STEPS : PROFILE === 'steady' ? [RATE] : ['ramp'];
+  const stepSeconds = PROFILE === 'steps' ? parseDurationSeconds(STEP_DURATION) : null;
+  const underDelivered = [];
+  const levels = PROFILE === 'steps' ? STEPS
+    : PROFILE === 'steady' ? [RATE]
+    : PROFILE === 'smoke' ? ['smoke']
+    : ['ramp'];
   let ceiling = null;
   for (const level of levels) {
     const success = data.metrics[`login_success{level:${level}}`];
@@ -276,21 +336,34 @@ export function handleSummary(data) {
     const count = passed + failed;
     const errPct = count > 0 ? (failed / count) * 100 : 0;
     const p99 = total.values['p(99)'];
+    // Delivery: did k6 actually offer the rate it claimed? Past the knee the driver runs out
+    // of VUs and under-delivers, and a level that was never fully offered cannot be read as a
+    // statement about the server. Showing it per level turns that from a footnote the reader
+    // has to apply by hand into part of the verdict.
+    const expected = typeof level === 'number' ? level * stepSeconds : null;
+    const delivered = expected ? (count / expected) * 100 : null;
+    const fullyOffered = delivered === null || delivered >= 99;
+
     const holds = errPct <= ERROR_BUDGET * 100 && p99 < P99_BUDGET_MS;
-    if (holds && PROFILE === 'steps') {
+    // A level only establishes a ceiling if the rate was genuinely delivered.
+    if (holds && fullyOffered && PROFILE === 'steps') {
       ceiling = level;
     }
     lines.push(
       [
         String(level).padEnd(12),
         String(count).padStart(6),
+        (delivered === null ? '-' : delivered.toFixed(0)).padStart(6),
         errPct.toFixed(2).padStart(6),
         fmt(total.values.med).padStart(7),
         fmt(total.values['p(95)']).padStart(7),
         fmt(p99).padStart(7),
-        holds ? ' yes' : ' NO',
+        holds ? (fullyOffered ? ' yes' : ' yes*') : ' NO',
       ].join(' | '),
     );
+    if (holds && !fullyOffered) {
+      underDelivered.push(level);
+    }
   }
 
   lines.push('');
@@ -304,6 +377,13 @@ export function handleSummary(data) {
 
   // Dropped iterations mean k6 could not deliver the offered rate — the run then measures
   // the driver, not the server, and the numbers above must not be read as a server ceiling.
+  if (underDelivered.length > 0) {
+    lines.push(
+      `NOTE: level(s) ${underDelivered.join(', ')} met the criterion but were marked yes* — the `
+        + 'driver did not deliver the full offered rate there, so they do not establish a ceiling.',
+    );
+  }
+
   const dropped = data.metrics.dropped_iterations;
   if (dropped && dropped.values.count > 0) {
     lines.push(

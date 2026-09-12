@@ -136,11 +136,55 @@ The master key is generated fresh per run and never committed — the server ref
 outside dev/test on the well-known development default, and a real key does not belong in a
 public repository.
 
-### Two configuration overrides worth knowing about
+### Every override the perf environment applies, and why
+
+Each of these was discovered by a run failing, not by reading configuration, and each is
+recorded because a reader has to know what was changed before trusting a number.
 
 - `QUARKUS_HTTP_INSECURE_REQUESTS=enabled` — under `%prod` the server redirects plain HTTP to
   HTTPS. Without this override every request in the run is answered with a 301 and nothing is
   measured at all.
+- `IAM_SUBJECT_TRUST_HEADER=true` — `SessionCookieFilter` is default-closed and **strips** any
+  caller-supplied `X-Subject-Id` unless the deployment declares its ingress trustworthy.
+  That default is right: trusting the header without an edge that overwrites it is a complete
+  authentication bypass. The harness is the shape the flag describes — the balancer is the
+  sole ingress and the driver stands in for the authenticating proxy — so it is set here, and
+  **must never be copied into a deployment whose ingress does not strip the header.**
+- `IAM_READINESS_SIGNING_KEY_ENABLED=false` — see the defect note below. The harness gates on
+  liveness plus one real end-to-end login instead, which is a stronger readiness signal than
+  the probe was.
+
+### A defect this work surfaced
+
+`/q/health/ready` **cannot report UP in a packaged production run.** `SigningKeyReadinessCheck`
+performs a blocking `UniAwait.atMost` from a health-check worker thread, and Hibernate
+Reactive rejects that outright:
+
+```
+HR000068: This method should exclusively be invoked from a Vert.x EventLoop thread;
+          currently running on thread 'executor-thread-2'
+```
+
+Independently of the threading problem, the check counts ACTIVE keys for a **hard-coded dev
+tenant** only, so any other tenant reports DOWN even with a valid key of its own. Neither
+problem affects the signing path — the token endpoint signs from the event loop and works —
+but a platform readiness probe pointed at `/q/health/ready` would never pass. That is an
+application defect, reported rather than papered over.
+
+### DPoP is mandatory, so the driver mints proofs
+
+A public client cannot obtain a token from this server without a DPoP proof (RFC 9449), and
+there is no configuration that relaxes it — sender-constraining is enforced by construction.
+So `k6/dpop.js` mints a real ES256 proof per token request: `typ=dpop+jwt`, the public JWK
+embedded in the header, `htm`/`htu` bound to the server's *configured* token endpoint, and a
+fresh `jti` every time, because the server treats a spent `jti` as single-use and will refuse
+a replayed proof.
+
+That last detail is load-bearing for the correctness check: if both redemptions in a race
+shared one proof, the second would be refused for a replayed *proof* rather than an
+already-consumed *code*, and "exactly one succeeded" would pass for entirely the wrong
+reason. Each request therefore carries its own proof, so the code is the only thing the two
+redemptions contend over.
 - **Rate limiting is raised** (`RATELIMIT=high`) for the load arms. The shipped default is
   **20 token requests and 60 authorize requests per minute per (tenant, client_id)**, which
   is far below any interesting load — left alone, the "ceiling" would be a measurement of the
@@ -160,11 +204,17 @@ production figures, and nothing here should be extrapolated into one.
   Managed Redis across a VPC is not, and the store is on the critical path of every login.
 - **Real HA failover.** Killing a container is not a zone outage, a failover election, or a
   partition. This harness never tests what happens *during* a failure.
-- **Anything about the credential path.** `/authorize` takes the authenticated subject from
-  the `X-Subject-Id` header, which is where a login front-end or authenticating proxy injects
-  it; that front-end does not exist yet. So this measures the **authorization exchange**, not
-  end-user authentication. A real login includes a password verification that this harness
-  does not perform.
+- **Anything about the credential path.** The harness asserts the subject at the edge, so it
+  measures the **authorization exchange** — not end-user authentication. A real login also
+  pays an Argon2id credential verification, which these numbers do not include and which is
+  deliberately expensive: at roughly 19 MiB per hash on a pool of 4 threads it would dominate
+  every figure above and hide the store behaviour the arms exist to compare.
+
+  A session/login endpoint now exists on `main`, so driving the flow through it — seeding
+  users and credentials, and paying the Argon2id cost — is a viable follow-up experiment. It
+  is a *different* experiment, and it would answer "how many real end-user logins per minute"
+  rather than "how does the authorization-code store behave across instances". Worth running
+  before any capacity commitment is made to anyone.
 
 The first cloud deployment is what would answer those, and it does not exist yet.
 
@@ -192,7 +242,67 @@ property name once the adapter lands** — it is one line in `gen-topology.sh`.
 
 ## Recorded runs
 
-_None yet._ As of 2026-09-12 the local Docker daemon is unresponsive (the client answers, the
-server does not), so no arm has been executed. Every arm needs Postgres and the Redis arms
-need Redis, so the harness reports this as a blocker rather than producing numbers from a run
-that did not happen.
+### Arm 0 (control) — 1 instance, in-memory store — 2026-09-12
+
+Host: Darwin arm64, 11 cores, 18 GiB. One instance pinned to 2 CPUs, 512 MiB heap.
+Postgres on tmpfs. k6 in-network against the balancer. **These are laptop numbers**;
+they establish relative behaviour, not production capacity.
+
+**Throughput ceiling** (60s per level, preceded by an uncounted 60s warmup at 200/s):
+
+```
+level(req/s) | logins | deliv% | err%   | p50(ms) | p95(ms) | p99(ms) | holds
+-------------|--------|--------|--------|---------|---------|---------|------
+300          |  18001 |    100 |   0.34 |     5.0 |   226.0 |   517.0 |  yes
+350          |  21000 |    100 |   0.27 |     4.0 |   105.0 |   345.0 |  yes
+400          |  24001 |    100 |   0.35 |     5.0 |   112.0 |   184.0 |  yes
+450          |  26076 |     97 |   1.09 |   140.0 |  2440.0 |  2907.2 |  NO
+```
+
+**Ceiling: 400 logins/s — 24,000 logins/minute.** The knee is immediately above it: 450/s
+breaches both halves of the criterion at once and p99 jumps 16-fold.
+
+Treat 400 as **marginal rather than comfortable**. Across runs it measured between 0.35% and
+1.30% error — straddling the 1% budget — so the durable statement is: *comfortable at 350,
+marginal at 400, broken by 450*. Past the knee the system does not degrade smoothly; repeat
+ladders gave 9% error at 500/s and 1.3% at 550/s in the same run, which is what erratic
+overload looks like rather than a measurement mistake.
+
+**Rate of climb** (same ladder, 15s per level, no warmup, no gaps):
+
+```
+level(req/s) | logins | deliv% | err%   | p50(ms) | p95(ms) | p99(ms) | holds
+-------------|--------|--------|--------|---------|---------|---------|------
+100          |   1501 |    100 |   0.33 |     5.0 |   491.0 |   586.0 |  yes
+200          |   3001 |    100 |   0.00 |     4.0 |     6.0 |    27.0 |  yes
+300          |   4500 |    100 |   0.40 |     4.0 |   130.0 |   179.0 |  yes
+400          |   6001 |    100 |   1.20 |    10.0 |   205.0 |   246.0 |  NO
+500          |   7377 |     98 |   2.06 |   993.0 |  1225.0 |  1338.0 |  NO
+```
+
+**Climbing fast costs a quarter of the ceiling: 300/s against 400/s steady-state.** Arrival
+rate can be raised to 18,000 logins/min quickly; getting the last 6,000 needs dwell time.
+
+Note the cold-start cost visible in the first row: at 100/s on a cold JVM, p95 was 491ms and
+p99 586ms, against 6ms and 27ms one level later at *twice* the rate. The first seconds of an
+instance's life are materially slower — which is exactly the regime a scale-from-zero
+platform spends its time in.
+
+**The shipped rate limiter, measured** (`RATELIMIT=default`, one client):
+
+| offered | attempted | succeeded | error rate |
+|---|---|---|---|
+| 1/s (60/min) | 61 | **39** | 36.1% |
+| 5/s (300/min) | 301 | **23** | 92.4% |
+
+39 successes in the first minute is the configured bucket exactly: burst 20, refill 20/min.
+So **a single client is capped near 20 logins/minute in the steady state, against a measured
+capacity of 24,000** — the shipped default sits about three orders of magnitude below what
+the server can do. That is a deployment decision to make deliberately, not a capacity finding.
+
+**Cross-instance correctness: not run, by design.** One instance cannot demonstrate a
+distributed property; a pass would have been trivially true and worse than no result.
+
+### Arms 1 and 2 — not yet run
+
+Both need the distributed authorization-code store, which is not on `main` yet.

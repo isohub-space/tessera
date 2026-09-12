@@ -152,6 +152,36 @@ COMPOSE="$OUT_DIR/compose.yaml"
     # well-known development default. Generated per run, never committed.
     echo "      IAM_KEYS_MASTER_KEY: $MASTER_KEY"
     echo "      IAM_OIDC_ISSUER: http://localhost:8080"
+    # The signing-key readiness gate is turned OFF for perf runs, and it is worth being
+    # precise about why, because it is not a convenience.
+    #
+    # In a packaged production run that gate can never report UP: SigningKeyReadinessCheck
+    # performs a BLOCKING await (UniAwait.atMost) from a health-check worker thread, and
+    # Hibernate Reactive refuses that with "HR000068: This method should exclusively be
+    # invoked from a Vert.x EventLoop thread". Independently of the thread problem, it also
+    # counts ACTIVE keys for a hard-coded dev tenant only, so any other tenant reports DOWN
+    # even when its own key is present and usable.
+    #
+    # Neither problem touches the signing path itself — the token endpoint signs from the
+    # event loop and works — so the gate is disabled here and the harness instead gates on
+    # liveness plus one real end-to-end login, which is a stronger readiness signal than the
+    # probe was. Both defects are the application's, not the harness's, and are reported
+    # rather than papered over.
+    echo "      IAM_READINESS_SIGNING_KEY_ENABLED: \"false\""
+    # Trusted-edge mode. SessionCookieFilter is default-closed: it STRIPS any caller-supplied
+    # X-Subject-Id unless the deployment declares its ingress trustworthy, because trusting
+    # that header without an edge that overwrites it is a complete authentication bypass —
+    # any caller could assert someone else's subject with no credential at all.
+    #
+    # The harness is precisely the shape that flag describes: the balancer is the sole
+    # ingress and the driver stands in for the authenticating proxy. Setting it here is what
+    # lets the authorization exchange be driven at all. It is a PERF-ENVIRONMENT setting and
+    # must never be copied into a deployment whose ingress does not strip the header.
+    #
+    # The consequence for the measurement is stated plainly in the README: this exercises the
+    # AUTHORIZATION exchange, not end-user credential verification. A real login additionally
+    # pays an Argon2id verification, which these numbers do not include.
+    echo "      IAM_SUBJECT_TRUST_HEADER: \"true\""
     echo "      TESSERA_RATELIMIT_ENABLED: \"$RL_ENABLED\""
     echo "      TESSERA_RATELIMIT_TOKEN_CAPACITY: \"$RL_TOKEN\""
     echo "      TESSERA_RATELIMIT_TOKEN_REFILL: \"$RL_TOKEN\""
