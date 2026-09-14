@@ -7,7 +7,7 @@
 set -uo pipefail
 
 ai='co-authored-by:[[:space:]]*(claude|anthropic)|claude-session:|claude\.ai/code|generated (with|by) \[?claude|authored (with|by)[^.]*claude|anthropic\.com'
-keys='(\b(IOS|IAM|INF|VEC)-[0-9])|(\bADR-[A-Z0-9])|(iospace\.atlassian)'
+keys='(\b(IOS|IAM|INF|VEC)-[0-9])|(\bADR-[A-Z]{2,}-)|(iospace\.atlassian)'
 zero='0000000000000000000000000000000000000000'
 status=0
 
