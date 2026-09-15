@@ -51,9 +51,14 @@ class DiscoveryEndpointTest {
         // It fails against main, where userinfo_endpoint is advertised and 404s.
         //
         // The advertised URLs are issuer-absolute (https://issuer.test.example/...), while
-        // the test server is on localhost, so only the PATH is probed. "Served" is asserted
-        // as "not 404" rather than as 200: /authorize with no query is legitimately a 400,
-        // and a 400 still proves a resource is there to reject the request.
+        // the test server is on localhost, so only the PATH is probed.
+        //
+        // Scope, stated honestly: "not 404" proves a RESOURCE IS MAPPED for the advertised
+        // path, not that it serves a correct response. It has to be that weak — /authorize
+        // with no query is legitimately a 400, and /jwks answers 500 under %test because
+        // there is no datasource behind it. Both still prove something is there to answer.
+        // A document advertising a path nothing is mapped to is the specific lie this
+        // guards; asserting 200 here would fail on configuration, not on conformance.
         Map<String, ?> document = given()
                 .header("X-Tenant-Id", UUID.randomUUID().toString())
                 .when()
