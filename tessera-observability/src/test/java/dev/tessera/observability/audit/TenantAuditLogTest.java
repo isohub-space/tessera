@@ -28,6 +28,7 @@ class TenantAuditLogTest {
     private SimpleMeterRegistry registry;
     private IamMetrics metrics;
     private Ed25519CheckpointSigner signer;
+    private MutableKeyResolver keys;
     private RecordingEvent events;
     private InMemoryTenantAuditLogRepository repository;
     private TenantAuditLog log;
@@ -36,11 +37,12 @@ class TenantAuditLogTest {
     void setUp() {
         registry = new SimpleMeterRegistry();
         metrics = new IamMetrics(registry);
-        signer = Ed25519CheckpointSigner.generate("test-key");
+        signer = Ed25519CheckpointSigner.generate();
+        keys = new MutableKeyResolver(signer);
         events = new RecordingEvent();
         repository = new InMemoryTenantAuditLogRepository();
         Clock fixed = Clock.fixed(Instant.parse("2026-01-01T00:00:00Z"), ZoneOffset.UTC);
-        log = new TenantAuditLog(metrics, signer, events, repository, fixed);
+        log = new TenantAuditLog(metrics, signer, keys, events, repository, fixed);
     }
 
     // ─── helpers ────────────────────────────────────────────────────────────────
@@ -61,8 +63,33 @@ class TenantAuditLogTest {
         return log.verify(tenant).await().atMost(AWAIT).valid();
     }
 
-    private boolean verifyCheckpoint(String tenant, AuditCheckpoint cp) {
+    private CheckpointVerification verifyCheckpoint(String tenant, AuditCheckpoint cp) {
         return log.verifyCheckpoint(tenant, cp).await().atMost(AWAIT);
+    }
+
+    /**
+     * A key resolver whose known keys can change between "process lifetimes", which is what
+     * a restart or a rotation looks like from the verifier's side.
+     */
+    private static final class MutableKeyResolver implements CheckpointKeyResolver {
+        private final java.util.Map<String, CheckpointVerifier> known = new java.util.HashMap<>();
+
+        MutableKeyResolver(CheckpointSigner initial) {
+            add(initial);
+        }
+
+        void add(CheckpointSigner signer) {
+            known.put(signer.keyId(), signer);
+        }
+
+        void forget(String keyId) {
+            known.remove(keyId);
+        }
+
+        @Override
+        public java.util.Optional<CheckpointVerifier> resolve(String keyId) {
+            return java.util.Optional.ofNullable(known.get(keyId));
+        }
     }
 
     // ─── tests ──────────────────────────────────────────────────────────────────
@@ -119,8 +146,8 @@ class TenantAuditLogTest {
         AuditCheckpoint cp = checkpoint("t1");
         assertThat(cp.headSequence()).isEqualTo(1L);
         assertThat(cp.headHash()).isEqualTo(chain("t1").get(1).hash());
-        assertThat(cp.keyId()).isEqualTo("test-key");
-        assertThat(verifyCheckpoint("t1", cp)).isTrue();
+        assertThat(cp.keyId()).isEqualTo(signer.keyId());
+        assertThat(verifyCheckpoint("t1", cp)).isInstanceOf(CheckpointVerification.Valid.class);
 
         assertThat(registry.get("iam.audit.checkpoint").tags("tenant", "t1").counter().count())
                 .isEqualTo(1.0);
@@ -133,7 +160,7 @@ class TenantAuditLogTest {
         AuditCheckpoint cp = checkpoint("never-used");
         assertThat(cp.headSequence()).isEqualTo(-1L);
         assertThat(cp.headHash()).isEqualTo(AuditEntry.GENESIS_HASH);
-        assertThat(verifyCheckpoint("never-used", cp)).isTrue();
+        assertThat(verifyCheckpoint("never-used", cp)).isInstanceOf(CheckpointVerification.Valid.class);
     }
 
     @Test
@@ -141,16 +168,16 @@ class TenantAuditLogTest {
     void historicalCheckpointStillVerifies() {
         record("t1", "token.issued", Map.of("sub", "alice"));
         AuditCheckpoint cp = checkpoint("t1");
-        assertThat(verifyCheckpoint("t1", cp)).isTrue();
+        assertThat(verifyCheckpoint("t1", cp)).isInstanceOf(CheckpointVerification.Valid.class);
 
         // The chain legitimately grows; the checkpoint anchors a genuine prefix, so it
         // must remain verifiable — that is the whole point of retaining checkpoints.
         record("t1", "token.issued", Map.of("sub", "bob"));
         record("t1", "token.issued", Map.of("sub", "carol"));
-        assertThat(verifyCheckpoint("t1", cp)).isTrue();
+        assertThat(verifyCheckpoint("t1", cp)).isInstanceOf(CheckpointVerification.Valid.class);
 
         // A fresh checkpoint over the new head also verifies.
-        assertThat(verifyCheckpoint("t1", checkpoint("t1"))).isTrue();
+        assertThat(verifyCheckpoint("t1", checkpoint("t1"))).isInstanceOf(CheckpointVerification.Valid.class);
     }
 
     @Test
@@ -171,7 +198,8 @@ class TenantAuditLogTest {
                 "t1", head.sequence(), wrongHash, now, signer.keyId(), signer.sign(input));
 
         assertThat(signer.verify(divergent.signingInput(), divergent.signature())).isTrue();
-        assertThat(verifyCheckpoint("t1", divergent)).isFalse();
+        assertThat(verifyCheckpoint("t1", divergent))
+                .isInstanceOf(CheckpointVerification.ChainMismatch.class);
     }
 
     @Test
@@ -184,7 +212,99 @@ class TenantAuditLogTest {
                 genuine.createdAt(), genuine.keyId(),
                 // flip the signature to a syntactically valid but wrong hex value
                 "00".repeat(64));
-        assertThat(verifyCheckpoint("t1", forged)).isFalse();
+        assertThat(verifyCheckpoint("t1", forged))
+                .isInstanceOf(CheckpointVerification.SignatureInvalid.class);
+    }
+
+    @Test
+    @DisplayName("a checkpoint written before a restart still verifies after it")
+    void checkpointSurvivesRestart() {
+        // THE regression. Not sign-then-verify in one lifetime: the checkpoint is signed by
+        // one process's signer, then verified by a *different* TenantAuditLog holding a
+        // different ambient signer — which is exactly what a restart looks like.
+        //
+        // Against main this fails: verification used the injected signer, so the fresh
+        // boot's key was asked to verify the old key's signature and every prior
+        // checkpoint failed, indistinguishably from tampering.
+        record("t1", "token.issued", Map.of("sub", "alice"));
+        record("t1", "token.issued", Map.of("sub", "bob"));
+        AuditCheckpoint before = checkpoint("t1");
+
+        // --- restart: a new process, a new signer, the same durable chain and key store.
+        Ed25519CheckpointSigner afterRestart = Ed25519CheckpointSigner.generate();
+        assertThat(afterRestart.keyId())
+                .as("a fresh boot must not reuse the previous key's identity")
+                .isNotEqualTo(signer.keyId());
+        keys.add(afterRestart);
+        TenantAuditLog rebooted = new TenantAuditLog(
+                metrics, afterRestart, keys, events, repository,
+                Clock.fixed(Instant.parse("2026-01-02T00:00:00Z"), ZoneOffset.UTC));
+
+        CheckpointVerification outcome =
+                rebooted.verifyCheckpoint("t1", before).await().atMost(AWAIT);
+        assertThat(outcome).isInstanceOf(CheckpointVerification.Valid.class);
+        assertThat(((CheckpointVerification.Valid) outcome).keyId()).isEqualTo(signer.keyId());
+    }
+
+    @Test
+    @DisplayName("rotating the signing key leaves checkpoints under the previous key verifiable")
+    void rotationLeavesEarlierCheckpointsVerifiable() {
+        record("t1", "token.issued", Map.of("sub", "alice"));
+        AuditCheckpoint underOldKey = checkpoint("t1");
+
+        Ed25519CheckpointSigner rotated = Ed25519CheckpointSigner.generate();
+        keys.add(rotated);
+        TenantAuditLog afterRotation = new TenantAuditLog(
+                metrics, rotated, keys, events, repository,
+                Clock.fixed(Instant.parse("2026-01-03T00:00:00Z"), ZoneOffset.UTC));
+
+        // The old checkpoint still verifies, under the old key...
+        assertThat(afterRotation.verifyCheckpoint("t1", underOldKey).await().atMost(AWAIT))
+                .isInstanceOf(CheckpointVerification.Valid.class);
+
+        // ...and a new checkpoint is signed under, and verifies under, the new one.
+        AuditCheckpoint underNewKey = afterRotation.checkpoint("t1").await().atMost(AWAIT);
+        assertThat(underNewKey.keyId()).isEqualTo(rotated.keyId());
+        assertThat(afterRotation.verifyCheckpoint("t1", underNewKey).await().atMost(AWAIT))
+                .isInstanceOf(CheckpointVerification.Valid.class);
+    }
+
+    @Test
+    @DisplayName("a checkpoint whose key cannot be resolved is UnknownKey, not a failure and not a pass")
+    void unresolvableKeyIsDistinctFromTampering() {
+        record("t1", "token.issued", Map.of("sub", "alice"));
+        AuditCheckpoint cp = checkpoint("t1");
+
+        // The key is gone — an ephemeral signer after a restart, or a key aged out of
+        // custody. The checkpoint itself is untouched.
+        keys.forget(cp.keyId());
+
+        CheckpointVerification outcome = verifyCheckpoint("t1", cp);
+        assertThat(outcome).isInstanceOf(CheckpointVerification.UnknownKey.class);
+        assertThat(((CheckpointVerification.UnknownKey) outcome).keyId()).isEqualTo(cp.keyId());
+
+        // It must not read as a pass...
+        assertThat(outcome.isValid()).isFalse();
+        // ...and it must NOT read as tampering. An operator has to be able to tell "I
+        // cannot judge this" from "this was altered"; conflating them is the whole defect.
+        assertThat(outcome)
+                .isNotInstanceOf(CheckpointVerification.SignatureInvalid.class)
+                .isNotInstanceOf(CheckpointVerification.ChainMismatch.class);
+
+        // An unresolvable key is surfaced as its own metric, not as a verification failure.
+        assertThat(registry.get("iam.audit.checkpoint_unknown_key").tags("tenant", "t1")
+                .counter().count()).isEqualTo(1.0);
+    }
+
+    @Test
+    @DisplayName("a checkpoint presented for the wrong tenant is a TenantMismatch, not tampering")
+    void wrongTenantIsDistinct() {
+        record("t1", "token.issued", Map.of("sub", "alice"));
+        AuditCheckpoint cp = checkpoint("t1");
+
+        CheckpointVerification outcome = log.verifyCheckpoint("t2", cp).await().atMost(AWAIT);
+        assertThat(outcome).isInstanceOf(CheckpointVerification.TenantMismatch.class);
+        assertThat(outcome.isValid()).isFalse();
     }
 
     @Test

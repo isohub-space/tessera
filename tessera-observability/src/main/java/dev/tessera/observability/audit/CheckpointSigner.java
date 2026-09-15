@@ -9,14 +9,22 @@ package dev.tessera.observability.audit;
  * deployment may supply an implementation backed by an external KMS/HSM without
  * touching the chain or checkpoint code.</p>
  */
-public interface CheckpointSigner {
+public interface CheckpointSigner extends CheckpointVerifier {
 
     /**
      * @return a stable identifier of the signing key, surfaced as
      *         {@link AuditCheckpoint#keyId()} so a verifier can select the matching
-     *         public key. A multi-key deployment (rotation, KMS migration) must resolve
-     *         {@code keyId} to the corresponding public key before verifying — this
-     *         label is the selector, not itself a cryptographic binding.
+     *         public key. This label is the selector, not itself a cryptographic binding,
+     *         so verification resolves it through {@link CheckpointKeyResolver} rather
+     *         than assuming the current signer produced the checkpoint in hand.
+     *
+     *         <p><strong>An implementation must never reuse an identifier across
+     *         different key material.</strong> Doing so makes the label a lie: every
+     *         checkpoint carrying it names a key identity that now points at something
+     *         else, and no verifier can tell which one it meant. Derive the identifier
+     *         from the key (see {@link Ed25519CheckpointSigner#keyIdFor}) or take it from
+     *         durable custody alongside the key itself — never declare it beside freshly
+     *         generated material.
      */
     String keyId();
 
@@ -30,11 +38,11 @@ public interface CheckpointSigner {
     String sign(String signingInput);
 
     /**
-     * Verifies a detached signature against {@code signingInput}.
-     *
-     * @param signingInput the canonical checkpoint bytes
-     * @param hexSignature the lowercase-hex signature to check
-     * @return {@code true} iff the signature is valid for this signer's key
+     * Verifies a detached signature against this signer's own key. Inherited from
+     * {@link CheckpointVerifier}: a signer can always verify what it signed, but it is
+     * only ever the right verifier for checkpoints carrying <em>its</em>
+     * {@link #keyId()}.
      */
+    @Override
     boolean verify(String signingInput, String hexSignature);
 }
