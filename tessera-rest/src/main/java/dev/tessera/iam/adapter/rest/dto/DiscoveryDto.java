@@ -11,10 +11,12 @@ import org.eclipse.microprofile.openapi.annotations.media.Schema;
  * registered metadata names; the values are a faithful projection of the enforced
  * capability set, so the document advertises only what the server enforces.
  *
+ * <p>There is deliberately no {@code userinfo_endpoint} member: it is OPTIONAL metadata
+ * and this server serves no UserInfo resource.
+ *
  * @param issuer                            the configured issuer identifier
  * @param authorizationEndpoint             the authorization endpoint URL
  * @param tokenEndpoint                     the token endpoint URL
- * @param userinfoEndpoint                  the UserInfo endpoint URL
  * @param jwksUri                           the JWK Set endpoint URL
  * @param responseTypesSupported            offered OAuth2 response types
  * @param grantTypesSupported               offered OAuth2 grant types
@@ -32,7 +34,6 @@ public record DiscoveryDto(
         @JsonProperty("issuer") String issuer,
         @JsonProperty("authorization_endpoint") String authorizationEndpoint,
         @JsonProperty("token_endpoint") String tokenEndpoint,
-        @JsonProperty("userinfo_endpoint") String userinfoEndpoint,
         @JsonProperty("jwks_uri") String jwksUri,
         @JsonProperty("response_types_supported") List<String> responseTypesSupported,
         @JsonProperty("grant_types_supported") List<String> grantTypesSupported,
@@ -53,7 +54,6 @@ public record DiscoveryDto(
                 doc.issuer(),
                 doc.authorizationEndpoint(),
                 doc.tokenEndpoint(),
-                doc.userinfoEndpoint(),
                 doc.jwksUri(),
                 doc.responseTypesSupported(),
                 doc.grantTypesSupported(),

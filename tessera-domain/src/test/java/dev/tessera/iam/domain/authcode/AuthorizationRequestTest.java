@@ -46,12 +46,29 @@ class AuthorizationRequestTest {
     }
 
     @Test
-    @DisplayName("a request with a blank state or nonce is rejected")
-    void rejectsBlankStateOrNonce() {
+    @DisplayName("a request with a blank state is rejected")
+    void rejectsBlankState() {
         assertThatThrownBy(() -> new AuthorizationRequest(
                 realm(), "client-1", "https://app/cb", Set.of("openid"),
                 " ", "nonce-1", CodeChallenge.s256(CHALLENGE)))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("an absent nonce is accepted — OIDC Core §3.1.2.1 makes it OPTIONAL here")
+    void acceptsAbsentNonce() {
+        // Fails against the previous behaviour, where a null nonce threw.
+        AuthorizationRequest req = new AuthorizationRequest(
+                realm(), "client-1", "https://app/cb", Set.of("openid"),
+                "state-1", null, CodeChallenge.s256(CHALLENGE));
+        assertThat(req.nonce()).isNull();
+    }
+
+    @Test
+    @DisplayName("a present-but-blank nonce is still rejected")
+    void rejectsBlankNonce() {
+        // Absent and empty are different things: an empty nonce would reach the ID token as
+        // a claim no client could match, so it is malformed rather than omitted.
         assertThatThrownBy(() -> new AuthorizationRequest(
                 realm(), "client-1", "https://app/cb", Set.of("openid"),
                 "state-1", " ", CodeChallenge.s256(CHALLENGE)))

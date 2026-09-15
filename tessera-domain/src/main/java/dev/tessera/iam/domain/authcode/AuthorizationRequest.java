@@ -29,7 +29,11 @@ import java.util.Set;
  * @param scopes        the requested scopes; defensively copied, order-preserving
  *                      (never {@code null}; must contain {@code openid} for an OIDC request)
  * @param state         the opaque {@code state} to round-trip back (never {@code null} or blank)
- * @param nonce         the OIDC {@code nonce} bound into the issued ID token (never {@code null} or blank)
+ * @param nonce         the OIDC {@code nonce} to bind into the issued ID token, or
+ *                      {@code null} when the request omitted it — OIDC Core §3.1.2.1 makes
+ *                      {@code nonce} OPTIONAL for the authorization-code flow. A blank
+ *                      value is normalised to {@code null} by the adapter; a present value
+ *                      must be non-blank.
  * @param codeChallenge the PKCE challenge — mandatory by construction (never {@code null})
  */
 public record AuthorizationRequest(
@@ -57,8 +61,12 @@ public record AuthorizationRequest(
         if (state == null || state.isBlank()) {
             throw new IllegalArgumentException("AuthorizationRequest state must not be blank");
         }
-        if (nonce == null || nonce.isBlank()) {
-            throw new IllegalArgumentException("AuthorizationRequest nonce must not be blank");
+        // nonce is OPTIONAL in the code flow (OIDC Core §3.1.2.1): absent is represented by
+        // null. A present-but-blank nonce is a malformed request, not an absent one — it
+        // would round-trip into the ID token as an empty claim a client could never match.
+        if (nonce != null && nonce.isBlank()) {
+            throw new IllegalArgumentException(
+                    "AuthorizationRequest nonce, when present, must not be blank");
         }
         if (codeChallenge == null) {
             // PKCE is mandatory; a request with no challenge cannot exist.

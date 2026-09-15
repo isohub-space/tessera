@@ -23,8 +23,10 @@ import java.util.Set;
  *   <li>the code has not {@link #isExpired(Instant) expired}.</li>
  * </ul>
  * The {@code nonce} is carried so it can be bound into the issued ID token (OIDC Core
- * §3.1.3.6). Single-use (replay) protection is the store's job — it consumes the code
- * exactly once — not a field here.
+ * §3.1.3.6). It is {@code null} when the authorization request omitted it, which the code
+ * flow permits (§3.1.2.1); the token endpoint then omits the {@code nonce} claim rather
+ * than inventing one. Single-use (replay) protection is the store's job — it consumes the
+ * code exactly once — not a field here.
  *
  * <p>Fully immutable: collections are defensively copied and the {@link Instant}s are
  * themselves immutable. The grant holds the <em>resolved</em> {@link ClientId} (the
@@ -35,7 +37,8 @@ import java.util.Set;
  * @param subjectId     the authenticated end-user {@code sub} (never {@code null} or blank)
  * @param redirectUri   the {@code redirect_uri} the code was issued against (never {@code null} or blank)
  * @param scopes        the granted scopes; defensively copied, order-preserving (never {@code null})
- * @param nonce         the OIDC {@code nonce} to bind into the ID token (never {@code null} or blank)
+ * @param nonce         the OIDC {@code nonce} to bind into the ID token, or {@code null}
+ *                      if the authorization request omitted it (a present value is non-blank)
  * @param codeChallenge the PKCE challenge to verify at the token endpoint (never {@code null})
  * @param issuedAt      when the code was issued (never {@code null})
  * @param expiresAt     when the code expires (never {@code null}; after {@code issuedAt})
@@ -67,8 +70,11 @@ public record AuthorizationGrant(
         if (scopes == null) {
             throw new IllegalArgumentException("AuthorizationGrant scopes must not be null");
         }
-        if (nonce == null || nonce.isBlank()) {
-            throw new IllegalArgumentException("AuthorizationGrant nonce must not be blank");
+        // Absent nonce is legitimate (OIDC Core §3.1.2.1) and is carried as null; a
+        // present-but-blank nonce is malformed.
+        if (nonce != null && nonce.isBlank()) {
+            throw new IllegalArgumentException(
+                    "AuthorizationGrant nonce, when present, must not be blank");
         }
         if (codeChallenge == null) {
             throw new IllegalArgumentException("AuthorizationGrant codeChallenge must not be null");
