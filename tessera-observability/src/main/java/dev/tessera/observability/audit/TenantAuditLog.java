@@ -199,11 +199,24 @@ public class TenantAuditLog {
 
         long seq = checkpoint.headSequence();
         if (seq < 0) {
-            // Anchored the empty chain: still holds iff nothing occupies sequence 0.
+            // A checkpoint over the empty chain. Its two negative cases are different facts
+            // and must not share an outcome.
+            if (!AuditEntry.GENESIS_HASH.equals(checkpoint.headHash())) {
+                // Internally contradictory: it claims the empty chain (sequence -1) while
+                // anchoring a hash that is not the genesis hash. Signed by a known key, so
+                // someone holding that key produced a checkpoint that cannot be true.
+                return Uni.createFrom().item(new CheckpointVerification.ChainMismatch(keyId, seq));
+            }
             return repository.stream(tenant).toUni()
-                    .map(first -> first == null && AuditEntry.GENESIS_HASH.equals(checkpoint.headHash())
+                    .map(first -> first == null
                             ? (CheckpointVerification) new CheckpointVerification.Valid(keyId)
-                            : new CheckpointVerification.ChainMismatch(keyId, seq));
+                            // The chain has grown since. That is an ordinary append, not an
+                            // attack: reporting it as ChainMismatch would turn every genesis
+                            // checkpoint into a tampering alert as soon as the first entry
+                            // was written. It is also not a pass — a chain truncated back to
+                            // empty would sail through one. Superseded says what is true:
+                            // this checkpoint no longer attests anything about the contents.
+                            : new CheckpointVerification.Superseded(keyId));
         }
         // Stream to the entry at the anchored sequence and compare its hash, without
         // collecting the chain.

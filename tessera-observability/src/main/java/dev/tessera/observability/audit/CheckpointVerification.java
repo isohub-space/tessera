@@ -69,6 +69,28 @@ public sealed interface CheckpointVerification {
     }
 
     /**
+     * The checkpoint attested an <em>empty</em> chain, and the chain has since legitimately
+     * grown past it. It neither confirms nor refutes anything about what the chain now
+     * holds.
+     *
+     * <p>This variant exists because the alternatives are both wrong. Reporting
+     * {@link Valid} would hand out a pass from a checkpoint with no attestation power —
+     * and would keep passing over a chain that had been truncated back to empty.
+     * Reporting {@link ChainMismatch} would be an affirmative accusation of tampering
+     * against an append that is entirely legitimate: every genesis checkpoint would turn
+     * into a tampering alert the moment the first entry was written.
+     *
+     * <p>Like {@link UnknownKey} this is an absence of evidence, not evidence of
+     * wrongdoing. The entries appended after the checkpoint are covered by the chain's own
+     * hash linkage and by later checkpoints, not by this one.
+     */
+    record Superseded(String keyId) implements CheckpointVerification {
+        public Superseded {
+            Objects.requireNonNull(keyId, "keyId must not be null");
+        }
+    }
+
+    /**
      * The checkpoint anchors a different tenant than the one it was presented for. A
      * caller-side mistake rather than evidence about the chain, kept distinct so it is
      * never read as tampering.
