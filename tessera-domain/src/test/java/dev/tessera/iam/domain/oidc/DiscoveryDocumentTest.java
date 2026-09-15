@@ -21,7 +21,19 @@ class DiscoveryDocumentTest {
         assertThat(doc.jwksUri()).isEqualTo(ISSUER + "/jwks");
         assertThat(doc.authorizationEndpoint()).isEqualTo(ISSUER + "/authorize");
         assertThat(doc.tokenEndpoint()).isEqualTo(ISSUER + "/token");
-        assertThat(doc.userinfoEndpoint()).isEqualTo(ISSUER + "/userinfo");
+    }
+
+    @Test
+    @DisplayName("no userinfo_endpoint is advertised while no UserInfo resource serves one")
+    void advertisesNoUserinfoEndpoint() {
+        // "Discovery never lies". userinfo_endpoint is OPTIONAL metadata in
+        // OIDC Discovery 1.0 §3; this server serves no UserInfo resource, so the document
+        // must have no such member at all. The record simply has no component for it, so
+        // this test is the standing statement of WHY, and the compiler is the guard: adding
+        // the member back without an endpoint to serve it would not compile past this.
+        assertThat(DiscoveryDocument.class.getRecordComponents())
+                .extracting(java.lang.reflect.RecordComponent::getName)
+                .doesNotContain("userinfoEndpoint");
     }
 
     @Test

@@ -120,9 +120,6 @@ public class AuthorizeResource {
         if (isBlank(state)) {
             return badRequest(AuthorizationError.INVALID_REQUEST, "state is required");
         }
-        if (isBlank(nonce)) {
-            return badRequest(AuthorizationError.INVALID_REQUEST, "nonce is required");
-        }
         // PKCE is mandatory and S256-only — a missing or non-S256 challenge is refused here,
         // mirroring the domain's compile-time guarantee (CodeChallenge / PkceMethod).
         if (isBlank(codeChallenge)) {
@@ -146,7 +143,13 @@ public class AuthorizeResource {
                     redirectUri,
                     parseScopes(scope),
                     state,
-                    nonce,
+                    // OIDC Core §3.1.2.1 makes nonce OPTIONAL for the code flow, so an
+                    // omitted (or empty) nonce is a valid request, not a 400: it is carried
+                    // as null and the ID token simply has no nonce claim. Rejecting it —
+                    // as this endpoint used to — turned away spec-conformant relying
+                    // parties. PKCE, which is what actually binds this code to this client,
+                    // stays mandatory and unchanged.
+                    isBlank(nonce) ? null : nonce,
                     CodeChallenge.s256(codeChallenge));
         } catch (IllegalArgumentException ex) {
             // A malformed challenge (wrong length / alphabet) or other structural problem.

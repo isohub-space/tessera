@@ -29,6 +29,11 @@ import java.util.UUID;
  * of {@code tessera-domain} is what the architecture test enforces, so the adapter owns this
  * flat projection and the mapping both ways.
  *
+ * <p>{@code nonce} is nullable: OIDC Core §3.1.2.1 makes it OPTIONAL for the code flow, so
+ * an absent nonce round-trips as JSON {@code null} and rebuilds as a {@code null} field on
+ * the grant. That is the one field whose absence is <em>not</em> treated as a malformed
+ * entry by {@link #decode(String)}.
+ *
  * <p>{@link Instant}s are carried as (epoch-second, nano) pairs rather than millis so the
  * round-trip is lossless: a truncated {@code expiresAt} would move a code's expiry, and
  * moving it later is a (small) extension of the replay window.

@@ -110,10 +110,20 @@ public final class IssuedTokenClaims {
      * {@code sub}, {@code aud}, {@code exp}, {@code iat}; plus {@code nonce} echoed from
      * the authorization request, §3.1.3.6).
      *
+     * <p>§3.1.3.6 binds the {@code nonce} claim to the request: it MUST be present, with
+     * the request's value, when the request carried a {@code nonce}, and — since the claim
+     * is what a client checks against the value it sent — there is nothing to echo when the
+     * request omitted one. So a {@code null} nonce omits the claim entirely rather than
+     * emitting {@code null} or an empty string, either of which a client could mistake for
+     * a value. The code flow permits an absent nonce (§3.1.2.1); the implicit and hybrid
+     * flows do not, and enforcing that belongs at the authorization endpoint where the
+     * response type is known, not here.
+     *
      * @param issuer    the OIDC {@code iss} (never {@code null} or blank)
      * @param subjectId the {@code sub} (never {@code null} or blank)
      * @param clientId  the {@code aud} — the client the ID token is for (never {@code null} or blank)
-     * @param nonce     the {@code nonce} to bind back (never {@code null} or blank)
+     * @param nonce     the {@code nonce} to bind back, or {@code null} to omit the claim
+     *                  (a present value must be non-blank)
      * @param issuedAt  the {@code iat} instant (never {@code null})
      * @param expiresAt the {@code exp} instant (never {@code null}; after {@code issuedAt})
      * @return the unsigned OIDC ID-token claim set
@@ -128,7 +138,9 @@ public final class IssuedTokenClaims {
         requireText(issuer, "issuer");
         requireText(subjectId, "subjectId");
         requireText(clientId, "clientId");
-        requireText(nonce, "nonce");
+        if (nonce != null && nonce.isBlank()) {
+            throw new IllegalArgumentException("nonce, when present, must not be blank");
+        }
         requireOrder(issuedAt, expiresAt);
 
         Map<String, Object> claims = new LinkedHashMap<>();
@@ -137,7 +149,9 @@ public final class IssuedTokenClaims {
         claims.put("aud", clientId);
         claims.put("iat", issuedAt.getEpochSecond());
         claims.put("exp", expiresAt.getEpochSecond());
-        claims.put("nonce", nonce);
+        if (nonce != null) {
+            claims.put("nonce", nonce);
+        }
         return new ClaimSet(claims);
     }
 

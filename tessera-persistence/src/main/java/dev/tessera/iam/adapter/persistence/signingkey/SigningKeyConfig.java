@@ -33,8 +33,22 @@ public interface SigningKeyConfig {
     @WithDefault(DEV_DEFAULT_MASTER_KEY)
     String masterKey();
 
-    /** Token issuer ({@code iss}) stamped on keys minted by the rotation service. */
-    @WithDefault("https://localhost:8090")
+    /**
+     * Token issuer ({@code iss}) stamped on keys minted by the rotation service.
+     *
+     * <p><strong>Derived, not independent.</strong> The default is the property expression
+     * {@code ${iam.oidc.issuer}} — the issuer discovery advertises and tokens carry — so a
+     * deployment that sets only {@code TESSERA_OIDC_ISSUER} gets both. Previously the two
+     * defaulted to different values ({@code http://localhost:8080} vs
+     * {@code https://localhost:8090}) and nothing tied them together, so a deployment that
+     * set one and not the other silently stamped signing keys with an issuer that discovery
+     * never advertised.
+     *
+     * <p>Setting this explicitly is still allowed, but it may no longer contradict
+     * {@code iam.oidc.issuer}: {@code IssuerConsistencyCheck} in the launcher aborts startup
+     * when the two resolved values disagree, naming both.
+     */
+    @WithDefault("${iam.oidc.issuer:http://localhost:8080}")
     String issuer();
 
     /** Maximum age an ACTIVE key may sign for before it is due to retire. */

@@ -82,6 +82,24 @@ class IssuedTokenClaimsTest {
     }
 
     @Test
+    @DisplayName("an absent nonce omits the claim rather than emitting an empty one")
+    void idTokenOmitsAbsentNonce() {
+        // OIDC Core §3.1.3.6 binds the nonce claim to the request's value; with
+        // no value sent there is nothing to echo, and a null or "" claim is worse than no
+        // claim — a client could mistake it for a value it had to match.
+        ClaimSet claims = IssuedTokenClaims.idToken(ISSUER, "user-1", "client-abc", null, IAT, EXP);
+
+        assertThat(claims.claim("nonce")).isEmpty();
+        assertThat(claims.claims()).doesNotContainKey("nonce");
+        // The §2 required claims are all still there.
+        assertThat(claims.claim("iss")).contains(ISSUER);
+        assertThat(claims.claim("sub")).contains("user-1");
+        assertThat(claims.claim("aud")).contains("client-abc");
+        assertThat(claims.claim("iat")).contains(IAT.getEpochSecond());
+        assertThat(claims.claim("exp")).contains(EXP.getEpochSecond());
+    }
+
+    @Test
     @DisplayName("rejects an empty audience and a blank nonce")
     void rejectsBadInput() {
         assertThatThrownBy(() -> IssuedTokenClaims.accessToken(
