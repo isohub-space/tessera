@@ -21,7 +21,10 @@ import org.junit.jupiter.api.Test;
 @DisplayName("Edge security baseline — CORS allows a configured origin")
 class CorsAllowedOriginTest {
 
-    private static final String ENDPOINT = "/api/v1/items";
+    // /q/health: an always-on, tenant-unscoped route, so CORS/edge behaviour is isolated
+    // from any protocol endpoint's own X-Tenant-Id requirement. Health/metrics routes still
+    // go through the same global Vert.x HTTP CORS/security-header policy as every other route.
+    private static final String ENDPOINT = "/q/health";
     private static final String ALLOWED_ORIGIN = "https://app.example";
 
     public static class AllowedOriginProfile implements QuarkusTestProfile {

@@ -18,16 +18,21 @@ import java.security.Signature;
 import java.security.interfaces.EdECPublicKey;
 import java.util.Base64;
 import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 /**
- * Test double for {@link KeyProviderPort}: generates one real Ed25519 key pair in-process
- * and signs with it, so the JWTs the flow mints are genuinely verifiable by the test.
+ * Test double for {@link KeyProviderPort}: mints a distinct, real Ed25519 key pair per
+ * {@link RealmKey} lazily, on first use, so the JWTs the flow mints are genuinely verifiable
+ * and a {@code kid} minted for one realm never appears in another realm's JWKS — mirroring the
+ * RLS-scoped isolation of the production {@code DbKeyProviderAdapter}.
  *
  * <p>This stands in for the persistence-backed provider (owned elsewhere) so the REST
- * adapter can be exercised end-to-end without a database. The private key never leaves this
- * bean — {@link #sign} produces a raw Ed25519 signature, mirroring the production contract.
- * The public key is exposed via {@link #publicKey()} so a test can independently verify a
- * signed JWS.
+ * adapter can be exercised end-to-end without a database. Private key material never leaves
+ * this bean — {@link #sign} produces a raw Ed25519 signature, mirroring the production
+ * contract. {@link #publicKey(RealmKey)} exposes a realm's public key so a test can
+ * independently verify a signed JWS.
  */
 @Mock
 @ApplicationScoped
@@ -35,20 +40,13 @@ public class FakeKeyProvider implements KeyProviderPort {
 
     private static final Base64.Encoder B64URL = Base64.getUrlEncoder().withoutPadding();
 
-    private final KeyId keyId = KeyId.of("test-key-1");
-    private final KeyPair keyPair = generate();
-    private final PublicJwk publicJwk;
-
-    public FakeKeyProvider() {
-        String x = B64URL.encodeToString(rawPublicKey(keyPair.getPublic()));
-        this.publicJwk = new PublicJwk(keyId, SigningAlgorithm.EdDSA, KeyUse.SIGNATURE, x, null);
-    }
+    private final ConcurrentMap<RealmKey, RealmKeyPair> byRealm = new ConcurrentHashMap<>();
 
     @Override
     public Uni<SignatureResult> sign(RealmKey realm, KeyId keyId, byte[] signingInput) {
         try {
             Signature signature = Signature.getInstance("Ed25519");
-            signature.initSign(keyPair.getPrivate());
+            signature.initSign(keysFor(realm).keyPair().getPrivate());
             signature.update(signingInput);
             return Uni.createFrom().item(
                     new SignatureResult(keyId, SigningAlgorithm.EdDSA, signature.sign()));
@@ -59,25 +57,23 @@ public class FakeKeyProvider implements KeyProviderPort {
 
     @Override
     public Uni<List<PublicJwk>> publishedJwks(RealmKey realm) {
-        return Uni.createFrom().item(List.of(publicJwk));
+        return Uni.createFrom().item(List.of(keysFor(realm).publicJwk()));
     }
 
     @Override
     public Uni<ActiveKey> currentSigningKey(RealmKey realm) {
-        return Uni.createFrom().item(new ActiveKey(keyId, SigningAlgorithm.EdDSA, publicJwk));
+        RealmKeyPair keys = keysFor(realm);
+        return Uni.createFrom()
+                .item(new ActiveKey(keys.keyId(), SigningAlgorithm.EdDSA, keys.publicJwk()));
     }
 
-    /** The public key, so a test can verify a signed JWS independently. */
-    public PublicKey publicKey() {
-        return keyPair.getPublic();
+    /** The public key minted for {@code realm}, so a test can verify a signed JWS independently. */
+    public PublicKey publicKey(RealmKey realm) {
+        return keysFor(realm).keyPair().getPublic();
     }
 
-    private static KeyPair generate() {
-        try {
-            return KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
-        } catch (Exception e) {
-            throw new IllegalStateException("Ed25519 unavailable", e);
-        }
+    private RealmKeyPair keysFor(RealmKey realm) {
+        return byRealm.computeIfAbsent(realm, ignored -> RealmKeyPair.generate());
     }
 
     /** Extracts the 32-byte little-endian public point from the JDK EdEC public key. */
@@ -95,5 +91,26 @@ public class FakeKeyProvider implements KeyProviderPort {
             out[31] |= (byte) 0x80;
         }
         return out;
+    }
+
+    /** One realm's lazily-minted key material: a realm-unique {@code kid}, key pair and JWK. */
+    private record RealmKeyPair(KeyId keyId, KeyPair keyPair, PublicJwk publicJwk) {
+
+        static RealmKeyPair generate() {
+            KeyId keyId = KeyId.of("test-key-" + UUID.randomUUID());
+            KeyPair keyPair = generateKeyPair();
+            String x = B64URL.encodeToString(rawPublicKey(keyPair.getPublic()));
+            PublicJwk publicJwk =
+                    new PublicJwk(keyId, SigningAlgorithm.EdDSA, KeyUse.SIGNATURE, x, null);
+            return new RealmKeyPair(keyId, keyPair, publicJwk);
+        }
+
+        private static KeyPair generateKeyPair() {
+            try {
+                return KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+            } catch (Exception e) {
+                throw new IllegalStateException("Ed25519 unavailable", e);
+            }
+        }
     }
 }

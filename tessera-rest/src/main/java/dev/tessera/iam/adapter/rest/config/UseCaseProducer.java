@@ -1,26 +1,33 @@
 package dev.tessera.iam.adapter.rest.config;
 
+import dev.tessera.iam.adapter.rest.login.LoginConfig;
 import dev.tessera.iam.application.AuthorizationService;
+import dev.tessera.iam.application.ConsentService;
 import dev.tessera.iam.application.IntrospectService;
-import dev.tessera.iam.application.ItemService;
+import dev.tessera.iam.application.LoginService;
 import dev.tessera.iam.application.RefreshService;
 import dev.tessera.iam.application.RevokeService;
+import dev.tessera.iam.application.SessionService;
 import dev.tessera.iam.application.TokenService;
 import dev.tessera.iam.application.port.in.AuthorizeUseCase;
+import dev.tessera.iam.application.port.in.ConsentUseCase;
 import dev.tessera.iam.application.port.in.IntrospectUseCase;
-import dev.tessera.iam.application.port.in.QueryItemsUseCase;
+import dev.tessera.iam.application.port.in.LoginUseCase;
 import dev.tessera.iam.application.port.in.RefreshUseCase;
 import dev.tessera.iam.application.port.in.RevokeUseCase;
+import dev.tessera.iam.application.port.in.SessionUseCase;
 import dev.tessera.iam.application.port.in.TokenUseCase;
 import dev.tessera.iam.application.port.out.AccessTokenIntrospectorPort;
 import dev.tessera.iam.application.port.out.AuthorizationCodeStorePort;
 import dev.tessera.iam.application.port.out.ClientRepositoryPort;
 import dev.tessera.iam.application.port.out.ClientSecretVerifierPort;
+import dev.tessera.iam.application.port.out.ConsentStorePort;
 import dev.tessera.iam.application.port.out.DpopProofValidatorPort;
-import dev.tessera.iam.application.port.out.ItemRepositoryPort;
 import dev.tessera.iam.application.port.out.OpaqueIdentifierPort;
+import dev.tessera.iam.application.port.out.PasswordCredentialVerifierPort;
 import dev.tessera.iam.application.port.out.RefreshTokenStorePort;
 import dev.tessera.iam.application.port.out.RefreshTokenTenantResolverPort;
+import dev.tessera.iam.application.port.out.SessionStorePort;
 import dev.tessera.iam.application.port.out.TokenSignerPort;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Produces;
@@ -32,16 +39,10 @@ import java.time.Clock;
  * <p>The application services are framework-free (no CDI annotations), so the adapter
  * constructs each from its injected outbound ports, configuration and a {@link Clock}, and
  * exposes it as a bean. This is the single composition seam between the framework-free core
- * and the adapter shell for the read API and the Authorization Code + PKCE flow.
+ * and the adapter shell for the Authorization Code + PKCE flow and the login/consent surface.
  */
 @ApplicationScoped
 public class UseCaseProducer {
-
-    @Produces
-    @ApplicationScoped
-    QueryItemsUseCase queryItemsUseCase(ItemRepositoryPort repository) {
-        return new ItemService(repository);
-    }
 
     @Produces
     @ApplicationScoped
@@ -144,5 +145,24 @@ public class UseCaseProducer {
             AccessTokenIntrospectorPort accessTokens,
             Clock clock) {
         return new IntrospectService(clients, secretVerifier, refreshStore, accessTokens, clock);
+    }
+
+    @Produces
+    @ApplicationScoped
+    LoginUseCase loginUseCase(
+            PasswordCredentialVerifierPort credentials, SessionStorePort sessions, LoginConfig login) {
+        return new LoginService(credentials, sessions, login.sessionTtl());
+    }
+
+    @Produces
+    @ApplicationScoped
+    SessionUseCase sessionUseCase(SessionStorePort sessions) {
+        return new SessionService(sessions);
+    }
+
+    @Produces
+    @ApplicationScoped
+    ConsentUseCase consentUseCase(ConsentStorePort consents) {
+        return new ConsentService(consents);
     }
 }

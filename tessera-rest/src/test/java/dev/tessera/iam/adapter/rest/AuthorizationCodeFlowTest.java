@@ -8,6 +8,9 @@ import dev.tessera.iam.adapter.rest.support.FakeClientRepository;
 import dev.tessera.iam.adapter.rest.support.FakeClientSecretVerifier;
 import dev.tessera.iam.adapter.rest.support.FakeKeyProvider;
 import dev.tessera.iam.adapter.rest.support.TestClientCertificate;
+import dev.tessera.iam.domain.tenancy.BaselineId;
+import dev.tessera.iam.domain.tenancy.RealmKey;
+import dev.tessera.iam.domain.tenancy.TenantId;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.RestAssured;
 import io.restassured.config.RedirectConfig;
@@ -42,6 +45,10 @@ class AuthorizationCodeFlowTest {
     private static final String REDIRECT_URI = "https://client.example/callback";
     private static final String ISSUER = "https://issuer.test.example";
     private static final String TOKEN_ENDPOINT = ISSUER + "/token";
+
+    /** The realm this test issues under: {@link #TENANT} at the zero (default) baseline. */
+    private static final RealmKey REALM =
+            new RealmKey(TenantId.fromString(TENANT), new BaselineId(new UUID(0L, 0L)));
 
     /** A fresh DPoP client per test method — a public client's sender-constraining key. */
     private final DpopTestClient dpop = new DpopTestClient();
@@ -99,7 +106,7 @@ class AuthorizationCodeFlowTest {
         Map<String, Object> atClaims = jsonPart(accessToken, 1);
         assertThat(atHeader.get("typ")).isEqualTo("at+jwt");
         assertThat(atHeader.get("alg")).isEqualTo("EdDSA");
-        assertThat(atHeader.get("kid")).isEqualTo("test-key-1");
+        assertThat(atHeader.get("kid")).isNotNull();
         assertThat(atClaims.get("iss")).isEqualTo(ISSUER);
         assertThat(atClaims.get("sub")).isEqualTo("user-sub-1");
         assertThat(atClaims.get("client_id")).isEqualTo(FakeClientRepository.PUBLIC_CLIENT_ID);
@@ -436,7 +443,7 @@ class AuthorizationCodeFlowTest {
         byte[] sig = B64URL_DEC.decode(jws.substring(lastDot + 1));
         assertThat(firstDot).isLessThan(lastDot);
         Signature verifier = Signature.getInstance("Ed25519");
-        verifier.initVerify(keyProvider.publicKey());
+        verifier.initVerify(keyProvider.publicKey(REALM));
         verifier.update(signingInput);
         return verifier.verify(sig);
     }

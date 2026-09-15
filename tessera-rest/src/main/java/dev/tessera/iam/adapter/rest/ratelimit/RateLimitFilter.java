@@ -79,6 +79,12 @@ public class RateLimitFilter implements ContainerRequestFilter {
             String principal = basicClientId != null ? "cid:" + basicClientId : "ip:" + ip;
             buckets.add(new Bucket(
                     new RateLimitKey(Surface.TOKEN, tenant, principal), tokenPolicy(config)));
+        } else if (isLogin(request)) {
+            // The login form has no client_id to key on (a session, not an OAuth client, is
+            // being established) — source IP is the only available principal, same
+            // ingress-throttle shape as the /authorize IP backstop.
+            buckets.add(new Bucket(
+                    new RateLimitKey(Surface.LOGIN, tenant, "ip:" + ip), authorizePolicy(config)));
         } else {
             String clientId = request.getUriInfo().getQueryParameters().getFirst("client_id");
             RateLimitPolicy authorizePolicy = authorizePolicy(config);
@@ -108,6 +114,13 @@ public class RateLimitFilter implements ContainerRequestFilter {
         var segments = request.getUriInfo().getPathSegments();
         return !segments.isEmpty()
                 && "token".equals(segments.get(segments.size() - 1).getPath());
+    }
+
+    /** True iff the request targets the login endpoint. Matches the exact last path segment. */
+    private boolean isLogin(ContainerRequestContext request) {
+        var segments = request.getUriInfo().getPathSegments();
+        return !segments.isEmpty()
+                && "login".equals(segments.get(segments.size() - 1).getPath());
     }
 
     private static RateLimitPolicy tokenPolicy(RateLimitConfig config) {

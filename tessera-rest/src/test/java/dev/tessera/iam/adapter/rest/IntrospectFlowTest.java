@@ -106,12 +106,7 @@ class IntrospectFlowTest {
                 .statusCode(200).body("active", Matchers.is(false));
     }
 
-    // Cross-tenant isolation is covered here for REFRESH tokens (realm-scoped store lookup). The
-    // ACCESS-token cross-tenant boundary is cryptographic — a token verifies only against its realm's
-    // published keys, which in production come from the RLS-scoped DbKeyProviderAdapter. It is not
-    // exercised here because FakeKeyProvider returns one shared key for every realm; adding a
-    // realm-scoped fake to assert an A-signed access token is inactive under realm B is a tracked
-    // test-coverage follow-up. (Production isolation itself is verified by the security review.)
+    // Cross-tenant isolation is covered here for REFRESH tokens (realm-scoped store lookup).
     @Test
     @DisplayName("introspecting a refresh token under a different tenant is inactive (no cross-tenant leak)")
     void crossTenantRefreshIsInactive() {
@@ -124,6 +119,32 @@ class IntrospectFlowTest {
 
         // Still active in its own tenant.
         introspect(tenantA, CALLER, CALLER_SECRET, tokens.refreshToken()).then()
+                .statusCode(200).body("active", Matchers.is(true));
+    }
+
+    // The ACCESS-token cross-tenant boundary is cryptographic, not store-scoped: a token verifies
+    // only against its realm's published keys, which in production come from the RLS-scoped
+    // DbKeyProviderAdapter (a token signed under tenant A never appears in tenant B's JWKS).
+    // FakeKeyProvider is realm-scoped (a distinct Ed25519 key pair and kid per realm), so this
+    // exercises the same cryptographic boundary the test double previously could not.
+    @Test
+    @DisplayName("an access token signed under tenant A is inactive under tenant B (cryptographic boundary)")
+    void crossTenantAccessTokenIsInactive() {
+        String tenantA = UUID.randomUUID().toString();
+        Tokens tokens = issue(tenantA, UUID.randomUUID().toString());
+
+        String tenantB = UUID.randomUUID().toString();
+        introspect(tenantB, CALLER, CALLER_SECRET, tokens.accessToken()).then()
+                .statusCode(200)
+                .body("active", Matchers.is(false))
+                .body("sub", Matchers.nullValue())
+                .body("client_id", Matchers.nullValue())
+                .body("scope", Matchers.nullValue())
+                .body("exp", Matchers.nullValue())
+                .body("iat", Matchers.nullValue());
+
+        // Still active in its own tenant.
+        introspect(tenantA, CALLER, CALLER_SECRET, tokens.accessToken()).then()
                 .statusCode(200).body("active", Matchers.is(true));
     }
 

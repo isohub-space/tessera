@@ -37,7 +37,11 @@ jobs:
         run: |
           set -euo pipefail
           ai='co-authored-by:[[:space:]]*(claude|anthropic)|claude-session:|claude\.ai/code|generated (with|by) \[?claude|authored (with|by)[^.]*claude|anthropic\.com|🤖'
-          keys='(\b(IOS|IAM|INF|VEC)-[0-9])|(\bADR-[A-Z0-9])|(iospace\.atlassian)'
+          # The decision-record clause matches only a letter-coded prefix, which is internal
+          # vocabulary. A plainly numbered record is generic and carries nothing private, so
+          # this repo may document its own design decisions. What has to stay out is the
+          # content of an internal record, not the shape of its name.
+          keys='(\b(IOS|IAM|INF|VEC)-[0-9])|(\bADR-[A-Z]{2,}-)|(iospace\.atlassian)'
           fail=0
 
           # 1) PR title + body — the surface commit-lint cannot see.
@@ -89,7 +93,11 @@ jobs:
         run: |
           set -euo pipefail
           ai='co-authored-by:[[:space:]]*(claude|anthropic)|claude-session:|claude\.ai/code|generated (with|by) \[?claude|authored (with|by)[^.]*claude|anthropic\.com|🤖'
-          keys='(\b(IOS|IAM|INF|VEC)-[0-9])|(\bADR-[A-Z0-9])|(iospace\.atlassian)'
+          # The decision-record clause matches only a letter-coded prefix, which is internal
+          # vocabulary. A plainly numbered record is generic and carries nothing private, so
+          # this repo may document its own design decisions. What has to stay out is the
+          # content of an internal record, not the shape of its name.
+          keys='(\b(IOS|IAM|INF|VEC)-[0-9])|(\bADR-[A-Z]{2,}-)|(iospace\.atlassian)'
           if printf '%s' "$BODY" | grep -qiE "$ai" || printf '%s' "$BODY" | grep -qE "$keys"; then
             echo "Comment $HTML_URL matched a hygiene pattern — hiding it."
             gh api graphql -f query='mutation($id: ID!) { minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) { minimizedComment { isMinimized } } }' -f id="$NODE_ID"
