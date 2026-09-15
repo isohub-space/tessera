@@ -11,6 +11,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -51,21 +52,25 @@ public class TenantAuditLog {
 
     private final IamMetrics metrics;
     private final CheckpointSigner signer;
+    private final CheckpointKeyResolver keyResolver;
     private final Event<AuditEvent> events;
     private final TenantAuditLogRepository repository;
     private final Clock clock;
 
     @Inject
-    public TenantAuditLog(IamMetrics metrics, CheckpointSigner signer, Event<AuditEvent> events,
+    public TenantAuditLog(IamMetrics metrics, CheckpointSigner signer,
+            CheckpointKeyResolver keyResolver, Event<AuditEvent> events,
             TenantAuditLogRepository repository) {
-        this(metrics, signer, events, repository, Clock.systemUTC());
+        this(metrics, signer, keyResolver, events, repository, Clock.systemUTC());
     }
 
     /** Package-visible constructor for unit tests with a fixed clock. */
-    TenantAuditLog(IamMetrics metrics, CheckpointSigner signer, Event<AuditEvent> events,
+    TenantAuditLog(IamMetrics metrics, CheckpointSigner signer,
+            CheckpointKeyResolver keyResolver, Event<AuditEvent> events,
             TenantAuditLogRepository repository, Clock clock) {
         this.metrics = Objects.requireNonNull(metrics, "metrics must not be null");
         this.signer = Objects.requireNonNull(signer, "signer must not be null");
+        this.keyResolver = Objects.requireNonNull(keyResolver, "keyResolver must not be null");
         this.events = Objects.requireNonNull(events, "events must not be null");
         this.repository = Objects.requireNonNull(repository, "repository must not be null");
         this.clock = Objects.requireNonNull(clock, "clock must not be null");
@@ -146,8 +151,8 @@ public class TenantAuditLog {
     }
 
     /**
-     * Verifies that {@code checkpoint}'s signature is authentic and that it still anchors
-     * a genuine prefix of {@code tenant}'s chain.
+     * Verifies that {@code checkpoint}'s signature is authentic under the key it names,
+     * and that it still anchors a genuine prefix of {@code tenant}'s chain.
      *
      * <p>A checkpoint attests the chain up to its {@code headSequence}, not necessarily
      * the live tail: the chain legitimately grows after a checkpoint is signed, so a
@@ -157,30 +162,57 @@ public class TenantAuditLog {
      * has not been truncated or rewritten. A signed checkpoint over the empty chain
      * (sequence {@code -1}, genesis hash) holds while the chain remains empty there.</p>
      *
+     * <p><strong>The key is resolved from the checkpoint, not assumed.</strong> This used
+     * to verify against whichever signer happened to be injected, which silently asserted
+     * that the key signing now is the key that signed then. It is not — not after a
+     * rotation, and not after a restart. Every checkpoint written before the current key
+     * failed verification, indistinguishably from a forged one, so the mechanism reset its
+     * own root of trust on each deploy while still being trusted. Verification now looks
+     * {@link AuditCheckpoint#keyId()} up through {@link CheckpointKeyResolver} and reports
+     * {@link CheckpointVerification.UnknownKey} when it cannot be found — a separate
+     * outcome from tampering, and never a pass.</p>
+     *
      * @param tenant     the tenant the checkpoint should anchor
      * @param checkpoint the checkpoint to verify
-     * @return a {@link Uni} emitting {@code true} iff the signature is valid and the
-     *         checkpoint still anchors an untampered prefix of the tenant's chain
+     * @return a {@link Uni} emitting the verification outcome
      */
-    public Uni<Boolean> verifyCheckpoint(String tenant, AuditCheckpoint checkpoint) {
+    public Uni<CheckpointVerification> verifyCheckpoint(String tenant, AuditCheckpoint checkpoint) {
         requireText(tenant, "tenant");
         Objects.requireNonNull(checkpoint, "checkpoint must not be null");
-        if (!tenant.equals(checkpoint.tenant())
-                || !signer.verify(checkpoint.signingInput(), checkpoint.signature())) {
-            return Uni.createFrom().item(false);
+        String keyId = checkpoint.keyId();
+
+        if (!tenant.equals(checkpoint.tenant())) {
+            return Uni.createFrom().item(
+                    new CheckpointVerification.TenantMismatch(tenant, checkpoint.tenant()));
         }
+        // Resolve the key the checkpoint names — not the one currently signing.
+        Optional<CheckpointVerifier> verifier = keyResolver.resolve(keyId);
+        if (verifier.isEmpty()) {
+            metrics.increment(SUBSYSTEM, "checkpoint_unknown_key", "tenant", tenant);
+            LOG.warnf("Checkpoint for tenant %s names key %s, which no key source resolves;"
+                    + " it can be neither confirmed nor refuted", tenant, keyId);
+            return Uni.createFrom().item(new CheckpointVerification.UnknownKey(keyId));
+        }
+        if (!verifier.get().verify(checkpoint.signingInput(), checkpoint.signature())) {
+            return Uni.createFrom().item(new CheckpointVerification.SignatureInvalid(keyId));
+        }
+
         long seq = checkpoint.headSequence();
         if (seq < 0) {
             // Anchored the empty chain: still holds iff nothing occupies sequence 0.
             return repository.stream(tenant).toUni()
-                    .map(first -> first == null && AuditEntry.GENESIS_HASH.equals(checkpoint.headHash()));
+                    .map(first -> first == null && AuditEntry.GENESIS_HASH.equals(checkpoint.headHash())
+                            ? (CheckpointVerification) new CheckpointVerification.Valid(keyId)
+                            : new CheckpointVerification.ChainMismatch(keyId, seq));
         }
         // Stream to the entry at the anchored sequence and compare its hash, without
         // collecting the chain.
         return repository.stream(tenant)
                 .filter(e -> e.sequence() == seq)
                 .toUni()
-                .map(anchored -> anchored != null && anchored.hash().equals(checkpoint.headHash()));
+                .map(anchored -> anchored != null && anchored.hash().equals(checkpoint.headHash())
+                        ? (CheckpointVerification) new CheckpointVerification.Valid(keyId)
+                        : new CheckpointVerification.ChainMismatch(keyId, seq));
     }
 
     /**
