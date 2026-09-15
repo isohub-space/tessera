@@ -164,6 +164,43 @@ class TenantAuditLogTest {
     }
 
     @Test
+    @DisplayName("an empty-chain checkpoint is Superseded once entries arrive — never tampering")
+    void emptyChainCheckpointIsSupersededNotTampering() {
+        // The case the original empty-chain test never reached: what happens AFTER the
+        // chain legitimately grows. Appending the first entry must not turn a genuine
+        // genesis checkpoint into an accusation.
+        AuditCheckpoint genesis = checkpoint("t1");
+        assertThat(verifyCheckpoint("t1", genesis)).isInstanceOf(CheckpointVerification.Valid.class);
+
+        record("t1", "token.issued", Map.of("sub", "alice"));
+
+        CheckpointVerification outcome = verifyCheckpoint("t1", genesis);
+        assertThat(outcome).isInstanceOf(CheckpointVerification.Superseded.class);
+        // Not a pass: the checkpoint attests nothing about the entry just written, and a
+        // chain truncated back to empty must not be waved through by it.
+        assertThat(outcome.isValid()).isFalse();
+        // And emphatically not tampering — an append is what an audit log is for.
+        assertThat(outcome)
+                .isNotInstanceOf(CheckpointVerification.ChainMismatch.class)
+                .isNotInstanceOf(CheckpointVerification.SignatureInvalid.class);
+    }
+
+    @Test
+    @DisplayName("a signed checkpoint claiming the empty chain but a non-genesis hash is a ChainMismatch")
+    void emptyChainCheckpointWithNonGenesisHashRejected() {
+        // Internally contradictory and signed by a known key: sequence -1 says "empty",
+        // the head hash says otherwise. That IS a mismatch, unlike an honest append.
+        Instant now = Instant.parse("2026-01-01T00:00:00Z");
+        String wrongHash = "ff".repeat(32);
+        String input = AuditCheckpoint.signingInput("t1", -1L, wrongHash, now, signer.keyId());
+        AuditCheckpoint contradictory = new AuditCheckpoint(
+                "t1", -1L, wrongHash, now, signer.keyId(), signer.sign(input));
+
+        assertThat(verifyCheckpoint("t1", contradictory))
+                .isInstanceOf(CheckpointVerification.ChainMismatch.class);
+    }
+
+    @Test
     @DisplayName("a historical checkpoint still verifies after the chain legitimately advances")
     void historicalCheckpointStillVerifies() {
         record("t1", "token.issued", Map.of("sub", "alice"));
