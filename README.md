@@ -183,6 +183,31 @@ The server listens on `http://localhost:8090` by default. Key endpoints:
 | `GET /q/health` · `/q/health/ready` · `/q/health/live` | Health probes |
 | `GET /q/metrics` | Prometheus metrics |
 
+### As a standalone single-tenant origin
+
+Tessera's tenant contract assumes a gateway in front that asserts `X-Tenant-Id`. A
+deployment that has no such gateway — a container platform's own domain mapping, a bare
+reverse proxy — runs it in **single-tenant mode** instead, which is the shape a first
+deployment for one relying party usually takes:
+
+| Setting | Effect |
+|---------|--------|
+| `TESSERA_FIXED_TENANT=<uuid>` | Every request binds this tenant at the zero baseline; the tenant/baseline headers are ignored, so a caller cannot pick another tenant. The readiness probe binds the same tenant. |
+| `TESSERA_OIDC_ISSUER` and `IAM_KEYS_ISSUER` | Both set to the public origin, e.g. `https://iam.example.com`. |
+| `IAM_KEYS_MASTER_KEY` | A real base64 256-bit master key from your secret manager; the development default is refused outside dev/test. |
+| `TESSERA_BOOTSTRAP_ENABLED=true` + `TESSERA_BOOTSTRAP_CLIENT_ID/_SECRET/_REDIRECT_URIS`, `TESSERA_BOOTSTRAP_USER_USERNAME/_PASSWORD` | First boot provisions what is missing: an `ACTIVE` signing key for the tenant, one confidential client (`client_secret_basic`, `authorization_code` + `refresh_token`), one password user. Idempotent; existing rows are never overwritten. |
+| `TESSERA_REQUIRE_SENDER_CONSTRAINT=false` | Lets a secret-authenticated confidential client that can present no client certificate (a back-end-for-frontend behind a TLS-terminating edge) receive a plain Bearer token. Leave at the default `true` wherever clients can do mTLS or DPoP. |
+| `TESSERA_CORS_ORIGINS=https://app.example.com` | Allows the relying party's own login page to `POST /login` cross-origin with credentials. |
+| build with `-Dquarkus.profile=prod,singlenode` | For a deployment that runs exactly one instance: the in-process authorization-code store is used and no Infinispan server is needed. Run more than one instance and codes minted on one node cannot be redeemed on another — use the default profile and a shared cache instead. |
+
+The ID token then carries `realm_tenant` and `realm_baseline` when the `profile` scope is
+granted, which is how a relying party that scopes its own data by tenant learns which tenant
+a signed-in user belongs to without guessing.
+
+Tessera serves no login page (see "What Tessera is — and is not"): the relying party's own
+page posts `username`/`password` to `/login`, receives the `tessera_session` cookie, and only
+then sends the browser through `/authorize`.
+
 ### As a library dependency
 
 `tessera-api` is the stable hexagonal contract — domain types, port interfaces, and
