@@ -45,6 +45,24 @@
       <artifactId>quarkus-smallrye-health</artifactId>
     </dependency>
 
+    <!-- Unix-domain-socket connectivity to Postgres, for deployments where the database is
+         reached through a mounted socket rather than TCP (a managed-database proxy socket).
+         Both are inert when the datasource URLs name a TCP host. The reactive client needs
+         Netty's native epoll transport (linux/amd64, the container platform) plus
+         quarkus.vertx.prefer-native-transport=true; the JDBC (Flyway) connection needs a
+         socket factory — pgjdbc has none of its own — hence junixsocket. -->
+    <dependency>
+      <groupId>io.netty</groupId>
+      <artifactId>netty-transport-native-epoll</artifactId>
+      <classifier>linux-x86_64</classifier>
+    </dependency>
+    <dependency>
+      <groupId>com.kohlschutter.junixsocket</groupId>
+      <artifactId>junixsocket-core</artifactId>
+      <version>${junixsocket.version}</version>
+      <type>pom</type>
+    </dependency>
+
     <!-- Test -->
     <dependency>
       <groupId>io.quarkus</groupId>
