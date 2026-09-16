@@ -89,7 +89,8 @@ public class UseCaseProducer {
                 authFlow.accessTokenTtl(),
                 authFlow.idTokenTtl(),
                 refresh.refreshTokenTtl(),
-                refresh.enabled());
+                refresh.enabled(),
+                authFlow.requireSenderConstraint());
     }
 
     /**

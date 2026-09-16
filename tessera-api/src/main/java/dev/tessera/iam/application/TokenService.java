@@ -15,6 +15,7 @@ import dev.tessera.iam.domain.authcode.AuthorizationGrant;
 import dev.tessera.iam.domain.authcode.IssuedTokenClaims;
 import dev.tessera.iam.domain.authcode.PkceVerifier;
 import dev.tessera.iam.domain.client.Client;
+import dev.tessera.iam.domain.client.ClientAuthMethod;
 import dev.tessera.iam.domain.client.ConfidentialClient;
 import dev.tessera.iam.domain.client.PublicClient;
 import dev.tessera.iam.domain.client.grant.GrantType;
@@ -72,6 +73,7 @@ public final class TokenService implements TokenUseCase {
     private final Duration idTokenTtl;
     private final Duration refreshTokenTtl;
     private final boolean refreshEnabled;
+    private final boolean requireSenderConstraint;
 
     public TokenService(
             ClientRepositoryPort clients,
@@ -88,6 +90,35 @@ public final class TokenService implements TokenUseCase {
             Duration idTokenTtl,
             Duration refreshTokenTtl,
             boolean refreshEnabled) {
+        this(clients, codeStore, secretVerifier, signer, dpop, identifiers, refreshStore, clock,
+                issuer, tokenEndpoint, accessTokenTtl, idTokenTtl, refreshTokenTtl, refreshEnabled,
+                true);
+    }
+
+    /**
+     * @param requireSenderConstraint whether a confidential client that presents no client
+     *                                certificate is refused ({@code true}, the RFC 9700 default)
+     *                                or issued a plain Bearer token ({@code false}, for a
+     *                                deployment whose confidential clients sit behind a
+     *                                TLS-terminating edge that forwards no certificate);
+     *                                see {@link #resolveBinding}
+     */
+    public TokenService(
+            ClientRepositoryPort clients,
+            AuthorizationCodeStorePort codeStore,
+            ClientSecretVerifierPort secretVerifier,
+            TokenSignerPort signer,
+            DpopProofValidatorPort dpop,
+            OpaqueIdentifierPort identifiers,
+            RefreshTokenStorePort refreshStore,
+            Clock clock,
+            String issuer,
+            String tokenEndpoint,
+            Duration accessTokenTtl,
+            Duration idTokenTtl,
+            Duration refreshTokenTtl,
+            boolean refreshEnabled,
+            boolean requireSenderConstraint) {
         this.clients = requireNonNull(clients, "clients");
         this.codeStore = requireNonNull(codeStore, "codeStore");
         this.secretVerifier = requireNonNull(secretVerifier, "secretVerifier");
@@ -102,6 +133,7 @@ public final class TokenService implements TokenUseCase {
         this.idTokenTtl = requirePositive(idTokenTtl, "idTokenTtl");
         this.refreshTokenTtl = requirePositive(refreshTokenTtl, "refreshTokenTtl");
         this.refreshEnabled = refreshEnabled;
+        this.requireSenderConstraint = requireSenderConstraint;
     }
 
     @Override
@@ -180,16 +212,17 @@ public final class TokenService implements TokenUseCase {
             TokenRequestCommand command, AuthorizationGrant grant, Client client,
             Binding.Bound bound, Instant now) {
         Set<String> scopes = grant.scopes();
-        ClaimSet accessClaims = IssuedTokenClaims.accessToken(
-                issuer,
-                grant.subjectId(),
-                command.clientId(),
-                Set.of(issuer),
-                scopes,
-                identifiers.newTokenId(),
-                now,
-                now.plus(accessTokenTtl),
-                bound.cnf());
+        String jti = identifiers.newTokenId();
+        Instant accessExpiry = now.plus(accessTokenTtl);
+        ClaimSet accessClaims = bound.cnf() == null
+                // Unbound Bearer: only reachable when the deployment opted out of mandatory
+                // sender-constraining for a secret-authenticated confidential client.
+                ? IssuedTokenClaims.accessToken(
+                        issuer, grant.subjectId(), command.clientId(), Set.of(issuer), scopes,
+                        jti, now, accessExpiry)
+                : IssuedTokenClaims.accessToken(
+                        issuer, grant.subjectId(), command.clientId(), Set.of(issuer), scopes,
+                        jti, now, accessExpiry, bound.cnf());
 
         Uni<String> accessUni = signer.sign(command.realm(), "at+jwt", accessClaims);
 
@@ -197,7 +230,7 @@ public final class TokenService implements TokenUseCase {
         Uni<String> idUni = openId
                 ? signer.sign(command.realm(), "JWT", IssuedTokenClaims.idToken(
                         issuer, grant.subjectId(), command.clientId(), grant.nonce(),
-                        now, now.plus(idTokenTtl)))
+                        now, now.plus(idTokenTtl), scopes, command.realm()))
                 : Uni.createFrom().nullItem();
 
         Uni<String> refreshUni = mintRefreshToken(command, grant, client, now);
@@ -220,13 +253,18 @@ public final class TokenService implements TokenUseCase {
      *   <li>a {@link PublicClient} must present a DPoP proof (RFC 9449) — validated off-loop
      *       via {@link DpopProofValidatorPort}; the token is {@code cnf.jkt}-bound and its
      *       {@code token_type} is {@code DPoP};</li>
-     *   <li>a {@link ConfidentialClient} must present its mTLS client certificate (RFC 8705),
+     *   <li>a {@link ConfidentialClient} presents its mTLS client certificate (RFC 8705),
      *       whose {@code x5t#S256} thumbprint the edge computed — the token is
-     *       {@code cnf["x5t#S256"]}-bound and its {@code token_type} stays {@code Bearer}.</li>
+     *       {@code cnf["x5t#S256"]}-bound and its {@code token_type} stays {@code Bearer}.
+     *       The binding is independent of the client's authentication method, so a
+     *       {@code client_secret} confidential client that presents a certificate is still
+     *       certificate-bound. Without a certificate the client is refused — unless the
+     *       deployment set {@code requireSenderConstraint} to {@code false} <em>and</em> the
+     *       client does not authenticate by mTLS, in which case it receives an unbound
+     *       Bearer token (RFC 6750): the shape of a back-end-for-frontend behind a
+     *       TLS-terminating edge that forwards no client certificate.</li>
      * </ul>
-     * A missing or invalid proof yields {@link Binding.Rejected}. The mTLS binding is
-     * independent of the client's authentication method, so a {@code client_secret}
-     * confidential client is still certificate-bound.
+     * A missing or invalid proof yields {@link Binding.Rejected}.
      */
     private Uni<Binding> resolveBinding(TokenRequestCommand command, Client client, Instant now) {
         return switch (client) {
@@ -247,11 +285,15 @@ public final class TokenService implements TokenUseCase {
                                     "the DPoP proof is invalid");
                 });
             }
-            case ConfidentialClient ignored -> {
+            case ConfidentialClient confidential -> {
                 if (command.certThumbprint() == null || command.certThumbprint().isBlank()) {
-                    yield Uni.createFrom().item(Binding.rejected(
-                            AuthorizationError.INVALID_REQUEST,
-                            "a client certificate is required for a confidential client"));
+                    boolean mtlsAuthenticated = confidential.authMethod() == ClientAuthMethod.MTLS;
+                    if (requireSenderConstraint || mtlsAuthenticated) {
+                        yield Uni.createFrom().item(Binding.rejected(
+                                AuthorizationError.INVALID_REQUEST,
+                                "a client certificate is required for a confidential client"));
+                    }
+                    yield Uni.createFrom().item(Binding.unbound(TOKEN_TYPE_BEARER));
                 }
                 yield Uni.createFrom().item(Binding.bound(
                         new Confirmation.MtlsX5tS256(command.certThumbprint()), TOKEN_TYPE_BEARER));
@@ -259,7 +301,10 @@ public final class TokenService implements TokenUseCase {
         };
     }
 
-    /** The resolved sender-constraining outcome: a bound confirmation, or a rejection. */
+    /**
+     * The resolved sender-constraining outcome: a bound confirmation, an unbound Bearer
+     * ({@link Bound#cnf()} is {@code null}), or a rejection.
+     */
     private sealed interface Binding permits Binding.Bound, Binding.Rejected {
 
         record Bound(Confirmation cnf, String tokenType) implements Binding {
@@ -269,7 +314,11 @@ public final class TokenService implements TokenUseCase {
         }
 
         static Binding bound(Confirmation cnf, String tokenType) {
-            return new Bound(cnf, tokenType);
+            return new Bound(requireNonNull(cnf, "cnf"), tokenType);
+        }
+
+        static Binding unbound(String tokenType) {
+            return new Bound(null, tokenType);
         }
 
         static Binding rejected(AuthorizationError error, String description) {

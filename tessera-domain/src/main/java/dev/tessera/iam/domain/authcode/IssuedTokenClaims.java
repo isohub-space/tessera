@@ -1,6 +1,7 @@
 package dev.tessera.iam.domain.authcode;
 
 import dev.tessera.iam.domain.token.ClaimSet;
+import dev.tessera.iam.domain.tenancy.RealmKey;
 import dev.tessera.iam.domain.token.Confirmation;
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -138,6 +139,45 @@ public final class IssuedTokenClaims {
         claims.put("iat", issuedAt.getEpochSecond());
         claims.put("exp", expiresAt.getEpochSecond());
         claims.put("nonce", nonce);
+        return new ClaimSet(claims);
+    }
+
+    /**
+     * Builds an OIDC ID-token claim set that additionally asserts the realm the end user
+     * authenticated in, when the {@code profile} scope was granted: {@code realm_tenant} and
+     * {@code realm_baseline} (the same scope-gated correlation claims
+     * {@code ClaimContributor} emits). A relying party that scopes its own data by tenant —
+     * a gateway deciding which tenant a signed-in user belongs to — reads the tenant from
+     * here rather than guessing it, and a client that did not ask for {@code profile} learns
+     * nothing about the realm.
+     *
+     * @param scopes the granted scopes (never {@code null})
+     * @param realm  the realm the subject authenticated in (never {@code null}); other
+     *               parameters are as {@link #idToken(String, String, String, String, Instant, Instant)}
+     * @return the unsigned OIDC ID-token claim set
+     */
+    public static ClaimSet idToken(
+            String issuer,
+            String subjectId,
+            String clientId,
+            String nonce,
+            Instant issuedAt,
+            Instant expiresAt,
+            Set<String> scopes,
+            RealmKey realm) {
+        if (scopes == null) {
+            throw new IllegalArgumentException("id-token scopes must not be null");
+        }
+        if (realm == null) {
+            throw new IllegalArgumentException("id-token realm must not be null");
+        }
+        ClaimSet base = idToken(issuer, subjectId, clientId, nonce, issuedAt, expiresAt);
+        if (!scopes.contains("profile")) {
+            return base;
+        }
+        Map<String, Object> claims = new LinkedHashMap<>(base.claims());
+        claims.put("realm_tenant", realm.tenant().value().toString());
+        claims.put("realm_baseline", realm.baseline().value().toString());
         return new ClaimSet(claims);
     }
 
