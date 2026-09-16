@@ -3,12 +3,16 @@ package dev.tessera.iam.domain.authcode;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import dev.tessera.iam.domain.tenancy.BaselineId;
+import dev.tessera.iam.domain.tenancy.RealmKey;
+import dev.tessera.iam.domain.tenancy.TenantId;
 import dev.tessera.iam.domain.token.ClaimSet;
 import dev.tessera.iam.domain.token.Confirmation;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -88,6 +92,31 @@ class IssuedTokenClaimsTest {
                 ISSUER, "u", "c", Set.of(), Set.of("openid"), "jti", IAT, EXP))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> IssuedTokenClaims.idToken(ISSUER, "u", "c", " ", IAT, EXP))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+    @Test
+    @DisplayName("ID token asserts the realm only when the profile scope was granted")
+    void idTokenAssertsRealmUnderProfileScope() {
+        UUID tenant = UUID.fromString("11111111-1111-4111-8111-111111111111");
+        UUID baseline = new UUID(0L, 0L);
+        RealmKey realm = new RealmKey(new TenantId(tenant), new BaselineId(baseline));
+
+        ClaimSet withProfile = IssuedTokenClaims.idToken(
+                ISSUER, "user-1", "client-abc", "n-1", IAT, EXP, Set.of("openid", "profile"), realm);
+        assertThat(withProfile.claim("realm_tenant")).contains(tenant.toString());
+        assertThat(withProfile.claim("realm_baseline")).contains(baseline.toString());
+        assertThat(withProfile.claim("nonce")).contains("n-1");
+
+        ClaimSet withoutProfile = IssuedTokenClaims.idToken(
+                ISSUER, "user-1", "client-abc", "n-1", IAT, EXP, Set.of("openid"), realm);
+        assertThat(withoutProfile.claim("realm_tenant")).isEmpty();
+        assertThat(withoutProfile.claim("realm_baseline")).isEmpty();
+
+        assertThatThrownBy(() -> IssuedTokenClaims.idToken(
+                ISSUER, "user-1", "client-abc", "n-1", IAT, EXP, null, realm))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> IssuedTokenClaims.idToken(
+                ISSUER, "user-1", "client-abc", "n-1", IAT, EXP, Set.of("openid"), null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }
