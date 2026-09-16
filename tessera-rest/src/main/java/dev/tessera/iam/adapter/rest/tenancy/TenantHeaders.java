@@ -22,6 +22,12 @@ import java.util.UUID;
  * <p>{@link #BASELINE} ({@value #BASELINE}) is optional; when absent the realm uses the
  * zero baseline, which is the convention for the single configuration tier.
  *
+ * <p><strong>Single-tenant mode.</strong> A deployment that is a standalone public origin
+ * has no gateway to assert the tenant and cannot trust a client-supplied header. It sets
+ * {@code iam.tenancy.fixed-tenant} instead; {@link #fixedRealm(UUID)} then binds every
+ * request to that tenant at the zero baseline and the ingress headers are ignored
+ * entirely — never merged with, never overridden by, a value the caller sent.
+ *
  * <p>This type is framework-free so the resolution rule can be unit-tested without a
  * container; the {@link TenantResolutionFilter} adapts it to the JAX-RS request pipeline.
  */
@@ -56,6 +62,20 @@ public final class TenantHeaders {
                 ? ZERO_BASELINE
                 : new BaselineId(parse(baselineHeader.trim(), BASELINE));
         return new RealmKey(tenant, baseline);
+    }
+
+    /**
+     * The realm every request binds to in single-tenant mode: the configured tenant at the
+     * zero baseline, regardless of any tenant or baseline header the caller sent.
+     *
+     * @param fixedTenant the deployment's fixed tenant (never {@code null})
+     * @return the resolved {@link RealmKey}
+     */
+    public static RealmKey fixedRealm(UUID fixedTenant) {
+        if (fixedTenant == null) {
+            throw new IllegalArgumentException("fixedTenant must not be null");
+        }
+        return new RealmKey(new TenantId(fixedTenant), ZERO_BASELINE);
     }
 
     private static UUID parse(String value, String header) {
