@@ -77,4 +77,18 @@ class TenantHeadersTest {
         assertThatThrownBy(() -> TenantHeaders.resolve(TENANT.toString(), "not-a-uuid"))
                 .isInstanceOf(MalformedTenantException.class);
     }
+    @Test
+    @DisplayName("single-tenant mode binds the fixed tenant at the zero baseline")
+    void fixedRealmBindsFixedTenant() {
+        RealmKey realm = TenantHeaders.fixedRealm(TENANT);
+        assertThat(realm.tenant().value()).isEqualTo(TENANT);
+        assertThat(realm.baseline().value()).isEqualTo(ZERO);
+    }
+
+    @Test
+    @DisplayName("single-tenant mode refuses a null fixed tenant")
+    void fixedRealmRejectsNull() {
+        assertThatThrownBy(() -> TenantHeaders.fixedRealm(null))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 }
