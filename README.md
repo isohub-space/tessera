@@ -50,9 +50,11 @@ precise about that boundary matters.
   tamper-evident per-tenant audit log.
 
 **What it is _not_ (yet)**
-- **Not a standalone login server.** Tessera ships no login or consent UI. The authenticated
-  subject is supplied by an upstream authenticator via the `X-Subject-Id` header — you bring
-  the front-end that establishes identity.
+- **Not a login _UI_.** Tessera serves the login, consent and logout endpoints and owns the
+  session they establish, but ships no HTML for them — you bring the front-end that collects
+  the credentials and posts them. The `X-Subject-Id` header that an upstream authenticator
+  once supplied instead is default-closed (`iam.subject.trust-header=false`): any inbound
+  value is stripped, and a verified session cookie is the only way to establish a subject.
 - **Not yet self-sufficient for production key protection.** Signing keys are wrapped with a
   development master key that is _refused_ outside dev/test; a KMS-backed wrapping adapter is
   required before a production deployment can boot.
@@ -188,7 +190,9 @@ The server listens on `http://localhost:8090` by default. Key endpoints:
 Tessera's tenant contract assumes a gateway in front that asserts `X-Tenant-Id`. A
 deployment that has no such gateway — a container platform's own domain mapping, a bare
 reverse proxy — runs it in **single-tenant mode** instead, which is the shape a first
-deployment for one relying party usually takes:
+deployment for one relying party usually takes. Why tessera is deployed on its own origin
+rather than behind an application gateway, and what that costs, is recorded in
+[docs/adr/0001](docs/adr/0001-standalone-public-origin.md).
 
 | Setting | Effect |
 |---------|--------|
