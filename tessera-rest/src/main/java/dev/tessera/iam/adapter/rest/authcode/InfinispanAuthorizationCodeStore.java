@@ -19,6 +19,11 @@ import org.infinispan.client.hotrod.RemoteCache;
  * Shared-cache (Infinispan / JDG) single-use authorization-code store — the multi-node
  * implementation of {@link AuthorizationCodeStorePort}.
  *
+ * <p>Absent under the {@code test} build profile (the suite needs no Infinispan server) and
+ * under the {@code singlenode} build profile, which a deployment that runs exactly one
+ * instance selects at image build time ({@code -Dquarkus.profile=prod,singlenode}) to keep
+ * the in-memory sibling and no cache server at all.
+ *
  * <p>The in-memory sibling is process-local, so a code minted at {@code /authorize} on one
  * node cannot be redeemed at {@code /token} on another and the flow only works behind sticky
  * sessions. Entries here live in a cache every node shares, so any node can redeem.
@@ -57,7 +62,7 @@ import org.infinispan.client.hotrod.RemoteCache;
  * blocking, so nothing here parks an event-loop thread.
  */
 @ApplicationScoped
-@UnlessBuildProfile("test")
+@UnlessBuildProfile(anyOf = {"test", "singlenode"})
 public class InfinispanAuthorizationCodeStore implements AuthorizationCodeStorePort {
 
     /** Cache name; must match the cache configured on the server / in application.properties. */

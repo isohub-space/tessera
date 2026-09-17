@@ -30,4 +30,20 @@ public interface AuthFlowConfig {
     /** The lifetime of an issued OIDC ID token. */
     @WithDefault("PT5M")
     Duration idTokenTtl();
+
+    /**
+     * Whether every access token issued on the authorization-code path must be
+     * sender-constrained (RFC 9700 §2.2.1: DPoP for a public client, an mTLS certificate for
+     * a confidential one). {@code true}, the default, is today's behaviour: a confidential
+     * client that presents no certificate is refused a token.
+     *
+     * <p>Set to {@code false} for a deployment whose confidential clients cannot present a
+     * client certificate at all — a back-end-for-frontend behind a TLS-terminating edge that
+     * forwards no client certificate is the canonical case. Then a confidential client that
+     * authenticates by secret or private-key JWT and presents no certificate receives a
+     * plain Bearer token (RFC 6750). A client whose registered authentication method is mTLS
+     * still needs its certificate, and a presented certificate still binds the token.
+     */
+    @WithDefault("true")
+    boolean requireSenderConstraint();
 }
