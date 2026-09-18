@@ -8,6 +8,8 @@ import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.not;
 
 import io.quarkus.test.junit.QuarkusTest;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -38,8 +40,60 @@ class DiscoveryEndpointTest {
                 .body("issuer", equalTo(CONFIGURED_ISSUER))
                 .body("jwks_uri", equalTo(CONFIGURED_ISSUER + "/jwks"))
                 .body("token_endpoint", equalTo(CONFIGURED_ISSUER + "/token"))
-                .body("authorization_endpoint", equalTo(CONFIGURED_ISSUER + "/authorize"))
-                .body("userinfo_endpoint", equalTo(CONFIGURED_ISSUER + "/userinfo"));
+                .body("authorization_endpoint", equalTo(CONFIGURED_ISSUER + "/authorize"));
+    }
+
+    @Test
+    @DisplayName("discovery never lies: every advertised endpoint is actually served")
+    void everyAdvertisedEndpointIsServed() {
+        // The invariant, stated as a test rather than as prose: whatever
+        // the document advertises under a *_endpoint / *_uri member, the server answers.
+        // It fails against main, where userinfo_endpoint is advertised and 404s.
+        //
+        // The advertised URLs are issuer-absolute (https://issuer.test.example/...), while
+        // the test server is on localhost, so only the PATH is probed.
+        //
+        // Scope, stated honestly: "not 404" proves a RESOURCE IS MAPPED for the advertised
+        // path, not that it serves a correct response. It has to be that weak — /authorize
+        // with no query is legitimately a 400, and /jwks answers 500 under %test because
+        // there is no datasource behind it. Both still prove something is there to answer.
+        // A document advertising a path nothing is mapped to is the specific lie this
+        // guards; asserting 200 here would fail on configuration, not on conformance.
+        Map<String, ?> document = given()
+                .header("X-Tenant-Id", UUID.randomUUID().toString())
+                .when()
+                .get("/.well-known/openid-configuration")
+                .then()
+                .statusCode(200)
+                .extract()
+                .jsonPath()
+                .getMap("$");
+
+        List<String> advertised = document.entrySet().stream()
+                .filter(e -> e.getKey().endsWith("_endpoint") || e.getKey().endsWith("_uri"))
+                .filter(e -> e.getValue() instanceof String)
+                .map(e -> (String) e.getValue())
+                .filter(url -> url.startsWith(CONFIGURED_ISSUER))
+                .toList();
+
+        org.assertj.core.api.Assertions.assertThat(advertised)
+                .as("discovery advertises at least the token and JWKS endpoints")
+                .isNotEmpty();
+
+        for (String url : advertised) {
+            String path = url.substring(CONFIGURED_ISSUER.length());
+            int status = given()
+                    .header("X-Tenant-Id", UUID.randomUUID().toString())
+                    .when()
+                    .get(path)
+                    .then()
+                    .extract()
+                    .statusCode();
+
+            org.assertj.core.api.Assertions.assertThat(status)
+                    .as("discovery advertises %s, so the server must serve it", url)
+                    .isNotEqualTo(404);
+        }
     }
 
     @Test

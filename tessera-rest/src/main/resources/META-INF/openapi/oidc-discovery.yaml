@@ -95,7 +95,6 @@ components:
         - issuer
         - authorization_endpoint
         - token_endpoint
-        - userinfo_endpoint
         - jwks_uri
         - response_types_supported
         - grant_types_supported
@@ -112,8 +111,6 @@ components:
         authorization_endpoint:
           type: string
         token_endpoint:
-          type: string
-        userinfo_endpoint:
           type: string
         jwks_uri:
           type: string

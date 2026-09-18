@@ -120,9 +120,6 @@ public class AuthorizeResource {
         if (isBlank(state)) {
             return badRequest(AuthorizationError.INVALID_REQUEST, "state is required");
         }
-        if (isBlank(nonce)) {
-            return badRequest(AuthorizationError.INVALID_REQUEST, "nonce is required");
-        }
         // PKCE is mandatory and S256-only — a missing or non-S256 challenge is refused here,
         // mirroring the domain's compile-time guarantee (CodeChallenge / PkceMethod).
         if (isBlank(codeChallenge)) {
@@ -146,7 +143,24 @@ public class AuthorizeResource {
                     redirectUri,
                     parseScopes(scope),
                     state,
-                    nonce,
+                    // OIDC Core §3.1.2.1 makes nonce OPTIONAL for the code flow, so an
+                    // omitted nonce is a valid request, not a 400. Rejecting it — as this
+                    // endpoint used to — turned away spec-conformant relying parties. This
+                    // endpoint serves response_type=code and nothing else (see the check
+                    // above), so the flows where nonce is REQUIRED — implicit (§3.2.2.1)
+                    // and hybrid (§3.3.2.1) — are unreachable here: there is no response
+                    // type this server answers for which a missing nonce is a violation.
+                    //
+                    // An EMPTY nonce= is normalised to absent rather than rejected, because
+                    // RFC 6749 §3.1 requires it: "Parameters sent without a value MUST be
+                    // treated as if they were omitted from the request." The domain record
+                    // separately refuses to REPRESENT a blank nonce, so an empty value can
+                    // never survive as an empty `nonce` claim in an ID token — the wire
+                    // normalises, the domain forbids, and neither relies on the other.
+                    //
+                    // PKCE, which is what actually binds this code to this client, stays
+                    // mandatory and unchanged.
+                    isBlank(nonce) ? null : nonce,
                     CodeChallenge.s256(codeChallenge));
         } catch (IllegalArgumentException ex) {
             // A malformed challenge (wrong length / alphabet) or other structural problem.

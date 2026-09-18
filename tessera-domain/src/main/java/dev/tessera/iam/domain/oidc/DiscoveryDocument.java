@@ -15,7 +15,6 @@ import java.util.List;
  * @param issuer                          the exact configured issuer identifier
  * @param authorizationEndpoint           the authorization endpoint URL
  * @param tokenEndpoint                   the token endpoint URL
- * @param userinfoEndpoint                the UserInfo endpoint URL
  * @param jwksUri                         the JWK Set endpoint URL
  * @param responseTypesSupported          offered OAuth2 response types
  * @param grantTypesSupported             offered OAuth2 grant types
@@ -32,7 +31,6 @@ public record DiscoveryDocument(
         String issuer,
         String authorizationEndpoint,
         String tokenEndpoint,
-        String userinfoEndpoint,
         String jwksUri,
         List<String> responseTypesSupported,
         List<String> grantTypesSupported,
@@ -61,10 +59,15 @@ public record DiscoveryDocument(
     /**
      * Assembles the discovery document for a configured {@code issuer} from an enforced
      * capability set. The endpoint URLs are the canonical issuer-relative paths
-     * ({@code /authorize}, {@code /token}, {@code /userinfo}, {@code /jwks}); advertising
-     * them is required by OIDC Discovery. The {@code *_supported} values are copied
-     * verbatim from {@code caps}, so the document can advertise only what the server
-     * enforces.
+     * ({@code /authorize}, {@code /token}, {@code /jwks}); advertising them is required by
+     * OIDC Discovery. The {@code *_supported} values are copied verbatim from {@code caps},
+     * so the document can advertise only what the server enforces.
+     *
+     * <p>No {@code userinfo_endpoint} is advertised. It is OPTIONAL metadata in OIDC
+     * Discovery 1.0 §3, and this server serves no UserInfo resource — advertising a URL
+     * that answers 404 would break the "discovery never lies" invariant this record
+     * exists to hold. When a UserInfo resource is implemented, the member is added back
+     * alongside it and never before.
      *
      * @param issuer the exact configured issuer identifier (must not be blank)
      * @param caps   the enforced capability set
@@ -79,7 +82,6 @@ public record DiscoveryDocument(
                 issuer,
                 base + "/authorize",
                 base + "/token",
-                base + "/userinfo",
                 base + "/jwks",
                 caps.responseTypesSupported(),
                 caps.grantTypesSupported(),

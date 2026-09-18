@@ -3,27 +3,12 @@ package dev.tessera.iam.adapter.rest;
 import static io.restassured.RestAssured.given;
 import static org.assertj.core.api.Assertions.assertThat;
 
-import dev.tessera.iam.adapter.rest.support.DpopTestClient;
 import dev.tessera.iam.adapter.rest.support.FakeClientRepository;
 import dev.tessera.iam.adapter.rest.support.FakeClientSecretVerifier;
-import dev.tessera.iam.adapter.rest.support.FakeKeyProvider;
 import dev.tessera.iam.adapter.rest.support.TestClientCertificate;
-import dev.tessera.iam.domain.tenancy.BaselineId;
-import dev.tessera.iam.domain.tenancy.RealmKey;
-import dev.tessera.iam.domain.tenancy.TenantId;
 import io.quarkus.test.junit.QuarkusTest;
-import io.restassured.RestAssured;
-import io.restassured.config.RedirectConfig;
-import io.restassured.config.RestAssuredConfig;
 import io.restassured.response.Response;
-import jakarta.inject.Inject;
-import java.net.URI;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.Signature;
-import java.util.Base64;
 import java.util.Map;
-import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -36,28 +21,13 @@ import org.junit.jupiter.api.Test;
  * clients) plus the security-critical denial paths: a replayed code, a PKCE mismatch, a
  * {@code redirect_uri} mismatch, a wrong client secret, an unknown client, an
  * {@code unauthorized_client}, and missing parameters.
+ *
+ * <p>The request plumbing lives in {@link AuthorizationCodeFlowSupport}; the
+ * {@code nonce}-specific cases live in {@link AuthorizationCodeNonceTest}.
  */
 @QuarkusTest
 @DisplayName("/authorize -> /token Authorization Code + PKCE flow")
-class AuthorizationCodeFlowTest {
-
-    private static final String TENANT = UUID.randomUUID().toString();
-    private static final String REDIRECT_URI = "https://client.example/callback";
-    private static final String ISSUER = "https://issuer.test.example";
-    private static final String TOKEN_ENDPOINT = ISSUER + "/token";
-
-    /** The realm this test issues under: {@link #TENANT} at the zero (default) baseline. */
-    private static final RealmKey REALM =
-            new RealmKey(TenantId.fromString(TENANT), new BaselineId(new UUID(0L, 0L)));
-
-    /** A fresh DPoP client per test method — a public client's sender-constraining key. */
-    private final DpopTestClient dpop = new DpopTestClient();
-
-    private static final Base64.Encoder B64URL = Base64.getUrlEncoder().withoutPadding();
-    private static final Base64.Decoder B64URL_DEC = Base64.getUrlDecoder();
-
-    @Inject
-    FakeKeyProvider keyProvider;
+class AuthorizationCodeFlowTest extends AuthorizationCodeFlowSupport {
 
     // ----------------------------------------------------------------- happy paths
 
@@ -336,122 +306,5 @@ class AuthorizationCodeFlowTest {
                 .when().post("/token")
                 .then().statusCode(400)
                 .body("error", org.hamcrest.Matchers.equalTo("unsupported_grant_type"));
-    }
-
-    // ----------------------------------------------------------------- helpers
-
-    private Response authorize(String clientId, String redirectUri, String scope, String state,
-            String nonce, String challenge, String method, String subject) {
-        var req = given().config(noFollow())
-                .header("X-Tenant-Id", TENANT)
-                .queryParam("response_type", "code")
-                .queryParam("client_id", clientId)
-                .queryParam("redirect_uri", redirectUri)
-                .queryParam("scope", scope)
-                .queryParam("state", state)
-                .queryParam("nonce", nonce);
-        if (challenge != null) {
-            req.queryParam("code_challenge", challenge);
-        }
-        if (method != null) {
-            req.queryParam("code_challenge_method", method);
-        }
-        if (subject != null) {
-            req.header("X-Subject-Id", subject);
-        }
-        return req.when().get("/authorize");
-    }
-
-    private String authorizeAndExtractCode(String clientId, String verifier, String state,
-            String nonce) {
-        Response authorize = authorize(clientId, REDIRECT_URI, "openid", state, nonce,
-                s256(verifier), "S256", "user-sub-1");
-        authorize.then().statusCode(302);
-        String code = queryOf(authorize.getHeader("Location")).get("code");
-        assertThat(code).isNotBlank();
-        return code;
-    }
-
-    private Response token(String clientId, String code, String redirectUri, String verifier,
-            String secret) {
-        var req = given().config(noFollow())
-                .header("X-Tenant-Id", TENANT)
-                .contentType("application/x-www-form-urlencoded")
-                .formParam("grant_type", "authorization_code")
-                .formParam("code", code)
-                .formParam("redirect_uri", redirectUri)
-                .formParam("client_id", clientId)
-                .formParam("code_verifier", verifier);
-        if (secret != null) {
-            req.formParam("client_secret", secret);
-        }
-        return req.when().post("/token");
-    }
-
-    /** A public-client token request carrying a DPoP proof header. */
-    private Response tokenWithDpop(String clientId, String code, String redirectUri,
-            String verifier, String dpopProof) {
-        return given().config(noFollow())
-                .header("X-Tenant-Id", TENANT)
-                .header("DPoP", dpopProof)
-                .contentType("application/x-www-form-urlencoded")
-                .formParam("grant_type", "authorization_code")
-                .formParam("code", code)
-                .formParam("redirect_uri", redirectUri)
-                .formParam("client_id", clientId)
-                .formParam("code_verifier", verifier)
-                .when().post("/token");
-    }
-
-    private static RestAssuredConfig noFollow() {
-        return RestAssured.config().redirect(RedirectConfig.redirectConfig().followRedirects(false));
-    }
-
-    private static Map<String, String> queryOf(String location) {
-        assertThat(location).isNotBlank();
-        String query = URI.create(location).getQuery();
-        java.util.Map<String, String> out = new java.util.LinkedHashMap<>();
-        for (String pair : query.split("&")) {
-            int eq = pair.indexOf('=');
-            String k = java.net.URLDecoder.decode(pair.substring(0, eq), StandardCharsets.UTF_8);
-            String v = java.net.URLDecoder.decode(pair.substring(eq + 1), StandardCharsets.UTF_8);
-            out.put(k, v);
-        }
-        return out;
-    }
-
-    private static String newVerifier() {
-        byte[] bytes = new byte[48];
-        new java.security.SecureRandom().nextBytes(bytes);
-        return B64URL.encodeToString(bytes);
-    }
-
-    private static String s256(String verifier) {
-        try {
-            byte[] digest = MessageDigest.getInstance("SHA-256")
-                    .digest(verifier.getBytes(StandardCharsets.US_ASCII));
-            return B64URL.encodeToString(digest);
-        } catch (Exception e) {
-            throw new IllegalStateException(e);
-        }
-    }
-
-    private boolean verifySignature(String jws) throws Exception {
-        int firstDot = jws.indexOf('.');
-        int lastDot = jws.lastIndexOf('.');
-        byte[] signingInput = jws.substring(0, lastDot).getBytes(StandardCharsets.US_ASCII);
-        byte[] sig = B64URL_DEC.decode(jws.substring(lastDot + 1));
-        assertThat(firstDot).isLessThan(lastDot);
-        Signature verifier = Signature.getInstance("Ed25519");
-        verifier.initVerify(keyProvider.publicKey(REALM));
-        verifier.update(signingInput);
-        return verifier.verify(sig);
-    }
-
-    @SuppressWarnings("unchecked")
-    private static Map<String, Object> jsonPart(String jws, int index) {
-        String part = jws.split("\\.")[index];
-        String json = new String(B64URL_DEC.decode(part), StandardCharsets.UTF_8);
-        return io.restassured.path.json.JsonPath.from(json).getMap("$");
     }
 }
