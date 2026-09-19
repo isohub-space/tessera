@@ -36,5 +36,6 @@ Thumbs.db
 # on every write.
 ruvector.db
 **/ruvector.db
+.swarm/
 *.db-wal
 *.db-shm
