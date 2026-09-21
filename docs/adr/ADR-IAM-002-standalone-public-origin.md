@@ -1,4 +1,4 @@
-# 0001 — Tessera is a standalone public origin, not a service behind an app gateway
+# ADR-IAM-002 — Tessera is a standalone public origin, not a service behind an app gateway
 
 | Field | Value |
 |---|---|
