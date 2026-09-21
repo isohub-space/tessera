@@ -24,9 +24,12 @@ env:
   # This repo's own vault/tracker space code. Its ADR-<code>-… prefix names this project's
   # own public decision records, not a leaked reference into someone else's internal space —
   # so it is the one letter-coded ADR prefix this gate lets through. Every other letter-coded
-  # ADR-<code>- prefix stays blocked, and this does NOT extend to the <code>-<digits>
-  # issue-key pattern below (e.g. IAM-57) — that still names a private backlog issue and
-  # citing one in public text is still a leak regardless of this repo's own project code.
+  # ADR-<code>- prefix stays blocked, and this does NOT extend to the bare <code>-<digits>
+  # issue-key pattern (e.g. IAM-57) — that still names a private backlog issue and citing one
+  # in public text is still a leak regardless of this repo's own project code. Note that
+  # "IAM-002" is itself a substring of "ADR-IAM-002": the check below has to tell the two
+  # apart per occurrence, not by scanning each pattern separately over the whole text —
+  # otherwise an own-project ADR reference trips the issue-key clause on its own tail.
   OWN_PROJECT: IAM
 
 jobs:
@@ -46,15 +49,23 @@ jobs:
         run: |
           set -euo pipefail
           ai='co-authored-by:[[:space:]]*(claude|anthropic)|claude-session:|claude\.ai/code|generated (with|by) \[?claude|authored (with|by)[^.]*claude|anthropic\.com|🤖'
-          # Issue-tracker keys and the tracker host: unaffected by OWN_PROJECT. Even this
-          # repo's own space code still names a private backlog issue (e.g. IAM-57), which is
-          # still a leak in public text regardless of whose project it is.
-          issue_keys='(\b(IOS|IAM|INF|VEC)-[0-9])|(iospace\.atlassian)'
-          # Any letter-coded ADR-<code>- prefix is blocked EXCEPT this repo's own OWN_PROJECT
-          # — that one names this project's own public decision records. See the OWN_PROJECT
-          # comment above for why the issue-key clause doesn't get the same exemption.
-          has_foreign_adr_ref() {
-            printf '%s' "$1" | grep -oE '\bADR-[A-Z]{2,}-' | grep -vxF "ADR-${OWN_PROJECT}-" | grep -q .
+          # One token per position: an ADR-<code>-<digits> reference wins over the bare
+          # <code>-<digits> issue-key form where both would match at the same spot (POSIX
+          # leftmost-longest) — so "ADR-IAM-002" is classified once, as an ADR reference, not
+          # also flagged as a bare "IAM-002" issue key. Own-project ADR tokens pass; every
+          # foreign ADR-<code>- token, every bare issue key, and the tracker host do not.
+          tok_re='ADR-[A-Z]{2,}-[0-9]+|\b(IOS|IAM|INF|VEC)-[0-9]+'
+          has_internal_leak() {
+            local tok
+            while IFS= read -r tok; do
+              [ -z "$tok" ] && continue
+              case "$tok" in
+                "ADR-${OWN_PROJECT}-"*) continue ;;
+                *) return 0 ;;
+              esac
+            done < <(printf '%s' "$1" | grep -oE "$tok_re")
+            printf '%s' "$1" | grep -qE 'iospace\.atlassian' && return 0
+            return 1
           }
           fail=0
 
@@ -63,11 +74,8 @@ jobs:
           if printf '%s' "$text" | grep -qiE "$ai"; then
             echo "::error::PR title/body carries an AI-attribution/agent marker — remove it (human-authored, neutral text only)."; fail=1
           fi
-          if printf '%s' "$text" | grep -qE "$issue_keys"; then
-            echo "::error::PR title/body carries an internal tracker key — keep public text neutral."; fail=1
-          fi
-          if has_foreign_adr_ref "$text"; then
-            echo "::error::PR title/body cites another project's internal ADR-<code>- prefix — keep public text neutral."; fail=1
+          if has_internal_leak "$text"; then
+            echo "::error::PR title/body carries an internal tracker key or a foreign project's ADR-<code>- prefix — keep public text neutral."; fail=1
           fi
 
           # 2) Added lines of the PR diff. The guard files themselves contain these patterns by
@@ -80,11 +88,8 @@ jobs:
           if printf '%s' "$added" | grep -qiE "$ai"; then
             echo "::error::A changed line adds an AI-attribution/agent marker — remove it."; fail=1
           fi
-          if printf '%s' "$added" | grep -qE "$issue_keys"; then
-            echo "::error::A changed line adds an internal tracker key — the public repo must stay neutral."; fail=1
-          fi
-          if has_foreign_adr_ref "$added"; then
-            echo "::error::A changed line cites another project's internal ADR-<code>- prefix — the public repo must stay neutral."; fail=1
+          if has_internal_leak "$added"; then
+            echo "::error::A changed line adds an internal tracker key or a foreign project's ADR-<code>- prefix — the public repo must stay neutral."; fail=1
           fi
 
           if [ "$fail" -ne 0 ]; then
@@ -113,13 +118,22 @@ jobs:
         run: |
           set -euo pipefail
           ai='co-authored-by:[[:space:]]*(claude|anthropic)|claude-session:|claude\.ai/code|generated (with|by) \[?claude|authored (with|by)[^.]*claude|anthropic\.com|🤖'
-          # Issue-tracker keys and the tracker host: unaffected by OWN_PROJECT — see the
-          # OWN_PROJECT comment in the hygiene job above.
-          issue_keys='(\b(IOS|IAM|INF|VEC)-[0-9])|(iospace\.atlassian)'
-          has_foreign_adr_ref() {
-            printf '%s' "$1" | grep -oE '\bADR-[A-Z]{2,}-' | grep -vxF "ADR-${OWN_PROJECT}-" | grep -q .
+          # See the tok_re/has_internal_leak comment in the hygiene job above — one token per
+          # position, own-project ADR references pass, everything else internal does not.
+          tok_re='ADR-[A-Z]{2,}-[0-9]+|\b(IOS|IAM|INF|VEC)-[0-9]+'
+          has_internal_leak() {
+            local tok
+            while IFS= read -r tok; do
+              [ -z "$tok" ] && continue
+              case "$tok" in
+                "ADR-${OWN_PROJECT}-"*) continue ;;
+                *) return 0 ;;
+              esac
+            done < <(printf '%s' "$1" | grep -oE "$tok_re")
+            printf '%s' "$1" | grep -qE 'iospace\.atlassian' && return 0
+            return 1
           }
-          if printf '%s' "$BODY" | grep -qiE "$ai" || printf '%s' "$BODY" | grep -qE "$issue_keys" || has_foreign_adr_ref "$BODY"; then
+          if printf '%s' "$BODY" | grep -qiE "$ai" || has_internal_leak "$BODY"; then
             echo "Comment $HTML_URL matched a hygiene pattern — hiding it."
             gh api graphql -f query='mutation($id: ID!) { minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) { minimizedComment { isMinimized } } }' -f id="$NODE_ID"
             gh api "repos/$REPO/issues/$ISSUE/comments" \

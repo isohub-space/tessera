@@ -9,11 +9,22 @@ set -uo pipefail
 ai='co-authored-by:[[:space:]]*(claude|anthropic)|claude-session:|claude\.ai/code|generated (with|by) \[?claude|authored (with|by)[^.]*claude|anthropic\.com'
 # This repo's own vault/tracker space code — see the OWN_PROJECT comment in
 # .github/workflows/pr-hygiene.yml for why its ADR-<code>- prefix (and only that, not the
-# <code>-<digits> issue-key pattern below) is exempt from the block.
+# bare <code>-<digits> issue-key form) is exempt from the block, and for why "IAM-002" being
+# a substring of "ADR-IAM-002" means the two have to be classified per occurrence rather than
+# scanned as two independent patterns over the whole text.
 own_project='IAM'
-issue_keys='(\b(IOS|IAM|INF|VEC)-[0-9])|(iospace\.atlassian)'
-has_foreign_adr_ref() {
-  printf '%s' "$1" | grep -oE '\bADR-[A-Z]{2,}-' | grep -vxF "ADR-${own_project}-" | grep -q .
+tok_re='ADR-[A-Z]{2,}-[0-9]+|\b(IOS|IAM|INF|VEC)-[0-9]+'
+has_internal_leak() {
+  local tok
+  while IFS= read -r tok; do
+    [ -z "$tok" ] && continue
+    case "$tok" in
+      "ADR-${own_project}-"*) continue ;;
+      *) return 0 ;;
+    esac
+  done < <(printf '%s' "$1" | grep -oE "$tok_re")
+  printf '%s' "$1" | grep -qE 'iospace\.atlassian' && return 0
+  return 1
 }
 zero='0000000000000000000000000000000000000000'
 status=0
@@ -41,12 +52,8 @@ while read -r _localref localsha _remoteref remotesha; do
     echo "pre-push BLOCKED: AI-attribution marker added in the diff ($range)." >&2
     status=1
   fi
-  if printf '%s' "$added" | grep -qE "$issue_keys"; then
-    echo "pre-push BLOCKED: internal tracker key added in the diff ($range)." >&2
-    status=1
-  fi
-  if has_foreign_adr_ref "$added"; then
-    echo "pre-push BLOCKED: another project's internal ADR-<code>- prefix added in the diff ($range)." >&2
+  if has_internal_leak "$added"; then
+    echo "pre-push BLOCKED: internal tracker key or a foreign project's ADR-<code>- prefix added in the diff ($range)." >&2
     status=1
   fi
 done
