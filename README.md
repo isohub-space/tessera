@@ -192,7 +192,7 @@ deployment that has no such gateway — a container platform's own domain mappin
 reverse proxy — runs it in **single-tenant mode** instead, which is the shape a first
 deployment for one relying party usually takes. Why tessera is deployed on its own origin
 rather than behind an application gateway, and what that costs, is recorded in
-[docs/adr/0001](docs/adr/0001-standalone-public-origin.md).
+[docs/adr/ADR-IAM-002](docs/adr/ADR-IAM-002-standalone-public-origin.md).
 
 | Setting | Effect |
 |---------|--------|
