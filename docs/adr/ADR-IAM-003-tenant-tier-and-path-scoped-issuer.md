@@ -134,10 +134,23 @@ That exemption is the dangerous part, so it is bounded explicitly:
 - The registry is reached through a **single narrow port** returning only
   `(tenant, tier, status)` — never through `TenantScopedSession`, and never joined to
   tenant-scoped data.
-- `TenantChokepointArchTest` currently requires every repository to obtain sessions via
-  `TenantScopedSession`. It must be extended so the registry repository is a **named,
-  asserted exemption** rather than a silent hole. An exemption the test enumerates is a
-  decision; an exemption the test cannot see is a regression waiting to be written.
+- **The registry repository stays inside the package the arch rule watches, with an
+  enumerated exemption.** This needs stating precisely, because the obvious implementation
+  is the unsafe one. `TenantChokepointArchTest.repositories_routeThrough_tenantScopedSession`
+  is scoped by package: *no class in* `…adapter.persistence.repository..` *may depend on*
+  `Mutiny$SessionFactory`. A registry read must not be tenant-scoped — that is the whole
+  point of it — so it cannot go through `TenantScopedSession` and must reach the raw session
+  factory, which that rule forbids. There are exactly two ways to satisfy the build, and they
+  are not equivalent:
+
+  1. put the registry repository *outside* `…repository..`, whereupon the rule stops seeing
+     it and the build goes green because the guard was moved, not satisfied; or
+  2. keep it inside the package and add an explicit, by-name exclusion to the rule.
+
+  **Take (2).** Option (1) is indistinguishable from (2) in CI and opposite in meaning, and it
+  leaves the next cross-tenant repository free to be added the same way with nothing to
+  notice. An exemption the test enumerates is a decision someone has to edit the test to
+  make; an exemption obtained by package placement is a hole no test can report.
 - Writes are administrative only. No request-path code writes the registry.
 
 **Fail-closed rule: a tenant absent from the registry gets no tier and no token.** It is not
@@ -369,7 +382,7 @@ trusting a request-derived value.
 | **Issuer spoofing via the new path channel** | D2: the path cannot select a realm, so no token can be minted under a realm the caller merely asked for | An attacker able to register a slug visually close to a victim's — see OQ-1 |
 | **Tier escalation** | D1: tier is read from an administratively written registry, never from a request header or claim | Compromise of the administrative write path; out of scope here |
 | **Key custody across tiers** | ADR-001's single provider behind `KeyProviderPort` | N keysets multiply the custody surface. ADR-001's D3 asks for a budget line on sign-request cost and provider throttling; under D4a that line must be re-run against tenants × keys-per-tenant, and against the provider's **key-count** quota, not only its request rate |
-| **Registry read as an RLS bypass** | D1's narrow port plus the asserted arch-test exemption | The exemption exists; its value depends on the test naming it |
+| **Registry read as an RLS bypass** | D1's narrow port, plus a by-name exclusion in the arch rule rather than package placement | The exemption exists by design. Its value depends entirely on it being enumerated — an equally green build is reachable by moving the class out of the watched package, which reports nothing |
 
 ---
 
@@ -391,7 +404,9 @@ realm enlarges the string adopters must preserve byte-for-byte across proxies.
 
 - Tenant claim on the access token plus the `iss` and tenant comparison in the introspector
   (D4b) — **independent of everything else here; recommend it goes first**.
-- Registry table, narrow port, and the `TenantChokepointArchTest` named exemption (D1).
+- Registry table, narrow port, and the by-name exclusion in
+  `TenantChokepointArchTest.repositories_routeThrough_tenantScopedSession` — **not** a
+  registry repository placed outside the watched package (D1).
 - The realm-mismatch rejection in `TenantResolutionFilter`, with the chokepoint tests extended
   (D2).
 - The issuer derivation function, the restated `IssuerConsistencyCheck`, the generalised
