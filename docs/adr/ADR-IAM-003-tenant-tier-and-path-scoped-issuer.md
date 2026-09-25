@@ -404,18 +404,60 @@ and discovery documents all become per-tenant, multiplying operational load and 
 surface. The issuer derivation is a migration for any existing deployment (OQ-3). The path
 realm enlarges the string adopters must preserve byte-for-byte across proxies.
 
-**Follow-on work this creates** (each needs its own item):
+---
 
-- Tenant claim on the access token plus the `iss` and tenant comparison in the introspector
-  (D4b) — **independent of everything else here; recommend it goes first**.
-- Registry table, narrow port, and the by-name exclusion in
-  `TenantChokepointArchTest.repositories_routeThrough_tenantScopedSession` — **not** a
-  registry repository placed outside the watched package (D1).
-- The realm-mismatch rejection in `TenantResolutionFilter`, with the chokepoint tests extended
-  (D2).
-- The issuer derivation function, the restated `IssuerConsistencyCheck`, the generalised
-  discovery tests, and the `signing_key.issuer` migration (D3).
-- Per-realm discovery and JWKS routes (D5).
+## Closing note — sequencing and candidate splits
+
+The follow-on work, as input for splitting the tier-driven issuer topology and
+lifecycle-consumer item. Sizes are S/M/L shape only; points belong to the backlog owner. That
+item's acceptance criteria are partly contradicted: "Starter: shared keyset, tenant carried by
+a `tenant_id` claim" is rejected by D4a, so rewrite them against A, B and C below.
+
+**Sequencing: the token-layer tenant binding (D4b) goes first, alone, and may start before
+ratification.** This confirms the earlier read. It closes Finding 1's single point of failure on
+today's single-issuer topology. It depends on no Proposed decision, whereas every other item
+waits on D1 or OQ-1. And D4 wants two independent boundaries before any tiering work touches
+keys. One revision: put the comparison in `IntrospectService`, not `JwsAccessTokenIntrospector`.
+The adapter returns claims and the application layer rejects a mismatch, which is how "no
+adapter can quietly drop it" is enforced in practice. Then the registry (D1), then the
+path-scoped issuer work (D2, D3, D5). The lifecycle consumer is off this path entirely (D6).
+
+**Candidate A — access-token tenant binding (D4b). Size S. Depends on nothing.** Every access
+token carries its realm, and introspection returns `inactive` when the claimed realm or `iss`
+disagrees with the realm it is presented in. Reuse `realm_tenant` and `realm_baseline`, which
+the ID token already emits under `profile`, rather than inventing `tenant_id`. On the access
+token they are unconditional: a security claim, not a profile one. Both mint paths need it, the
+token service and the refresh service, or refreshed tokens go `inactive` when the check ships.
+`VerifiedAccessToken` gains `iss` and the realm claims. `issuer(realm)` is the configured
+constant today, so D3 later changes only the function behind the check. The story must decide
+whether to compare the baseline too, given keys are per tenant, not per baseline (OQ-4). It
+must also decide whether pre-deploy tokens may lack the claim; recommended no, since the access
+TTL bounds the disruption. The original item never scoped this, so it may fit better as a
+sibling than a carve-out.
+
+**Candidate B — tenant registry with fail-closed refusal (D1). Size M. Depends on
+ratification and OQ-4; on OQ-1 only if the slug ships here.** It delivers the `tenant` table
+outside per-tenant RLS, the narrow read port, and the by-name exclusion in
+`TenantChokepointArchTest`. An unregistered tenant gets no token. A `status` column makes a
+suspended tenant get none either, which delivers the original "suspended tenant fails closed"
+intent with no messaging. It needs an administrative write path and a migration registering
+existing tenants, the single-tenant fixed tenant and the dev seed, or upgrade refuses everyone.
+If OQ-1 is still open, ship tier and status here and add the slug with Candidate C.
+
+**Candidate C — path-scoped issuer topology (D2, D3, D5). Size L; split again before
+committing.** Depends on B for slug resolution and on OQ-1 to OQ-3. It splits by extension into
+three pieces: the realm-mismatch rejection in `TenantResolutionFilter` with the chokepoint tests
+extended; the issuer derivation, restated `IssuerConsistencyCheck`, generalised discovery tests
+and `signing_key.issuer` backfill; and the per-realm discovery and JWKS routes. The last should
+add the startup check D5 relies on, since nothing enforces cache TTL below dwell today.
+
+**The `tenant.lifecycle.changed` consumer is not a candidate, nor a spike for this work.**
+Tessera has no messaging layer: no reactive-messaging or Kafka dependency, no `@Incoming`,
+`@Outgoing` or `Emitter`. Under D1 and D6 a tier or status change is a registry write, and B
+already makes suspension fail closed. The consumer matters only if an upstream system comes to
+own tenant lifecycle. Adopting messaging is one upstream decision, shared with consumer-side
+tenant propagation; any spike belongs to that decision, serving both. Recommended: remove the
+consumer from the implementation item and park it behind that decision.
 
 ---
 
@@ -455,4 +497,4 @@ realm enlarges the string adopters must preserve byte-for-byte across proxies.
 | `iss` single value vs per-realm, anti-`Host` property preserved | D3 — per-realm by derivation from a configured base; the anti-`Host` property survives because it never depended on the issuer being constant. |
 | Per-realm discovery / JWKS; TTL-vs-dwell invariant | D5 — per-realm routes; timings stay global so the invariant stays a two-scalar check. |
 | What is deliverable without messaging | D6 — all of it. Under D1 a tier change is an administrative write with no consumer. |
-| Implementation item re-pointed and split | **Not done.** No tracker status was changed as part of this spike, and no production code was touched. Re-pointing should follow ratification; the scope has moved, and D4b should be split out as an independent item that does not depend on the tiering decision at all. |
+| Implementation item re-pointed and split | **Input produced; tracker change pending.** The closing note gives the sequencing (D4b first) and candidate splits A–C, and recommends removing the lifecycle consumer. The backlog owner makes the tracker change. No production code was touched. |
