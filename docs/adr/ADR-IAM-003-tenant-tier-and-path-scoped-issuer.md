@@ -93,8 +93,9 @@ prerequisite of the other, and the ordering constrains delivery.
 
 ### Finding 4 — per-realm issuers are already representable in persistence
 
-`signing_key` carries an `issuer` column and selects on it, and `OidcDiscoveryConfig.issuer()`
-already documents the intent:
+`signing_key` carries an `issuer` column, which the key-rotation service stamps at mint time and
+V2 indexes, although no query reads it yet (see D3). `OidcDiscoveryConfig.issuer()` already
+documents the intent:
 
 > The `issuer` is server configuration, **resolved per realm** […] For the baseline tier a
 > single configured issuer serves every realm; per-realm / per-tenant issuers are a later tier.
@@ -251,11 +252,14 @@ through the same function. `iam.keys.issuer` stops being an independently stampe
 key row's `issuer` column is populated with `issuer(realm)` at mint time, and the startup check
 compares the configured bases.
 
-> **Migration consequence, flagged because it is easy to miss.** Key selection is
-> `(tenant_id, issuer, key_use, state)`. Changing the derivation changes the selection
-> predicate, so existing `ACTIVE` rows stamped with the old scalar stop being selected. Any
-> deployment moving from a single issuer to a derived one needs a real migration of
-> `signing_key.issuer`, not a config edit. See **OQ-3**.
+> **Migration consequence, flagged because it is easy to miss.** V2 declares a selection index
+> on `(tenant_id, issuer, key_use, state)`, but no query uses `issuer`: `DbKeyProviderAdapter`
+> loads the tenant's rows under RLS and picks by `state` in `KeyRotationPolicy`. So changing the
+> derivation does **not** orphan existing `ACTIVE` keys; it leaves their stamped `issuer` stale.
+> The migration that bites is relying-party-facing: every new token's `iss` changes, and so does
+> its `aud`, because both access-token mint paths currently set `aud` to the issuer. Backfill
+> `signing_key.issuer` so the column stays truthful before anything starts selecting on it. See
+> **OQ-3**.
 
 **Rejected alternatives.**
 
@@ -321,7 +325,7 @@ each keyset dwells independently. What changes is the number of independent rota
 the invariant a two-scalar comparison that a single startup check can enforce. Per-tenant
 timings would turn it into an N-way check with no natural place to run it and no natural place
 to notice when one tenant's pair is inverted. Rotation load is already per-tenant shaped —
-selection is by `(tenant_id, issuer, key_use, state)` — so N keysets are load, not redesign.
+selection is per tenant under RLS, then by `state` — so N keysets are load, not redesign.
 
 ### D6 — What is deliverable without a messaging layer: everything here
 
@@ -430,9 +434,9 @@ realm enlarges the string adopters must preserve byte-for-byte across proxies.
   that does not check `kid` provenance. **Recommended: no** — the base JWKS serves only the
   base realm. Open because it has a migration cost for existing integrations.
 - **OQ-3 — upgrade path for an existing single-tenant deployment.** Whether its issuer changes
-  shape at all, and the migration for `signing_key.issuer` given that selection keys on it
-  (D3). An issuer that changes shape is an issuer change, which every relying party must be
-  told about.
+  shape at all, and the backfill of `signing_key.issuer` (D3). An issuer that changes shape is
+  an issuer change, and today an audience change too, which every relying party must be told
+  about.
 - **OQ-4 — is tier per tenant or per realm?** `RealmKey` is `(tenant, baseline)`, and keys,
   clients and discovery are all realm-scoped, but the spike frames tier as a tenant property.
   **Recommended: tier is per tenant and applies to all its baselines.** Open because nothing
