@@ -4,6 +4,7 @@
 |---|---|
 | Status | **Proposed** — awaiting ratification. Not a decision until accepted. |
 | Date | 2026-09-23 |
+| Amended | 2026-09-29: security review. D1, D2, D3, D4b and D5 are tightened, the threat model is extended, and two statements about the existing code are corrected. Each amendment is marked **Amendment** in place. |
 | Spike | tenant tier as source of truth + path-scoped issuer vs header-only tenant resolution (time-box 3 days, deliverable = this record) |
 | Affects | tenant resolution, issuer configuration, signing-key topology, introspection, discovery/JWKS |
 | Relates to | [ADR-IAM-002](ADR-IAM-002-standalone-public-origin.md) (standalone public origin), [ADR-001](ADR-001-audit-checkpoint-key-custody.md) (key custody) |
@@ -124,11 +125,9 @@ doing so. The decisions below keep the path strictly non-authoritative.
 
 ### D1 — Tier source of truth: a tenant registry table, outside per-tenant RLS, written administratively; unknown tenant is refused
 
-A new `tenant` registry table is the source of truth for `(tenant, slug, tier, status)`. It is
-a new persistence root and it is **inherently cross-tenant**: the registry must be readable
-*before* a request is scoped to a tenant, because reading it is part of establishing which
-tenant that is. It therefore cannot sit under the `app.tenant_id` RLS policy that protects
-every other table.
+A new `tenant` registry table is the source of truth for `(tenant, slug, tier, status)`. It is **inherently cross-tenant**: the registry must be readable *before* a request is scoped to a tenant, because reading it is part of establishing which tenant that is. It therefore cannot sit under the `app.tenant_id` RLS policy that protects every other tenant-scoped table.
+
+**Amendment: it is not the first root outside RLS.** V6 already created `refresh_family_directory` without RLS, and `DbRefreshTokenTenantResolver` (`adapter.persistence.refresh`) reads it through the raw `Mutiny.SessionFactory`. `FirstBootProvisioner` (`adapter.persistence.bootstrap`) does the same. Neither class is in the package the arch rule watches, so the package-placement hole described below already exists. The registry is the second such root, and the bounds below apply to both.
 
 That exemption is the dangerous part, so it is bounded explicitly:
 
@@ -152,7 +151,9 @@ That exemption is the dangerous part, so it is bounded explicitly:
   leaves the next cross-tenant repository free to be added the same way with nothing to
   notice. An exemption the test enumerates is a decision someone has to edit the test to
   make; an exemption obtained by package placement is a hole no test can report.
-- Writes are administrative only. No request-path code writes the registry.
+- **Amendment: the rule covers the whole persistence layer.** An enumerated exemption only means something if the rule sees every class that could need one. `TenantChokepointArchTest` is rewritten over `dev.tessera.iam.adapter.persistence..`: only `TenantScopedSession` and an enumerated allowlist may depend on `Mutiny$SessionFactory`. The allowlist starts as `DbRefreshTokenTenantResolver`, `FirstBootProvisioner` and the registry adapter. Raw-factory users outside that module, today `SigningKeyReadinessCheck` in the launcher, are enumerated in a rule of their own so they are not left unwatched.
+- **Amendment: writes are administrative only, and the database enforces it.** V1 gives `iam_app` `SELECT, INSERT, UPDATE, DELETE` on every future table through `ALTER DEFAULT PRIVILEGES`, so a registry table without RLS would be writable from the request path by default. The registry migration revokes `INSERT, UPDATE, DELETE` on `tenant` from `iam_app`, and administrative writes use a separate role. An integration test shows that `iam_app` cannot write the table. A request-path bug must not be able to change a tenant's tier, status or slug.
+- **Amendment: lifecycle and error paths.** A suspended tenant's existing access tokens introspect as `inactive`, and its refresh families fail to refresh; suspension does not only block issuance. A registry read error is a `503`, never a fallback to a default tier or status. If the registry is cached, the cache TTL is the longest a suspension can take to bite, and it is stated in configuration.
 
 **Fail-closed rule: a tenant absent from the registry gets no tier and no token.** It is not
 defaulted to Starter. Two reasons: an unknown tenant is an unknown principal, not a tier
@@ -202,6 +203,10 @@ rule: a request on the wrong realm path is refused. The path is neither authorit
 ornamental. It is a **redundant assertion that must agree**, which is what makes a per-realm
 `iss` mean something without making the path a tenant source.
 
+**Amendment: the topology D2 assumes.** D2 treats the header and the path as independent channels, but ADR-IAM-002 says a multi-tenant standalone origin gets its tenant from a load-balancer rule that sets a fixed header. With one fixed header per origin, each origin serves one tenant, and the path realm is a consistency check that adds no isolation. If the load balancer maps the path to the header, "must agree" is circular and the path is in effect what picks the tenant, which ADR-IAM-002 rejected. So the tenant boundary does not rest on the header. It rests on per-realm client authentication, per-realm credentials and keysets (D4a), and the token-layer binding (D4b). D2 is a guard against misrouting, not the isolation mechanism. A deployment that maps the path to the header at its edge must say so, and it gains nothing from D2.
+
+**Amendment: path handling.** The realm is read from the matched route parameter, never by parsing the raw path. Encoded `/`, dot segments, matrix parameters and case variants of a realm segment are rejected. The forwarded-prefix setting stays off, so no proxy header can add or strip a realm prefix.
+
 **Rejected alternatives.**
 
 - **A2a — the path is authoritative for Enterprise; the header is dropped.** Rejected. It
@@ -231,6 +236,8 @@ issuer(realm) = base + "/realms/" + slug(realm)       // path-issuer tier
 where `base` is `iam.oidc.issuer`, unchanged, still server configuration, still never
 request-derived. **One definition, one place.** String concatenation at two call sites is how
 the two issuer settings drifted apart in the first place.
+
+**Amendment: the base-only issuer is allowed only in fixed-tenant mode.** Any deployment serving more than one tenant uses the per-realm form, whatever the tier. `sub` is unique only per `(tenant, baseline)` (V3), and both access-token mint paths set `aud` to the issuer, so with one shared `iss` the pair `(iss, sub)` no longer names one user (OIDC Core §2). A relying party that serves several tenants and keys accounts on `(iss, sub)` can then merge users from two tenants. The ID token carries the realm only when `profile` is granted, so it does not help. D4b closes this for introspection only; a relying party that validates tokens locally sees `iss` and `sub` and nothing else. Consequently, the "baseline tier" line above describes fixed-tenant mode, not a tier a multi-tenant deployment may choose.
 
 **`DiscoveryEndpointTest.issuerIsConfiguredNotHost` generalises without weakening.** Today it
 asserts the advertised issuer equals the configured constant under a spoofed `Host`. The
@@ -299,6 +306,15 @@ the registry, not on tiering, not on path issuers. It is implementable and testa
 current code today. It should be split out as its own item and should not wait for the tiering
 work.
 
+**Amendment: D4b compares the full realm.** The comparison is against the whole `RealmKey`, `(tenant, baseline)`, not the tenant alone. `DbKeyProviderAdapter.publishedJwks` selects keys by `realm.tenant()` only, so today an access token minted for `(T, B1)` introspects as `active` in `(T, B2)`. Refresh-token introspection already treats `(tenant, baseline)` as the isolation unit, and the two token types must agree.
+
+**Amendment: D4b fails closed.** D4b is safe to ship first only with these rules:
+
+- A token with no realm claims, no `iss` or no `exp` is `inactive`. Today `IntrospectService.introspectAccess` treats a token with no `exp` as active.
+- Rollout is two-phase so a rolling multi-instance deploy does not reject valid tokens: first emit the claims on both mint paths, then wait one access-token TTL, then enforce.
+- Until D3 ships, `iss` is the same for every tenant, so only the realm claims tell tenants apart; comparing `iss` adds separation only after D3.
+- The realm claims are security claims. They are written after every claim contributor has run, under reserved names a contributor cannot set (`ClaimContributor` already writes `realm_tenant` on the profile path).
+
 **Rejected alternatives.**
 
 - **A4a — shared Starter keyset, with a tenant claim as the compensating control.** Rejected
@@ -308,7 +324,7 @@ work.
   Rejected. The realistic failure is a *confused* relying party, not a malicious one: an RP
   legitimately holding credentials in one realm, handed a token minted in another, gets
   `active` and acts on a foreign subject. Authenticating the introspecting client does not
-  address a token that should never have verified.
+  address a token that should never have verified. It is also weaker than it looks today: a public client introspects with its `client_id` alone, which makes introspection a token scanner for anyone within the realm (RFC 7662 §4). That is out of scope here, but it is recorded so it is not mistaken for a control.
 
 ### D5 — Per-realm discovery and JWKS for the path-issuer tier; the cache-TTL-vs-dwell timings stay global
 
@@ -326,6 +342,10 @@ the invariant a two-scalar comparison that a single startup check can enforce. P
 timings would turn it into an N-way check with no natural place to run it and no natural place
 to notice when one tenant's pair is inverted. Rotation load is already per-tenant shaped —
 selection is per tenant under RLS, then by `state` — so N keysets are load, not redesign.
+
+**Amendment: the dwell is enforced, not assumed.** `JwksCacheTtlVsDwellTest` checks cache TTL against dwell for the shipped configuration only, and nothing checks that a key actually dwells: `KeyRotationService.promoteToActive` has no time check, and `FirstBootProvisioner` promotes a key as soon as it is minted. `KeyRotationPolicy` refuses to promote a `PENDING` key before its dwell has elapsed, and a startup check asserts TTL < dwell for the running configuration. First boot is the one exception, because no verifier can hold a cached JWKS yet, and it is named as such.
+
+**Amendment: responses are not cached across tenants.** JWKS and discovery responses are `Cache-Control: public`, and in header mode they are selected by `X-Tenant-Id` on a shared URL with no `Vary` header, so a shared cache can serve one tenant's keys or metadata to another. Every multi-tenant deployment either sends `Vary: X-Tenant-Id` on these responses or serves them only on per-realm URIs.
 
 ### D6 — What is deliverable without a messaging layer: everything here
 
@@ -381,12 +401,13 @@ trusting a request-derived value.
 
 | Threat | What answers it | Residual |
 |---|---|---|
-| **Tenant confusion** — a token minted for one tenant accepted in another | D4a keyset partition, D4b tenant-claim and `iss` comparison, D2 mismatch rejection | An RP that introspects in the wrong realm now gets a correct `inactive`, which may present as an availability problem rather than a security one |
+| **Tenant confusion** — a token minted for one tenant accepted in another | D4a keyset partition, D4b full-realm claim and `iss` comparison, D2 mismatch rejection, and for local validation and ID tokens a per-realm `iss` in every multi-tenant deployment (D3 amendment) | An RP that introspects in the wrong realm now gets a correct `inactive`, which may present as an availability problem rather than a security one |
+| **Cross-tenant caching of keys or metadata** | `Vary: X-Tenant-Id` or per-realm URIs (D5 amendment) | A shared cache that ignores `Vary`; per-realm URIs are the robust form |
 | **Issuer spoofing via `Host`** | Unchanged: the issuer derives from configuration, never from the request (D3); the existing test is kept verbatim and extended | None known |
 | **Issuer spoofing via the new path channel** | D2: the path cannot select a realm, so no token can be minted under a realm the caller merely asked for | An attacker able to register a slug visually close to a victim's — see OQ-1 |
-| **Tier escalation** | D1: tier is read from an administratively written registry, never from a request header or claim | Compromise of the administrative write path; out of scope here |
-| **Key custody across tiers** | ADR-001's single provider behind `KeyProviderPort` | N keysets multiply the custody surface. ADR-001's D3 asks for a budget line on sign-request cost and provider throttling; under D4a that line must be re-run against tenants × keys-per-tenant, and against the provider's **key-count** quota, not only its request rate |
-| **Registry read as an RLS bypass** | D1's narrow port, plus a by-name exclusion in the arch rule rather than package placement | The exemption exists by design. Its value depends entirely on it being enumerated — an equally green build is reachable by moving the class out of the watched package, which reports nothing |
+| **Tier escalation** | D1: tier is read from an administratively written registry, never from a request header or claim; the runtime role has no write privilege on it (D1 amendment) | Compromise of the separate administrative role; out of scope here |
+| **Key custody across tiers** | ADR-001's single provider behind `KeyProviderPort` | N keysets multiply the custody surface. ADR-001's D3 asks for a budget line on sign-request cost and provider throttling; under D4a that line must be re-run against tenants × keys-per-tenant, and against the provider's **key-count** quota, not only its request rate. Per-tenant keysets still share one envelope key-encryption key or KMS key, so D4a separates keys logically under a single custody root |
+| **Registry read as an RLS bypass** | D1's narrow port, plus an enumerated allowlist in an arch rule that covers the whole persistence layer (D1 amendment) | The exemption exists by design. Its value depends entirely on it being enumerated; with the rule widened, moving a class to another persistence package no longer hides it |
 
 ---
 
@@ -429,10 +450,7 @@ the ID token already emits under `profile`, rather than inventing `tenant_id`. O
 token they are unconditional: a security claim, not a profile one. Both mint paths need it, the
 token service and the refresh service, or refreshed tokens go `inactive` when the check ships.
 `VerifiedAccessToken` gains `iss` and the realm claims. `issuer(realm)` is the configured
-constant today, so D3 later changes only the function behind the check. The story must decide
-whether to compare the baseline too, given keys are per tenant, not per baseline (OQ-4). It
-must also decide whether pre-deploy tokens may lack the claim; recommended no, since the access
-TTL bounds the disruption. The original item never scoped this, so it may fit better as a
+constant today, so D3 later changes only the function behind the check. The comparison covers the baseline too (D4b amendment), and a token without the claims is `inactive` once enforcement starts; the two-phase rollout keeps pre-deploy tokens from being rejected mid-deploy. The original item never scoped this, so it may fit better as a
 sibling than a carve-out.
 
 **Candidate B — tenant registry with fail-closed refusal (D1). Size M. Depends on
@@ -449,7 +467,7 @@ committing.** Depends on B for slug resolution and on OQ-1 to OQ-3. It splits by
 three pieces: the realm-mismatch rejection in `TenantResolutionFilter` with the chokepoint tests
 extended; the issuer derivation, restated `IssuerConsistencyCheck`, generalised discovery tests
 and `signing_key.issuer` backfill; and the per-realm discovery and JWKS routes. The last should
-add the startup check D5 relies on, since nothing enforces cache TTL below dwell today.
+add the startup check and dwell enforcement from the D5 amendment; `JwksCacheTtlVsDwellTest` covers only the shipped configuration today.
 
 **The `tenant.lifecycle.changed` consumer is not a candidate, nor a spike for this work.**
 Tessera has no messaging layer: no reactive-messaging or Kafka dependency, no `@Incoming`,
@@ -469,7 +487,7 @@ consumer from the implementation item and park it behind that decision.
   parties compare character-for-character and may pin indefinitely. Reuse of a deleted
   tenant's slug is the sharpest case: it makes a new tenant indistinguishable from an old one
   to any RP holding a pinned issuer. Deliberately left open — it is a product decision with a
-  security tail, and it should not be settled inside an engineering ADR.
+  security tail, and it should not be settled inside an engineering ADR. **Amendment: a security floor holds whichever way it is decided.** Slugs are lowercase ASCII only, never `xn--` (punycode), never a reserved name, and never reassigned: a deleted tenant's slug is tombstoned.
 - **OQ-2 — does the base JWKS serve Enterprise keys?** Serving them keeps relying parties that
   hard-coded the base URI working. Not serving them prevents a base JWKS that returns every
   tenant's keys from re-creating shared-keyset confusion at the verification layer for any RP
