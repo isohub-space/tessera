@@ -21,7 +21,9 @@
 #   _IMAGE_TAG     the immutable tag pushed next to :latest, normally the short commit
 #                  id. Not the built-in $SHORT_SHA: Cloud Build fills that only for
 #                  trigger builds, so a `gcloud builds submit` would push the invalid
-#                  reference "tessera:" and fail.
+#                  reference "tessera:" and fail. A build trigger should set
+#                  _IMAGE_TAG to $SHORT_SHA; left unset, it pushes the mutable ":manual",
+#                  which a repository with immutable tags rejects on the second push.
 #
 # Example one-off submit (adjust the substitutions to your own project's values). The
 # leading ^;^ switches gcloud's pair separator to ";", which a profile list such as
