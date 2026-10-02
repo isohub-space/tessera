@@ -3,4 +3,8 @@
 .claude-flow
 **/target/**
 !**/target/quarkus-app/**
+# Re-include the directory itself too: `**/target/**` matches target/quarkus-app as a
+# path, and the pattern above matches only what is inside it, so without this line the
+# whole fast-jar is left out of the build context and the image's COPY finds nothing.
+!**/target/quarkus-app
 *.md

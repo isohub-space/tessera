@@ -18,12 +18,18 @@
 #                  one instance passes "prod,singlenode" to leave the Infinispan
 #                  authorization-code store (and its readiness check) out of the image and
 #                  use the in-process store instead — see application.properties.
+#   _IMAGE_TAG     the immutable tag pushed next to :latest, normally the short commit
+#                  id. Not the built-in $SHORT_SHA: Cloud Build fills that only for
+#                  trigger builds, so a `gcloud builds submit` would push the invalid
+#                  reference "tessera:" and fail.
 #
-# Example one-off submit (adjust the substitutions to your own project's values):
+# Example one-off submit (adjust the substitutions to your own project's values). The
+# leading ^;^ switches gcloud's pair separator to ";", which a profile list such as
+# "prod,singlenode" needs, since its comma would otherwise split the pair:
 #
 #   gcloud builds submit \
 #     --config=docker/cloudbuild.yaml \
-#     --substitutions=_AR_LOCATION=europe-west1,_AR_REPO=your-images \
+#     --substitutions="^;^_AR_LOCATION=europe-west1;_AR_REPO=your-images;_IMAGE_TAG=$(git rev-parse --short HEAD);_QUARKUS_PROFILE=prod,singlenode" \
 #     --project=<your GCP project id>
 #
 # amd64 only: Cloud Build's default worker pool is amd64, which matches Cloud Run's
@@ -45,7 +51,7 @@ steps:
       - '-f'
       - 'tessera-server/src/main/docker/Dockerfile.jvm'
       - '-t'
-      - '${_AR_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/${_IMAGE_NAME}:${SHORT_SHA}'
+      - '${_AR_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/${_IMAGE_NAME}:${_IMAGE_TAG}'
       - '-t'
       - '${_AR_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/${_IMAGE_NAME}:latest'
       - '.'
@@ -53,7 +59,7 @@ steps:
     waitFor: ['build-jar']
 
 images:
-  - '${_AR_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/${_IMAGE_NAME}:${SHORT_SHA}'
+  - '${_AR_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/${_IMAGE_NAME}:${_IMAGE_TAG}'
   - '${_AR_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/${_IMAGE_NAME}:latest'
 
 substitutions:
@@ -61,6 +67,7 @@ substitutions:
   _AR_REPO: 'REPLACE_WITH_AR_REPO'
   _IMAGE_NAME: 'tessera'
   _QUARKUS_PROFILE: 'prod'
+  _IMAGE_TAG: 'manual'
 
 options:
   logging: CLOUD_LOGGING_ONLY
