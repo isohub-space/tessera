@@ -7,7 +7,8 @@ name: pr-hygiene
 # Both block two classes of leak into the public repo:
 #   - AI-attribution / agent markers (Co-Authored-By: Claude…, Claude-Session:, claude.ai/code,
 #     "generated/authored with Claude", anthropic.com, the robot emoji)
-#   - internal issue-tracker keys (project-prefixed ids) and the internal tracker host
+#   - internal issue-tracker keys (matched by shape, not by a list of project codes — see the
+#     comment above has_internal_leak) and any hosted-tracker tenant host
 # commit-lint enforces the same on commit messages/authors; this closes the remaining gaps.
 on:
   pull_request:
@@ -25,7 +26,7 @@ env:
   # own public decision records, not a leaked reference into someone else's internal space —
   # so it is the one letter-coded ADR prefix this gate lets through. Every other letter-coded
   # ADR-<code>- prefix stays blocked, and this does NOT extend to the bare <code>-<digits>
-  # issue-key pattern (e.g. IAM-57) — that still names a private backlog issue and citing one
+  # issue-key pattern (<code>-<digits>) — that still names a private backlog issue and citing one
   # in public text is still a leak regardless of this repo's own project code. Note that
   # "IAM-002" is itself a substring of "ADR-IAM-002": the check below has to tell the two
   # apart per occurrence, not by scanning each pattern separately over the whole text —
@@ -49,22 +50,37 @@ jobs:
         run: |
           set -euo pipefail
           ai='co-authored-by:[[:space:]]*(claude|anthropic)|claude-session:|claude\.ai/code|generated (with|by) \[?claude|authored (with|by)[^.]*claude|anthropic\.com|🤖'
-          # One token per position: an ADR-<code>-<digits> reference wins over the bare
-          # <code>-<digits> issue-key form where both would match at the same spot (POSIX
-          # leftmost-longest) — so "ADR-IAM-002" is classified once, as an ADR reference, not
-          # also flagged as a bare "IAM-002" issue key. Own-project ADR tokens pass; every
-          # foreign ADR-<code>- token, every bare issue key, and the tracker host do not.
-          tok_re='ADR-[A-Z]{2,}-[0-9]+|\b(IOS|IAM|INF|VEC)-[0-9]+'
+          own_project="$OWN_PROJECT"
+          # Internal tracker keys are matched by SHAPE, not by a list of project codes: a literal list
+          # would itself publish the private project codes this gate keeps out of public metadata, and
+          # would silently miss every project added after it was written.
+          #   - upper-case KEY-123 / KEY-S4 anywhere outside a URL
+          #   - lower-case key-123 only as a path segment (dir/key-123) or a key-123.md file name, so
+          #     case-insensitive coverage does not flag hyphenated prose such as "non-404" or "top-10"
+          #   - ADR-<code>-<n> for any <code> but this repo's own (see own_project above)
+          #   - any *.atlassian.net tenant host
+          # URLs (other projects' public trackers), version strings (surefire-3.5.6) and the public
+          # identifier schemes that share the KEY-123 shape (SHA-256, UTF-8, RFC-7636 …) pass.
+          public_schemes='ADR|AES|CVE|CWE|GHSA|HTTP|IEC|ISO|JDK|JEP|JSR|OQ|PKCS|RFC|SHA|TLS|UTF'
+          b='(^|[^A-Za-z0-9_-])'
+          tok_re="${b}ADR-[A-Z][A-Z0-9]+-[0-9]+|${b}[A-Z][A-Z0-9]+-S?[0-9]+(\.[0-9]+)*|[A-Za-z_]/[a-z][a-z0-9]+-S?[0-9]+(\.[0-9]+)*|${b}[a-z][a-z0-9]+-S?[0-9]+\.md"
           has_internal_leak() {
-            local tok
+            local tok key
+            # Here-strings, not printf | grep -q: under pipefail an early-exiting grep can SIGPIPE the
+            # writer and turn a match into a pass.
+            grep -qiE '[a-z0-9-]+\.atlassian\.net' <<<"$1" && return 0
             while IFS= read -r tok; do
-              [ -z "$tok" ] && continue
-              case "$tok" in
-                "ADR-${OWN_PROJECT}-"*) continue ;;
-                *) return 0 ;;
+              tok=${tok%.md}
+              [[ $tok =~ -S?[0-9]+\.[0-9] ]] && continue                  # version string
+              key=$(printf '%s' "$tok" | sed -E 's#^.*[^A-Za-z0-9-]##' | tr '[:lower:]' '[:upper:]')
+              case "$key" in
+                "") continue ;;
+                "ADR-${own_project}-"*) continue ;;
+                ADR-*-*) return 0 ;;
               esac
-            done < <(printf '%s' "$1" | grep -oE "$tok_re")
-            printf '%s' "$1" | grep -qE 'iospace\.atlassian' && return 0
+              [[ ${key%%-*} =~ ^($public_schemes)$ ]] && continue
+              return 0
+            done < <(sed -E 's#[A-Za-z][A-Za-z0-9+.-]*://[^[:space:]<>()"]*##g' <<<"$1" | grep -oE "$tok_re")
             return 1
           }
           fail=0
@@ -84,6 +100,7 @@ jobs:
                     ':(exclude).github/workflows/pr-hygiene.yml' \
                     ':(exclude).github/workflows/commit-lint.yml' \
                     ':(exclude).githooks/pre-push' \
+                    ':(exclude)scripts/test-neutral-metadata.sh' \
                   | grep -E '^\+' | grep -vE '^\+\+\+' || true)
           if printf '%s' "$added" | grep -qiE "$ai"; then
             echo "::error::A changed line adds an AI-attribution/agent marker — remove it."; fail=1
@@ -97,6 +114,18 @@ jobs:
             exit 1
           fi
           echo "PR text and diff are neutral (no AI attribution, no internal keys)."
+
+  selftest:
+    # Runs the hook and both workflows' real scripts against seeded leaks and clean inputs, so a
+    # clause that silently stops matching fails here instead of waving leaks through.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Neutral-metadata regression cases
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          bash scripts/test-neutral-metadata.sh
 
   comment:
     # A PR/issue comment is not a commit, so this cannot be a merge-blocking required check.
@@ -118,19 +147,37 @@ jobs:
         run: |
           set -euo pipefail
           ai='co-authored-by:[[:space:]]*(claude|anthropic)|claude-session:|claude\.ai/code|generated (with|by) \[?claude|authored (with|by)[^.]*claude|anthropic\.com|🤖'
-          # See the tok_re/has_internal_leak comment in the hygiene job above — one token per
-          # position, own-project ADR references pass, everything else internal does not.
-          tok_re='ADR-[A-Z]{2,}-[0-9]+|\b(IOS|IAM|INF|VEC)-[0-9]+'
+          own_project="$OWN_PROJECT"
+          # Internal tracker keys are matched by SHAPE, not by a list of project codes: a literal list
+          # would itself publish the private project codes this gate keeps out of public metadata, and
+          # would silently miss every project added after it was written.
+          #   - upper-case KEY-123 / KEY-S4 anywhere outside a URL
+          #   - lower-case key-123 only as a path segment (dir/key-123) or a key-123.md file name, so
+          #     case-insensitive coverage does not flag hyphenated prose such as "non-404" or "top-10"
+          #   - ADR-<code>-<n> for any <code> but this repo's own (see own_project above)
+          #   - any *.atlassian.net tenant host
+          # URLs (other projects' public trackers), version strings (surefire-3.5.6) and the public
+          # identifier schemes that share the KEY-123 shape (SHA-256, UTF-8, RFC-7636 …) pass.
+          public_schemes='ADR|AES|CVE|CWE|GHSA|HTTP|IEC|ISO|JDK|JEP|JSR|OQ|PKCS|RFC|SHA|TLS|UTF'
+          b='(^|[^A-Za-z0-9_-])'
+          tok_re="${b}ADR-[A-Z][A-Z0-9]+-[0-9]+|${b}[A-Z][A-Z0-9]+-S?[0-9]+(\.[0-9]+)*|[A-Za-z_]/[a-z][a-z0-9]+-S?[0-9]+(\.[0-9]+)*|${b}[a-z][a-z0-9]+-S?[0-9]+\.md"
           has_internal_leak() {
-            local tok
+            local tok key
+            # Here-strings, not printf | grep -q: under pipefail an early-exiting grep can SIGPIPE the
+            # writer and turn a match into a pass.
+            grep -qiE '[a-z0-9-]+\.atlassian\.net' <<<"$1" && return 0
             while IFS= read -r tok; do
-              [ -z "$tok" ] && continue
-              case "$tok" in
-                "ADR-${OWN_PROJECT}-"*) continue ;;
-                *) return 0 ;;
+              tok=${tok%.md}
+              [[ $tok =~ -S?[0-9]+\.[0-9] ]] && continue                  # version string
+              key=$(printf '%s' "$tok" | sed -E 's#^.*[^A-Za-z0-9-]##' | tr '[:lower:]' '[:upper:]')
+              case "$key" in
+                "") continue ;;
+                "ADR-${own_project}-"*) continue ;;
+                ADR-*-*) return 0 ;;
               esac
-            done < <(printf '%s' "$1" | grep -oE "$tok_re")
-            printf '%s' "$1" | grep -qE 'iospace\.atlassian' && return 0
+              [[ ${key%%-*} =~ ^($public_schemes)$ ]] && continue
+              return 0
+            done < <(sed -E 's#[A-Za-z][A-Za-z0-9+.-]*://[^[:space:]<>()"]*##g' <<<"$1" | grep -oE "$tok_re")
             return 1
           }
           if printf '%s' "$BODY" | grep -qiE "$ai" || has_internal_leak "$BODY"; then
