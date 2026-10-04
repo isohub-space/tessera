@@ -140,6 +140,13 @@ for t in \
   'abc-12.md was updated' \
   'note at file:///home/dev/notes/raw/ABC-12.md' \
   'app link obsidian://open?file=ABC-12' \
+  'app link with an encoded slash obsidian://open?vault=v&file=raw%2FABC-12' \
+  'right after an allowlisted token: SHA-256 ABC-12' \
+  'after an allowlisted token and a comma: SHA-256,ABC-12' \
+  'after a version: TLS-1.3 ABC-12' \
+  'after a numbered record: ADR-0001 ABC-12' \
+  'a sprint after a standard: ISO-8601 ABC-S4' \
+  'one key after another: ABC-12 DEF-3' \
   'per ADR-ABC-003' \
   'tracked at example.atlassian.net' \
   "own code is no exemption: $own-57"; do
