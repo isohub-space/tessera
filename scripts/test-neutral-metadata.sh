@@ -138,6 +138,8 @@ for t in \
   'see raw/abc-12.md' \
   'branch chore/abc-12 has it' \
   'abc-12.md was updated' \
+  'note at file:///home/dev/notes/raw/ABC-12.md' \
+  'app link obsidian://open?file=ABC-12' \
   'per ADR-ABC-003' \
   'tracked at example.atlassian.net' \
   "own code is no exemption: $own-57"; do
@@ -157,10 +159,52 @@ for t in \
   'see https://issues.apache.org/jira/browse/SUREFIRE-2000' \
   'non-404 responses, top-10 list, the 429/not-429 split' \
   'base image ubi9/openjdk-21' \
+  'PKCE-S256 is the only code challenge method' \
+  'see https://tracker.example.org/browse/ABC-12' \
   'character class [A-Z0-9]-[0-9]'; do
   msg_case pass "$t" "docs: $t"
   text_case pass "$t" "$t"
 done
+
+# --- a marker early in a large input: the case that exposes a pipe into grep -q under
+# pipefail (grep exits on the first match, the writer dies of SIGPIPE, the pipeline reports
+# 141 and the match reads as a pass). Small inputs never exercise it.
+filler="$work/filler.txt"
+i=0
+while [ $i -lt 6000 ]; do
+  echo "ordinary line $i of a large but neutral change, nothing to see in it"
+  i=$((i + 1))
+done > "$filler"                                    # ~400 KB on disk
+big_body="$(head -c 100000 "$filler")"            # one env string must stay under 128 KiB
+for marker in 'Co-Authored-By: Claude <noreply@example.com>' 'deliver ABC-12 first'; do
+  r="$(new_repo)"
+  { echo "$marker"; cat "$filler"; } > "$r/big.txt"
+  git -C "$r" add big.txt
+  git -C "$r" commit -q --no-verify -m 'docs: neutral subject'
+  expect block "large diff, marker first: $marker" run_hygiene "$r" 'docs: neutral title' 'neutral body'
+  expect block "pre-push large diff, marker first: $marker" run_pre_push "$r"
+  expect block "large pr body, marker first: $marker" run_hygiene "$(new_repo)" 'docs: neutral title' "$marker"$'\n'"$big_body"
+  expect block "large comment, marker first: $marker" run_comment "$marker"$'\n'"$big_body"
+done
+r="$(new_repo)"
+cat "$filler" > "$r/big.txt"
+git -C "$r" add big.txt
+git -C "$r" commit -q --no-verify -m 'docs: neutral subject'
+expect pass 'large neutral diff' run_hygiene "$r" 'docs: neutral title' "$big_body"
+expect pass 'pre-push large neutral diff' run_pre_push "$r"
+
+# --- the inline copies of has_internal_leak must stay byte-identical (after indentation)
+# until they are single-sourced; behaviour drift outside this corpus would otherwise go unseen.
+copies="$(python3 - "$hook" "$commit_lint" "$pr_hygiene" <<'PY'
+import re, sys, textwrap, hashlib
+found = []
+for p in sys.argv[1:]:
+    for m in re.finditer(r"^( *)# Internal tracker keys are matched by SHAPE.*?^\1\}\n", open(p).read(), re.S | re.M):
+        found.append(hashlib.sha256(textwrap.dedent(m.group(0)).encode()).hexdigest())
+print(len(found), len(set(found)))
+PY
+)"
+expect pass "four identical copies of the key clause (count, distinct: $copies)" test "$copies" = '4 1'
 
 # --- optional: the real project codes of a private tracker, never committed ---
 for code in ${NEUTRAL_METADATA_CODES:-}; do
