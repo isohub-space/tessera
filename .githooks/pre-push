@@ -13,17 +13,36 @@ ai='co-authored-by:[[:space:]]*(claude|anthropic)|claude-session:|claude\.ai/cod
 # a substring of "ADR-IAM-002" means the two have to be classified per occurrence rather than
 # scanned as two independent patterns over the whole text.
 own_project='IAM'
-tok_re='ADR-[A-Z]{2,}-[0-9]+|\b(IOS|IAM|INF|VEC)-[0-9]+'
+# Internal tracker keys are matched by SHAPE, not by a list of project codes: a literal list
+# would itself publish the private project codes this gate keeps out of public metadata, and
+# would silently miss every project added after it was written.
+#   - upper-case KEY-123 / KEY-S4 anywhere outside a URL
+#   - lower-case key-123 only as a path segment (dir/key-123) or a key-123.md file name, so
+#     case-insensitive coverage does not flag hyphenated prose such as "non-404" or "top-10"
+#   - ADR-<code>-<n> for any <code> but this repo's own (see own_project above)
+#   - any *.atlassian.net tenant host
+# URLs (other projects' public trackers), version strings (surefire-3.5.6) and the public
+# identifier schemes that share the KEY-123 shape (SHA-256, UTF-8, RFC-7636 …) pass.
+public_schemes='ADR|AES|CVE|CWE|GHSA|HTTP|IEC|ISO|JDK|JEP|JSR|OQ|PKCS|RFC|SHA|TLS|UTF'
+b='(^|[^A-Za-z0-9_-])'
+tok_re="${b}ADR-[A-Z][A-Z0-9]+-[0-9]+|${b}[A-Z][A-Z0-9]+-S?[0-9]+(\.[0-9]+)*|[A-Za-z_]/[a-z][a-z0-9]+-S?[0-9]+(\.[0-9]+)*|${b}[a-z][a-z0-9]+-S?[0-9]+\.md"
 has_internal_leak() {
-  local tok
+  local tok key
+  # Here-strings, not printf | grep -q: under pipefail an early-exiting grep can SIGPIPE the
+  # writer and turn a match into a pass.
+  grep -qiE '[a-z0-9-]+\.atlassian\.net' <<<"$1" && return 0
   while IFS= read -r tok; do
-    [ -z "$tok" ] && continue
-    case "$tok" in
+    tok=${tok%.md}
+    [[ $tok =~ -S?[0-9]+\.[0-9] ]] && continue                  # version string
+    key=$(printf '%s' "$tok" | sed -E 's#^.*[^A-Za-z0-9-]##' | tr '[:lower:]' '[:upper:]')
+    case "$key" in
+      "") continue ;;
       "ADR-${own_project}-"*) continue ;;
-      *) return 0 ;;
+      ADR-*-*) return 0 ;;
     esac
-  done < <(printf '%s' "$1" | grep -oE "$tok_re")
-  printf '%s' "$1" | grep -qE 'iospace\.atlassian' && return 0
+    [[ ${key%%-*} =~ ^($public_schemes)$ ]] && continue
+    return 0
+  done < <(sed -E 's#[A-Za-z][A-Za-z0-9+.-]*://[^[:space:]<>()"]*##g' <<<"$1" | grep -oE "$tok_re")
   return 1
 }
 zero='0000000000000000000000000000000000000000'
@@ -42,11 +61,16 @@ while read -r _localref localsha _remoteref remotesha; do
     echo "pre-push BLOCKED: AI-attribution marker in a commit message ($range)." >&2
     status=1
   fi
+  if has_internal_leak "$(git log --format='%B' "$range" 2>/dev/null)"; then
+    echo "pre-push BLOCKED: internal tracker key or a foreign project's ADR-<code>- prefix in a commit message ($range)." >&2
+    status=1
+  fi
 
   added=$(git diff --unified=0 "$range" -- . \
             ':(exclude).github/workflows/pr-hygiene.yml' \
             ':(exclude).github/workflows/commit-lint.yml' \
             ':(exclude).githooks/pre-push' \
+            ':(exclude)scripts/test-neutral-metadata.sh' \
           | grep -E '^\+' | grep -vE '^\+\+\+' || true)
   if printf '%s' "$added" | grep -qiE "$ai"; then
     echo "pre-push BLOCKED: AI-attribution marker added in the diff ($range)." >&2
