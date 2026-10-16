@@ -16,7 +16,9 @@ import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.vertx.RunOnVertxContext;
 import io.quarkus.test.vertx.UniAsserter;
 import jakarta.inject.Inject;
+import java.time.Duration;
 import java.time.Instant;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -55,6 +57,46 @@ class RefreshTokenStoreIT {
         return new RefreshTokenFamily(
                 id, realm, UUID.randomUUID().toString(), ClientId.generate(),
                 currentHash, null, 0, false, T0, T0.plusSeconds(3600));
+    }
+
+    @Test
+    @RunOnVertxContext
+    @DisplayName("within the reuse grace the superseded token is a reissue that changes nothing; after it, a replay")
+    void reuseGraceReissuesThenExpires(UniAsserter asserter) {
+        UUID tenant = UUID.randomUUID();
+        FamilyId fid = new FamilyId(UUID.randomUUID());
+        Duration grace = Duration.ofSeconds(5);
+
+        asserter.execute(() -> store.createFamily(new RefreshTokenFamily(
+                fid, realm(tenant), UUID.randomUUID().toString(), ClientId.generate(),
+                "h0", null, 0, false, T0, T0.plusSeconds(3600), Set.of("openid", "offline_access"))));
+        asserter.assertThat(
+                () -> store.consumeAndRotate(fid, realm(tenant), "h0", "h1", NOW, grace, "salt-1"),
+                o -> {
+                    assertThat(o.decision()).isInstanceOf(RefreshDecision.Rotate.class);
+                    assertThat(o.family().rotatedAt()).isEqualTo(NOW);
+                    assertThat(o.family().rotationSalt()).isEqualTo("salt-1");
+                    assertThat(o.family().grantedScopes()).containsExactlyInAnyOrder("openid", "offline_access");
+                });
+
+        // The same superseded token two seconds later: reissue, and the family stays as it was.
+        asserter.assertThat(
+                () -> store.consumeAndRotate(fid, realm(tenant), "h0", "hx", NOW.plusSeconds(2), grace, "salt-x"),
+                o -> {
+                    assertThat(o.decision()).isInstanceOf(RefreshDecision.Reissue.class);
+                    assertThat(o.family().currentTokenHash()).isEqualTo("h1");
+                    assertThat(o.family().reused()).isFalse();
+                    assertThat(o.family().generation()).isEqualTo(1);
+                    assertThat(o.family().rotationSalt()).as("a reissue writes nothing").isEqualTo("salt-1");
+                });
+
+        // After the grace it is a replay, and the family burns.
+        asserter.assertThat(
+                () -> store.consumeAndRotate(fid, realm(tenant), "h0", "hy", NOW.plusSeconds(6), grace, "salt-y"),
+                o -> assertThat(o.decision()).isInstanceOf(RefreshDecision.Replay.class));
+        asserter.assertThat(
+                () -> store.consumeAndRotate(fid, realm(tenant), "h1", "h2", NOW.plusSeconds(7), grace, "salt-2"),
+                o -> assertThat(o.decision()).isInstanceOf(RefreshDecision.Replay.class));
     }
 
     @Test

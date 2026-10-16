@@ -29,9 +29,11 @@ import dev.tessera.iam.application.port.out.RefreshTokenStorePort;
 import dev.tessera.iam.application.port.out.RefreshTokenTenantResolverPort;
 import dev.tessera.iam.application.port.out.SessionStorePort;
 import dev.tessera.iam.application.port.out.TokenSignerPort;
+import io.quarkus.runtime.Startup;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Produces;
 import java.time.Clock;
+import java.util.Base64;
 
 /**
  * CDI wiring for the application use cases.
@@ -104,6 +106,7 @@ public class UseCaseProducer {
 
     @Produces
     @ApplicationScoped
+    @Startup
     RefreshUseCase refreshUseCase(
             ClientRepositoryPort clients,
             ClientSecretVerifierPort secretVerifier,
@@ -125,7 +128,34 @@ public class UseCaseProducer {
                 clock,
                 oidc.issuer(),
                 authFlow.accessTokenTtl(),
-                refresh.enabled());
+                authFlow.idTokenTtl(),
+                refresh.enabled(),
+                refresh.reuseGrace(),
+                successorKey(refresh));
+    }
+
+    /**
+     * The decoded successor key, or {@code null} when no reuse grace is configured. A positive grace
+     * without a usable key fails here, at start-up, rather than on the first refresh.
+     */
+    private static byte[] successorKey(RefreshConfig refresh) {
+        if (refresh.reuseGrace().isZero()) {
+            return null;
+        }
+        byte[] key;
+        try {
+            key = refresh.successorKey()
+                    .filter(k -> !k.isBlank())
+                    .map(k -> Base64.getDecoder().decode(k.trim()))
+                    .orElse(null);
+        } catch (IllegalArgumentException notBase64) {
+            throw new IllegalStateException("iam.refresh.successor-key is not valid base64");
+        }
+        if (key == null || key.length < 32) {
+            throw new IllegalStateException("iam.refresh.reuse-grace is " + refresh.reuseGrace()
+                    + " but iam.refresh.successor-key is missing or shorter than 32 bytes");
+        }
+        return key;
     }
 
     @Produces

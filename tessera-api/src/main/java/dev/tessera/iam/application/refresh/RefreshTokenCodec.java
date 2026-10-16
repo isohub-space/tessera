@@ -3,11 +3,14 @@ package dev.tessera.iam.application.refresh;
 import dev.tessera.iam.domain.refresh.FamilyId;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Base64;
 import java.util.Optional;
 import java.util.UUID;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 
 /**
  * Pure wire-format and hashing helper for opaque refresh tokens.
@@ -80,6 +83,48 @@ public final class RefreshTokenCodec {
             return B64URL.encodeToString(digest);
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 must be available", e);
+        }
+    }
+
+    /**
+     * The secret of the token that succeeds {@code presentedSecret} in family {@code id}, derived as
+     * {@code base64url(HMAC-SHA256(key, label | familyId | presentedSecret | salt))}: 256 bits, the
+     * same shape as a random secret. {@code salt} is random per rotation and stored with the family.
+     * The input is the predecessor's <em>secret</em>, never its hash: the store keeps the hash next
+     * to the salt, so a hash-based derivation would let the key plus a read of the store reproduce
+     * the live token without any token at all.
+     *
+     * <p>Used only when a reuse grace is configured. Deriving the successor from its predecessor
+     * makes a rotation idempotent: the predecessor presented again inside the grace yields exactly
+     * the successor the first presentation received, so concurrent requests of one session all end
+     * with the same live token, and no branch of the family ever exists. Computing a successor needs
+     * the server key, the rotation's salt from the store <em>and</em> the predecessor token itself:
+     * an old token plus the key does not reveal a newer token, nor does the key plus a read of the
+     * store, nor a read of the store alone.
+     *
+     * @param key           the server-side derivation key (at least 32 bytes)
+     * @param id            the family id
+     * @param presentedSecret the secret of the token being succeeded (the presented token's secret part)
+     * @param salt            the rotation's random salt
+     * @return the successor's secret
+     */
+    public static String successorSecret(byte[] key, FamilyId id, String presentedSecret, String salt) {
+        if (key == null || key.length < 32) {
+            throw new IllegalArgumentException("successor key must be at least 32 bytes");
+        }
+        if (id == null || presentedSecret == null || presentedSecret.isBlank() || salt == null
+                || salt.isBlank()) {
+            throw new IllegalArgumentException("id, presentedSecret and salt must be non-null and non-blank");
+        }
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(key, "HmacSHA256"));
+            byte[] out = mac.doFinal(
+                    ("tessera-refresh-successor-v2|" + id.value() + "|" + presentedSecret + "|" + salt)
+                            .getBytes(StandardCharsets.US_ASCII));
+            return B64URL.encodeToString(out);
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException("HmacSHA256 must be available", e);
         }
     }
 

@@ -76,4 +76,16 @@ public class RefreshTokenFamilyEntity extends PanacheEntityBase {
     /** Expiry instant, or {@code null} if the family does not expire. */
     @Column(name = "expires_at")
     public Instant expiresAt;
+
+    /** When the family last rotated; null until its first rotation. Bounds the reuse grace. */
+    @Column(name = "rotated_at")
+    public Instant rotatedAt;
+
+    /** The random salt of the last rotation; null until the first salted rotation. */
+    @Column(name = "rotation_salt")
+    public String rotationSalt;
+
+    /** The space-separated scopes of the grant the family was issued under; null if not recorded. */
+    @Column(name = "granted_scope", updatable = false)
+    public String grantedScope;
 }

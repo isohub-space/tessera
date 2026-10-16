@@ -52,8 +52,35 @@ import java.util.Set;
  * </ul>
  * Every failure collapses to {@code invalid_grant} (client-auth failure to {@code invalid_client}),
  * so a caller cannot probe which check failed.
+ *
+ * <p><strong>ID token on refresh.</strong> When the grant the family was issued under included
+ * {@code openid}, a refresh also returns a fresh ID token for the same subject and client, without a
+ * {@code nonce} (OpenID Connect Core 1.0 §12.2), so a relying party can keep its session on a token
+ * the issuer signed.
+ *
+ * <p><strong>Reuse grace (optional, confidential clients only).</strong> A confidential client that
+ * sends several requests at once (a browser-facing gateway serving parallel calls of one session
+ * from several instances) can present the same refresh token twice; strict rotation then burns the
+ * family and signs the user out. With a positive {@code reuseGrace} and a {@code successorKey}, each
+ * successor secret of a confidential client's family is derived from its predecessor and a random
+ * per-rotation salt ({@link RefreshTokenCodec#successorSecret}), and the token the last rotation
+ * superseded, presented again by that client within the grace, receives that same successor with a
+ * fresh access token; the family does not change. Outside the grace it is a replay as before. This
+ * is a deliberate, bounded relaxation of strict rotation, of the kind several authorization servers
+ * offer as a refresh-token "reuse interval" or "grace period". It is never applied to a public
+ * client, for which possession of the refresh token is the only proof and replay detection must
+ * stay strict; for a confidential client the refresh token is bound to its client authentication,
+ * so the residual risk is a predecessor presented within the window by a party that also holds the
+ * client's credentials. Off by default. The window is measured on server clocks, which are assumed
+ * synchronised (NTP). Changing the key makes only in-flight reissues fail (refused, never burned).
+ *
+ * <p>A replay that revokes a family is logged once, at the revocation, with the family, tenant,
+ * baseline and client and no token material, so a forced sign-out can be diagnosed; presentations
+ * against an already revoked family are logged at debug level only.
  */
 public final class RefreshService implements RefreshUseCase {
+
+    private static final System.Logger LOG = System.getLogger(RefreshService.class.getName());
 
     private final ClientRepositoryPort clients;
     private final ClientSecretVerifierPort secretVerifier;
@@ -64,7 +91,10 @@ public final class RefreshService implements RefreshUseCase {
     private final Clock clock;
     private final String issuer;
     private final Duration accessTokenTtl;
+    private final Duration idTokenTtl;
     private final boolean enabled;
+    private final Duration reuseGrace;
+    private final byte[] successorKey;
 
     public RefreshService(
             ClientRepositoryPort clients,
@@ -77,6 +107,42 @@ public final class RefreshService implements RefreshUseCase {
             String issuer,
             Duration accessTokenTtl,
             boolean enabled) {
+        this(clients, secretVerifier, signer, identifiers, refreshStore, tenantResolver, clock, issuer,
+                accessTokenTtl, accessTokenTtl, enabled, Duration.ZERO, null);
+    }
+
+    /**
+     * As the ten-argument constructor, with the ID token's lifetime and a reuse grace.
+     *
+     * @param idTokenTtl   lifetime of the ID token a refresh re-issues under {@code openid}
+     * @param reuseGrace   how long after a rotation its predecessor is re-issuable ({@link
+     *                     Duration#ZERO} for none; never negative)
+     * @param successorKey the server-side key successor secrets are derived with; required (at least
+     *                     32 bytes) when {@code reuseGrace} is positive, ignored otherwise
+     */
+    public RefreshService(
+            ClientRepositoryPort clients,
+            ClientSecretVerifierPort secretVerifier,
+            TokenSignerPort signer,
+            OpaqueIdentifierPort identifiers,
+            RefreshTokenStorePort refreshStore,
+            RefreshTokenTenantResolverPort tenantResolver,
+            Clock clock,
+            String issuer,
+            Duration accessTokenTtl,
+            Duration idTokenTtl,
+            boolean enabled,
+            Duration reuseGrace,
+            byte[] successorKey) {
+        this.reuseGrace = requireNonNull(reuseGrace, "reuseGrace");
+        if (reuseGrace.isNegative()) {
+            throw new IllegalArgumentException("reuseGrace must not be negative");
+        }
+        if (!reuseGrace.isZero() && (successorKey == null || successorKey.length < 32)) {
+            throw new IllegalArgumentException(
+                    "a reuse grace needs a successor key of at least 32 bytes");
+        }
+        this.successorKey = reuseGrace.isZero() ? null : successorKey.clone();
         this.clients = requireNonNull(clients, "clients");
         this.secretVerifier = requireNonNull(secretVerifier, "secretVerifier");
         this.signer = requireNonNull(signer, "signer");
@@ -86,6 +152,7 @@ public final class RefreshService implements RefreshUseCase {
         this.clock = requireNonNull(clock, "clock");
         this.issuer = requireText(issuer, "issuer");
         this.accessTokenTtl = requirePositive(accessTokenTtl, "accessTokenTtl");
+        this.idTokenTtl = requirePositive(idTokenTtl, "idTokenTtl");
         this.enabled = enabled;
     }
 
@@ -124,12 +191,22 @@ public final class RefreshService implements RefreshUseCase {
                     // (4) Mint the replacement and rotate atomically against the authoritative realm.
                     Instant now = clock.instant();
                     String presentedHash = RefreshTokenCodec.sha256(presentedSecret);
-                    String newSecret = identifiers.newRefreshToken();
+                    // The grace, and the derived successor it needs, only ever for a confidential
+                    // client: a public client's refresh token is its only proof, so its replay
+                    // detection stays strict.
+                    Duration grace = graceOn() && client instanceof ConfidentialClient
+                            ? reuseGrace : Duration.ZERO;
+                    String salt = grace.isZero() ? null : identifiers.newRefreshToken();
+                    String newSecret = salt == null
+                            ? identifiers.newRefreshToken()
+                            : RefreshTokenCodec.successorSecret(successorKey, fid, presentedSecret, salt);
                     String newHash = RefreshTokenCodec.sha256(newSecret);
                     return refreshStore
-                            .consumeAndRotate(fid, authoritativeRealm, presentedHash, newHash, now)
+                            .consumeAndRotate(fid, authoritativeRealm, presentedHash, newHash, now,
+                                    grace, salt)
                             .flatMap(outcome -> onOutcome(
-                                    command, client, authoritativeRealm, fid, newSecret, outcome, now));
+                                    command, client, authoritativeRealm, fid, newSecret, presentedSecret,
+                                    outcome, now));
                 });
             });
         });
@@ -137,7 +214,7 @@ public final class RefreshService implements RefreshUseCase {
 
     private Uni<TokenResult> onOutcome(
             RefreshCommand command, Client client, RealmKey authoritativeRealm, FamilyId fid,
-            String newSecret, RefreshConsumeOutcome outcome, Instant now) {
+            String newSecret, String presentedSecret, RefreshConsumeOutcome outcome, Instant now) {
         return switch (outcome.decision()) {
             case RefreshDecision.Rotate rotate -> {
                 RefreshTokenFamily family = outcome.family();
@@ -149,29 +226,74 @@ public final class RefreshService implements RefreshUseCase {
                 if (!command.requestRealm().equals(authoritativeRealm)) {
                     yield invalidGrant("refresh token is invalid");
                 }
-                // Scope is not persisted on the family yet, so the refreshed access token carries no
-                // scope (echoing the request scope would be an unbounded escalation). No ID token is
-                // re-issued (the family stores no nonce). Both are named follow-ups.
-                ClaimSet accessClaims = IssuedTokenClaims.accessToken(
-                        issuer, family.userId(), command.clientId(), Set.of(issuer), Set.of(),
-                        identifiers.newTokenId(), now, now.plus(accessTokenTtl));
-                // NOTE (follow-up): the refreshed access token is not yet sender-constrained.
-                // Binding it correctly requires continuity — the refresh proof must match the
-                // confirmation bound at original issuance — which needs the confirmation persisted
-                // on the refresh-token family. Until then the rotated access token is an unbound
-                // Bearer.
-                yield signer.sign(authoritativeRealm, "at+jwt", accessClaims)
-                        .map(jwt -> new TokenResult.Issued(
-                                jwt, "Bearer", null, accessTokenTtl.toSeconds(), "",
-                                RefreshTokenCodec.assemble(fid, newSecret)));
+                yield issue(command, family, authoritativeRealm, fid, newSecret, now);
+            }
+            // The predecessor of the live token, again, inside the reuse grace (a concurrent request
+            // of the same session): answer with the successor its first presentation received. The
+            // successor is re-derived, never stored, and must hash to the family's live token; if it
+            // does not (the key changed, or the rotation predates the grace), refuse without burning.
+            case RefreshDecision.Reissue reissue -> {
+                RefreshTokenFamily family = outcome.family();
+                if (family == null || !family.clientId().equals(client.id())
+                        || !command.requestRealm().equals(authoritativeRealm) || !graceOn()
+                        || !(client instanceof ConfidentialClient) || family.rotationSalt() == null) {
+                    yield invalidGrant("refresh token is invalid");
+                }
+                String successor = RefreshTokenCodec.successorSecret(
+                        successorKey, fid, presentedSecret, family.rotationSalt());
+                if (!RefreshTokenCodec.sha256(successor).equals(family.currentTokenHash())) {
+                    yield invalidGrant("refresh token is invalid");
+                }
+                yield issue(command, family, authoritativeRealm, fid, successor, now);
             }
             // Replay: the store already burned the family inside the CAS; revoke again (idempotent)
             // as a belt-and-braces fail-safe, then refuse.
-            case RefreshDecision.Replay replay -> refreshStore.revokeFamily(fid, authoritativeRealm)
-                    .chain(() -> invalidGrant("refresh token is invalid"));
+            case RefreshDecision.Replay replay -> {
+                RefreshTokenFamily family = outcome.family();
+                LOG.log(replay.burns() ? System.Logger.Level.WARNING : System.Logger.Level.DEBUG,
+                        replay.burns()
+                                ? "Refresh-token replay: family {0} revoked (tenant {1}, baseline {2}, client {3})"
+                                : "Refresh-token replay: family {0} already revoked (tenant {1}, baseline {2}, client {3})",
+                        fid.value(), authoritativeRealm.tenant().value(),
+                        authoritativeRealm.baseline().value(),
+                        family != null ? family.clientId().value() : command.clientId());
+                yield refreshStore.revokeFamily(fid, authoritativeRealm)
+                        .chain(() -> invalidGrant("refresh token is invalid"));
+            }
             case RefreshDecision.Unknown unknown -> invalidGrant("refresh token is invalid");
             case RefreshDecision.Expired expired -> invalidGrant("refresh token is invalid");
         };
+    }
+
+    private Uni<TokenResult> issue(
+            RefreshCommand command, RefreshTokenFamily family, RealmKey authoritativeRealm,
+            FamilyId fid, String refreshSecret, Instant now) {
+        // The refreshed access token carries no scope: echoing the request scope would be an
+        // unbounded escalation, and carrying the family's granted scope on it is a separate change.
+        // An ID token is re-issued when the original grant included openid (OIDC Core §12.2), for
+        // the same subject and client and without a nonce.
+        ClaimSet accessClaims = IssuedTokenClaims.accessToken(
+                issuer, family.userId(), command.clientId(), Set.of(issuer), Set.of(),
+                identifiers.newTokenId(), now, now.plus(accessTokenTtl));
+        // NOTE (follow-up): the refreshed access token is not yet sender-constrained.
+        // Binding it correctly requires continuity — the refresh proof must match the
+        // confirmation bound at original issuance — which needs the confirmation persisted
+        // on the refresh-token family. Until then the rotated access token is an unbound
+        // Bearer.
+        Uni<String> accessUni = signer.sign(authoritativeRealm, "at+jwt", accessClaims);
+        Uni<String> idUni = family.grantedScopes().contains("openid")
+                ? signer.sign(authoritativeRealm, "JWT", IssuedTokenClaims.idToken(
+                        issuer, family.userId(), command.clientId(), null, now, now.plus(idTokenTtl),
+                        family.grantedScopes(), authoritativeRealm))
+                : Uni.createFrom().nullItem();
+        return Uni.combine().all().unis(accessUni, idUni).asTuple()
+                .map(tuple -> new TokenResult.Issued(
+                        tuple.getItem1(), "Bearer", tuple.getItem2(), accessTokenTtl.toSeconds(), "",
+                        RefreshTokenCodec.assemble(fid, refreshSecret)));
+    }
+
+    private boolean graceOn() {
+        return successorKey != null;
     }
 
     private Uni<Boolean> authenticate(RealmKey realm, Client client, String presentedSecret) {
