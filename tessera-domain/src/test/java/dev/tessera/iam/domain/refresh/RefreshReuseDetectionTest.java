@@ -7,6 +7,7 @@ import dev.tessera.iam.domain.client.ClientId;
 import dev.tessera.iam.domain.tenancy.BaselineId;
 import dev.tessera.iam.domain.tenancy.RealmKey;
 import dev.tessera.iam.domain.tenancy.TenantId;
+import java.time.Duration;
 import java.time.Instant;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -95,6 +96,58 @@ class RefreshReuseDetectionTest {
         assertThatThrownBy(() -> RefreshReuseDetection.classify(fam, " ", NOW))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> RefreshReuseDetection.classify(fam, "cur", null))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    private RefreshTokenFamily rotatedAt(Instant rotatedAt, boolean reused) {
+        return new RefreshTokenFamily(
+                new FamilyId(java.util.UUID.randomUUID()), REALM, "user-1", ClientId.generate(),
+                "cur", "prev", 1, reused, CREATED, null, rotatedAt, "salt", java.util.Set.of());
+    }
+
+    @Test
+    @DisplayName("the previous hash inside the reuse grace of the last rotation is a reissue")
+    void previousHashWithinGraceIsReissue() {
+        RefreshTokenFamily fam = rotatedAt(NOW.minusSeconds(2), false);
+        assertThat(RefreshReuseDetection.classify(fam, "prev", NOW, Duration.ofSeconds(5)))
+                .isInstanceOf(RefreshDecision.Reissue.class);
+    }
+
+    @Test
+    @DisplayName("the previous hash after the grace, or with no grace, is still a replay")
+    void previousHashOutsideGraceIsReplay() {
+        RefreshTokenFamily fam = rotatedAt(NOW.minusSeconds(6), false);
+        assertThat(RefreshReuseDetection.classify(fam, "prev", NOW, Duration.ofSeconds(5)))
+                .isInstanceOf(RefreshDecision.Replay.class);
+        RefreshTokenFamily recent = rotatedAt(NOW.minusSeconds(1), false);
+        assertThat(RefreshReuseDetection.classify(recent, "prev", NOW, Duration.ZERO))
+                .isInstanceOf(RefreshDecision.Replay.class);
+        assertThat(RefreshReuseDetection.classify(recent, "prev", NOW))
+                .as("the three-argument form has no grace").isInstanceOf(RefreshDecision.Replay.class);
+    }
+
+    @Test
+    @DisplayName("a replay says whether it revokes the family or finds it already revoked")
+    void replayReportsWhetherItBurns() {
+        RefreshDecision first = RefreshReuseDetection.classify(
+                rotatedAt(NOW.minusSeconds(60), false), "prev", NOW, Duration.ofSeconds(5));
+        RefreshDecision again = RefreshReuseDetection.classify(
+                rotatedAt(NOW.minusSeconds(60), true), "prev", NOW, Duration.ofSeconds(5));
+        assertThat(first).isEqualTo(new RefreshDecision.Replay(((RefreshDecision.Replay) first).id(), true));
+        assertThat(((RefreshDecision.Replay) again).burns()).isFalse();
+    }
+
+    @Test
+    @DisplayName("the grace never revives a burned family, and needs a known rotation instant")
+    void graceDoesNotReviveOrGuess() {
+        assertThat(RefreshReuseDetection.classify(
+                rotatedAt(NOW.minusSeconds(1), true), "prev", NOW, Duration.ofSeconds(5)))
+                .isInstanceOf(RefreshDecision.Replay.class);
+        assertThat(RefreshReuseDetection.classify(
+                rotatedAt(null, false), "prev", NOW, Duration.ofSeconds(5)))
+                .isInstanceOf(RefreshDecision.Replay.class);
+        assertThatThrownBy(() -> RefreshReuseDetection.classify(
+                rotatedAt(null, false), "prev", NOW, null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }

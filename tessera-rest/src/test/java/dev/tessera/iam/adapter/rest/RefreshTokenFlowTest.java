@@ -43,6 +43,13 @@ class RefreshTokenFlowTest {
         String access2 = r1.jsonPath().getString("access_token");
         String refresh2 = r1.jsonPath().getString("refresh_token");
         assertThat(access2).isNotBlank();
+        // The grant included openid, so the refresh re-issues an ID token, without a nonce
+        // (OpenID Connect Core 1.0 §12.2).
+        String idToken = r1.jsonPath().getString("id_token");
+        assertThat(idToken).isNotBlank();
+        String idPayload = new String(java.util.Base64.getUrlDecoder().decode(idToken.split("\\.")[1]),
+                StandardCharsets.UTF_8);
+        assertThat(idPayload).contains("\"sub\"").doesNotContain("\"nonce\"");
         assertThat(refresh2).isNotBlank().isNotEqualTo(refresh1);
 
         // The newest token rotates again; the just-superseded refresh1 is covered by replayBurnsFamily.

@@ -1,5 +1,6 @@
 package dev.tessera.iam.domain.refresh;
 
+import java.time.Duration;
 import java.time.Instant;
 
 /**
@@ -18,8 +19,12 @@ import java.time.Instant;
  *       (it is burned; every further presentation is a replay);</li>
  *   <li>an expired family → {@link RefreshDecision.Expired};</li>
  *   <li>the current-token hash → {@link RefreshDecision.Rotate};</li>
- *   <li>the previous-token hash → {@link RefreshDecision.Replay} (a superseded token was presented —
- *       the canonical stolen-token replay);</li>
+ *   <li>the previous-token hash, presented within the reuse grace of the family's last rotation →
+ *       {@link RefreshDecision.Reissue} (two concurrent requests of one session presented the same
+ *       token; the loser receives the winner's successor). Off unless a grace is passed; the caller
+ *       passes one only for confidential clients;</li>
+ *   <li>the previous-token hash otherwise → {@link RefreshDecision.Replay} (a superseded token was
+ *       presented — the canonical stolen-token replay);</li>
  *   <li>anything else → {@link RefreshDecision.Unknown} (rejected, no side effect).</li>
  * </ol>
  *
@@ -47,6 +52,29 @@ public final class RefreshReuseDetection {
      */
     public static RefreshDecision classify(
             RefreshTokenFamily family, String presentedHash, Instant now) {
+        return classify(family, presentedHash, now, Duration.ZERO);
+    }
+
+    /**
+     * Classifies a presented refresh token against its family, allowing the token superseded by
+     * the family's last rotation to be presented again within {@code reuseGrace}.
+     *
+     * <p>The grace trades a few seconds of replay detection for concurrency: a stolen predecessor
+     * presented inside it obtains the same successor the legitimate holder did, never a new branch,
+     * and outside it is a replay as before. A zero or negative grace is no grace.
+     *
+     * @param family        the family snapshot (never {@code null})
+     * @param presentedHash the hash of the presented token (never {@code null} or blank)
+     * @param now           the current instant (never {@code null})
+     * @param reuseGrace    how long after a rotation its predecessor stays re-issuable
+     *                      (never {@code null})
+     * @return the decision (never {@code null})
+     */
+    public static RefreshDecision classify(
+            RefreshTokenFamily family, String presentedHash, Instant now, Duration reuseGrace) {
+        if (reuseGrace == null) {
+            throw new IllegalArgumentException("reuseGrace must not be null");
+        }
         if (family == null) {
             throw new IllegalArgumentException("family must not be null");
         }
@@ -57,7 +85,7 @@ public final class RefreshReuseDetection {
             throw new IllegalArgumentException("now must not be null");
         }
         if (family.reused()) {
-            return new RefreshDecision.Replay(family.id());
+            return new RefreshDecision.Replay(family.id(), false);
         }
         if (family.isExpired(now)) {
             return new RefreshDecision.Expired();
@@ -66,6 +94,9 @@ public final class RefreshReuseDetection {
             return new RefreshDecision.Rotate(family.id());
         }
         if (presentedHash.equals(family.previousTokenHash())) {
+            if (family.rotatedWithin(reuseGrace, now)) {
+                return new RefreshDecision.Reissue(family.id());
+            }
             return new RefreshDecision.Replay(family.id());
         }
         return new RefreshDecision.Unknown();

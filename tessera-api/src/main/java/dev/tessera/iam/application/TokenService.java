@@ -348,7 +348,8 @@ public final class TokenService implements TokenUseCase {
         String wire = RefreshTokenCodec.assemble(familyId, secret);
         RefreshTokenFamily family = new RefreshTokenFamily(
                 familyId, command.realm(), grant.subjectId(), grant.clientId(),
-                RefreshTokenCodec.sha256(secret), null, 0, false, now, now.plus(refreshTokenTtl));
+                RefreshTokenCodec.sha256(secret), null, 0, false, now, now.plus(refreshTokenTtl),
+                grant.scopes());
         return refreshStore.createFamily(family).replaceWith(wire);
     }
 

@@ -2,7 +2,9 @@ package dev.tessera.iam.domain.refresh;
 
 import dev.tessera.iam.domain.client.ClientId;
 import dev.tessera.iam.domain.tenancy.RealmKey;
+import java.time.Duration;
 import java.time.Instant;
+import java.util.Set;
 
 /**
  * An immutable snapshot of a refresh-token lineage (a "family"), loaded from the store so the
@@ -35,6 +37,14 @@ import java.time.Instant;
  * @param reused            whether a replay has been detected (the family is then revoked)
  * @param createdAt         when the family was created (never {@code null})
  * @param expiresAt         when the family expires, or {@code null} if it does not
+ * @param rotatedAt         when the family last rotated, or {@code null} if it never has; bounds
+ *                          the reuse grace of the superseded token
+ * @param rotationSalt      the random salt of the last rotation, or {@code null}; the successor of
+ *                          a re-presented predecessor is derived from it, so a server key and an old
+ *                          token alone never yield a newer token
+ * @param grantedScopes     the scopes of the grant the family was issued under (empty if unknown,
+ *                          for families created before they were recorded); a refresh re-issues an
+ *                          ID token only when they include {@code openid}
  */
 public record RefreshTokenFamily(
         FamilyId id,
@@ -46,9 +56,46 @@ public record RefreshTokenFamily(
         int generation,
         boolean reused,
         Instant createdAt,
-        Instant expiresAt) {
+        Instant expiresAt,
+        Instant rotatedAt,
+        String rotationSalt,
+        Set<String> grantedScopes) {
+
+    /** A family that has never rotated, issued under {@code grantedScopes}. */
+    public RefreshTokenFamily(
+            FamilyId id,
+            RealmKey realm,
+            String userId,
+            ClientId clientId,
+            String currentTokenHash,
+            String previousTokenHash,
+            int generation,
+            boolean reused,
+            Instant createdAt,
+            Instant expiresAt,
+            Set<String> grantedScopes) {
+        this(id, realm, userId, clientId, currentTokenHash, previousTokenHash, generation, reused,
+                createdAt, expiresAt, null, null, grantedScopes);
+    }
+
+    /** A family that has never rotated and whose granted scopes are not recorded. */
+    public RefreshTokenFamily(
+            FamilyId id,
+            RealmKey realm,
+            String userId,
+            ClientId clientId,
+            String currentTokenHash,
+            String previousTokenHash,
+            int generation,
+            boolean reused,
+            Instant createdAt,
+            Instant expiresAt) {
+        this(id, realm, userId, clientId, currentTokenHash, previousTokenHash, generation, reused,
+                createdAt, expiresAt, null, null, Set.of());
+    }
 
     public RefreshTokenFamily {
+        grantedScopes = grantedScopes == null ? Set.of() : Set.copyOf(grantedScopes);
         if (id == null) {
             throw new IllegalArgumentException("RefreshTokenFamily id must not be null");
         }
@@ -73,6 +120,30 @@ public record RefreshTokenFamily(
         if (expiresAt != null && !expiresAt.isAfter(createdAt)) {
             throw new IllegalArgumentException("RefreshTokenFamily expiresAt must be after createdAt");
         }
+    }
+
+    /** The same family after a rotation at {@code now} to {@code newTokenHash}, with its salt. */
+    public RefreshTokenFamily rotatedTo(String newTokenHash, Instant now, String salt) {
+        return new RefreshTokenFamily(id, realm, userId, clientId, newTokenHash, currentTokenHash,
+                generation + 1, false, createdAt, expiresAt, now, salt, grantedScopes);
+    }
+
+    /** The same family, revoked. */
+    public RefreshTokenFamily burned() {
+        return new RefreshTokenFamily(id, realm, userId, clientId, currentTokenHash, previousTokenHash,
+                generation, true, createdAt, expiresAt, rotatedAt, rotationSalt, grantedScopes);
+    }
+
+    /**
+     * True if the family rotated less than {@code grace} before {@code now}: the window in which the
+     * token it superseded may still be presented without being treated as a replay.
+     */
+    public boolean rotatedWithin(Duration grace, Instant now) {
+        return rotatedAt != null
+                && grace != null
+                && !grace.isNegative()
+                && !grace.isZero()
+                && now.isBefore(rotatedAt.plus(grace));
     }
 
     /** True if the family has an expiry and it is at or before {@code now}. */

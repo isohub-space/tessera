@@ -10,6 +10,7 @@ import dev.tessera.iam.domain.tenancy.RealmKey;
 import io.quarkus.arc.DefaultBean;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -54,7 +55,9 @@ public class InMemoryRefreshTokenStore
             RealmKey authoritativeRealm,
             String presentedHash,
             String newTokenHash,
-            Instant now) {
+            Instant now,
+            Duration reuseGrace,
+            String rotationSalt) {
         // A one-element holder to lift the decision out of the atomic remap.
         RefreshConsumeOutcome[] out = new RefreshConsumeOutcome[1];
         families.compute(id, (key, fam) -> {
@@ -63,10 +66,12 @@ public class InMemoryRefreshTokenStore
                 out[0] = new RefreshConsumeOutcome(new RefreshDecision.Unknown(), null);
                 return fam;
             }
-            RefreshDecision decision = RefreshReuseDetection.classify(fam, presentedHash, now);
+            RefreshDecision decision =
+                    RefreshReuseDetection.classify(fam, presentedHash, now, reuseGrace);
             RefreshTokenFamily next = switch (decision) {
-                case RefreshDecision.Rotate r -> rotate(fam, newTokenHash);
-                case RefreshDecision.Replay rp -> burn(fam);
+                case RefreshDecision.Rotate r -> fam.rotatedTo(newTokenHash, now, rotationSalt);
+                case RefreshDecision.Reissue ri -> fam;
+                case RefreshDecision.Replay rp -> fam.burned();
                 case RefreshDecision.Unknown u -> fam;
                 case RefreshDecision.Expired e -> fam;
             };
@@ -79,7 +84,7 @@ public class InMemoryRefreshTokenStore
     @Override
     public Uni<Void> revokeFamily(FamilyId id, RealmKey authoritativeRealm) {
         families.computeIfPresent(id, (key, fam) ->
-                fam.realm().equals(authoritativeRealm) ? burn(fam) : fam);
+                fam.realm().equals(authoritativeRealm) ? fam.burned() : fam);
         return Uni.createFrom().voidItem();
     }
 
@@ -95,19 +100,5 @@ public class InMemoryRefreshTokenStore
         RefreshTokenFamily fam = families.get(id);
         // Header-independent: the family's own realm, regardless of any request tenant.
         return Uni.createFrom().item(Optional.ofNullable(fam).map(RefreshTokenFamily::realm));
-    }
-
-    private static RefreshTokenFamily rotate(RefreshTokenFamily fam, String newTokenHash) {
-        return new RefreshTokenFamily(
-                fam.id(), fam.realm(), fam.userId(), fam.clientId(),
-                newTokenHash, fam.currentTokenHash(), fam.generation() + 1, false,
-                fam.createdAt(), fam.expiresAt());
-    }
-
-    private static RefreshTokenFamily burn(RefreshTokenFamily fam) {
-        return new RefreshTokenFamily(
-                fam.id(), fam.realm(), fam.userId(), fam.clientId(),
-                fam.currentTokenHash(), fam.previousTokenHash(), fam.generation(), true,
-                fam.createdAt(), fam.expiresAt());
     }
 }

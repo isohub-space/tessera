@@ -14,7 +14,10 @@ import dev.tessera.iam.domain.tenancy.TenantId;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import java.time.Duration;
 import java.time.Instant;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.UUID;
 
 /**
@@ -39,7 +42,9 @@ public class DbRefreshTokenStore implements RefreshTokenStorePort {
             "UPDATE refresh_token_family"
                     + " SET previous_token_hash = current_token_hash,"
                     + "     current_token_hash = :newHash,"
-                    + "     generation = generation + 1"
+                    + "     generation = generation + 1,"
+                    + "     rotated_at = :now,"
+                    + "     rotation_salt = :salt"
                     + " WHERE id = :id"
                     + "   AND baseline_id = :baseline"
                     + "   AND current_token_hash = :presented"
@@ -80,7 +85,7 @@ public class DbRefreshTokenStore implements RefreshTokenStorePort {
     @Override
     public Uni<RefreshConsumeOutcome> consumeAndRotate(
             FamilyId id, RealmKey authoritativeRealm, String presentedHash, String newTokenHash,
-            Instant now) {
+            Instant now, Duration reuseGrace, String rotationSalt) {
         if (id == null || authoritativeRealm == null) {
             throw new IllegalArgumentException("id and authoritativeRealm must not be null");
         }
@@ -88,6 +93,7 @@ public class DbRefreshTokenStore implements RefreshTokenStorePort {
         return scoped.inTenant(tenant, session ->
                 session.createNativeQuery(CAS_ROTATE)
                         .setParameter("newHash", newTokenHash)
+                        .setParameter("salt", rotationSalt)
                         .setParameter("id", id.value())
                         .setParameter("baseline", authoritativeRealm.baseline().value())
                         .setParameter("presented", presentedHash)
@@ -115,8 +121,10 @@ public class DbRefreshTokenStore implements RefreshTokenStorePort {
                                                 new RefreshDecision.Rotate(id), snap));
                                     }
                                     // The CAS matched nothing — classify the presented token.
-                                    RefreshDecision decision =
-                                            RefreshReuseDetection.classify(snap, presentedHash, now);
+                                    // A Reissue (the superseded token inside the reuse grace)
+                                    // changes nothing, so it needs no write.
+                                    RefreshDecision decision = RefreshReuseDetection.classify(
+                                            snap, presentedHash, now, reuseGrace);
                                     if (decision instanceof RefreshDecision.Replay) {
                                         return burn(session, id, now,
                                                 authoritativeRealm.baseline().value()).replaceWith(
@@ -186,6 +194,10 @@ public class DbRefreshTokenStore implements RefreshTokenStorePort {
         e.revokedAt = null;
         e.createdAt = family.createdAt();
         e.expiresAt = family.expiresAt();
+        e.rotatedAt = family.rotatedAt();
+        e.rotationSalt = family.rotationSalt();
+        e.grantedScope = family.grantedScopes().isEmpty()
+                ? null : String.join(" ", new TreeSet<>(family.grantedScopes()));
         return e;
     }
 
@@ -196,6 +208,8 @@ public class DbRefreshTokenStore implements RefreshTokenStorePort {
         return new RefreshTokenFamily(
                 new FamilyId(e.id), realm, e.userId.toString(), new ClientId(e.clientId),
                 e.currentTokenHash, e.previousTokenHash, e.generation, e.reused,
-                e.createdAt, e.expiresAt);
+                e.createdAt, e.expiresAt, e.rotatedAt, e.rotationSalt,
+                e.grantedScope == null || e.grantedScope.isBlank()
+                        ? Set.of() : Set.of(e.grantedScope.trim().split(" +")));
     }
 }

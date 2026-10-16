@@ -5,6 +5,7 @@ import dev.tessera.iam.domain.refresh.RefreshDecision;
 import dev.tessera.iam.domain.refresh.RefreshTokenFamily;
 import dev.tessera.iam.domain.tenancy.RealmKey;
 import io.smallrye.mutiny.Uni;
+import java.time.Duration;
 import java.time.Instant;
 
 /**
@@ -20,7 +21,8 @@ import java.time.Instant;
  *   <li><strong>Atomic single-use rotation.</strong> {@link #consumeAndRotate} must compare-and-swap
  *       the current-token hash exactly once: of any number of concurrent redemptions of the same
  *       token, at most one is a {@link RefreshDecision.Rotate}; the rest observe the superseded hash
- *       and become {@link RefreshDecision.Replay}. This atomicity is the store's job, not the
+ *       and become {@link RefreshDecision.Replay}, or {@link RefreshDecision.Reissue} within a
+ *       configured reuse grace (which changes nothing). This atomicity is the store's job, not the
  *       caller's — an in-JVM lock would neither be event-loop-safe nor hold across nodes.</li>
  *   <li><strong>Tenant-scoped, fail-closed.</strong> Reads and rotation are scoped to the family's
  *       authoritative realm; a lookup outside it misses rather than leaking.</li>
@@ -60,12 +62,35 @@ public interface RefreshTokenStorePort {
      * @return a {@link Uni} emitting the outcome (never {@code null}); a {@code Rotate} outcome
      *         carries the updated family snapshot needed to mint the new tokens
      */
+    default Uni<RefreshConsumeOutcome> consumeAndRotate(
+            FamilyId id,
+            RealmKey authoritativeRealm,
+            String presentedHash,
+            String newTokenHash,
+            Instant now) {
+        return consumeAndRotate(
+                id, authoritativeRealm, presentedHash, newTokenHash, now, Duration.ZERO, null);
+    }
+
+    /**
+     * As {@link #consumeAndRotate(FamilyId, RealmKey, String, String, Instant)}, and records the
+     * rotation instant and {@code rotationSalt} on a rotation; the token the family's last rotation
+     * superseded, presented again within {@code reuseGrace} of that rotation, is a {@link
+     * RefreshDecision.Reissue} that leaves the family unchanged instead of a {@link
+     * RefreshDecision.Replay} that burns it.
+     *
+     * @param reuseGrace   the reuse grace ({@link Duration#ZERO} for none; never {@code null})
+     * @param rotationSalt the salt the new token's secret was derived with, stored on a rotation
+     *                     ({@code null} when the secret is random)
+     */
     Uni<RefreshConsumeOutcome> consumeAndRotate(
             FamilyId id,
             RealmKey authoritativeRealm,
             String presentedHash,
             String newTokenHash,
-            Instant now);
+            Instant now,
+            Duration reuseGrace,
+            String rotationSalt);
 
     /**
      * Revokes the entire family (idempotent). Used both by replay handling and by explicit token
