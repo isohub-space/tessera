@@ -1,6 +1,7 @@
 package dev.tessera.iam.adapter.persistence.rls;
 
 import dev.tessera.iam.adapter.persistence.db.ConnectionFailures;
+import dev.tessera.iam.adapter.persistence.db.PoolDiagnostics;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Instance;
@@ -45,6 +46,9 @@ public class TenantScopedSession {
     @Inject
     Instance<Mutiny.SessionFactory> sessionFactory;
 
+    @Inject
+    PoolDiagnostics diagnostics;
+
     @ConfigProperty(name = "iam.db.read-retries", defaultValue = "1")
     int readRetries;
 
@@ -68,13 +72,14 @@ public class TenantScopedSession {
             UUID tenantId, Function<Mutiny.Session, Uni<T>> work, int retriesLeft) {
         return Uni.createFrom().deferred(() -> {
             AtomicBoolean workStarted = new AtomicBoolean();
-            return transaction(tenantId, work, workStarted)
+            long started = System.nanoTime();
+            return transaction(tenantId, work, workStarted, started)
                     .onFailure(failure -> retriesLeft > 0
                             && !workStarted.get()
                             && ConnectionFailures.isAcquisitionTimeout(failure))
                     .recoverWithUni(failure -> {
-                        LOG.info("No database connection became free for a write within the acquisition "
-                                + "timeout; nothing was sent, trying again");
+                        LOG.infof("No database connection became free for a write within the acquisition "
+                                + "timeout (%s); nothing was sent, trying again", diagnostics.state());
                         return ConnectionFailures.pauseBeforeRetry()
                                 .chain(() -> attemptWrite(tenantId, work, retriesLeft - 1));
                     });
@@ -105,13 +110,14 @@ public class TenantScopedSession {
             UUID tenantId, Function<Mutiny.Session, Uni<T>> work, int retriesLeft) {
         return Uni.createFrom().deferred(() -> {
             AtomicBoolean workStarted = new AtomicBoolean();
-            return transaction(tenantId, work, workStarted)
+            long started = System.nanoTime();
+            return transaction(tenantId, work, workStarted, started)
                     .onFailure(failure -> retriesLeft > 0
                             && !workStarted.get()
                             && ConnectionFailures.isRetryableForRead(failure))
                     .recoverWithUni(failure -> {
-                        LOG.infof("Database connection failed before a read started (%s); "
-                                + "trying again", failure.getMessage());
+                        LOG.infof("Database connection failed before a read started (%s; %s); "
+                                + "trying again", failure.getMessage(), diagnostics.state());
                         return ConnectionFailures.pauseBeforeRetry()
                                 .chain(() -> attemptRead(tenantId, work, retriesLeft - 1));
                     });
@@ -127,12 +133,15 @@ public class TenantScopedSession {
      * not depend on when a unit of work is created.
      */
     private <T> Uni<T> transaction(UUID tenantId, Function<Mutiny.Session, Uni<T>> work,
-            AtomicBoolean workStarted) {
+            AtomicBoolean workStarted, long started) {
         return sessionFactory.get().openSession().chain(session -> session
-                .withTransaction(tx -> setScope(session, tenantId).chain(() -> {
-                    workStarted.set(true);
-                    return work.apply(session);
-                }))
+                .withTransaction(tx -> {
+                    diagnostics.waited(System.nanoTime() - started);
+                    return setScope(session, tenantId).chain(() -> {
+                        workStarted.set(true);
+                        return work.apply(session);
+                    });
+                })
                 .onTermination().call(session::close));
     }
 
