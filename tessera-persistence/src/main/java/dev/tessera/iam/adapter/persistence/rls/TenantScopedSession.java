@@ -24,9 +24,15 @@ import org.jboss.logging.Logger;
  *
  * <p>Read-only units of work go through {@link #inTenantRead}, which survives a pooled connection
  * that died while idle: if the connection fails before the unit of work has started (while the
- * transaction begins or the tenant is bound), the whole transaction is attempted again on a fresh
- * connection, at most {@code iam.db.read-retries} more times (default 1). Units of work that write
- * use {@link #inTenant} and are never retried, so nothing can be applied twice.
+ * transaction begins or the tenant is bound), or no connection became free within the pool's
+ * acquisition timeout, the whole transaction is attempted again, at most
+ * {@code iam.db.read-retries} more times (default 1).
+ *
+ * <p>Units of work that write use {@link #inTenant}. They are retried only when no connection was
+ * ever handed to them (the acquisition timeout, see {@link ConnectionFailures#isAcquisitionTimeout}),
+ * at most {@code iam.db.write-acquire-retries} more times (default 1): without a connection nothing
+ * was sent, so nothing can be applied twice. A write whose connection fails after it was obtained
+ * is never retried.
  */
 @ApplicationScoped
 public class TenantScopedSession {
@@ -42,6 +48,9 @@ public class TenantScopedSession {
     @ConfigProperty(name = "iam.db.read-retries", defaultValue = "1")
     int readRetries;
 
+    @ConfigProperty(name = "iam.db.write-acquire-retries", defaultValue = "1")
+    int writeAcquireRetries;
+
     /**
      * Runs {@code work} in a single transaction scoped to {@code tenantId}: it sets the
      * RLS GUC first, then hands the session to the supplied function.
@@ -52,16 +61,32 @@ public class TenantScopedSession {
      * @return a {@link Uni} emitting the work's result
      */
     public <T> Uni<T> inTenant(UUID tenantId, Function<Mutiny.Session, Uni<T>> work) {
-        return sessionFactory.get().withTransaction(
-                (session, tx) -> setScope(session, tenantId).chain(() -> work.apply(session)));
+        return attemptWrite(tenantId, work, writeAcquireRetries);
+    }
+
+    private <T> Uni<T> attemptWrite(
+            UUID tenantId, Function<Mutiny.Session, Uni<T>> work, int retriesLeft) {
+        return Uni.createFrom().deferred(() -> {
+            AtomicBoolean workStarted = new AtomicBoolean();
+            return transaction(tenantId, work, workStarted)
+                    .onFailure(failure -> retriesLeft > 0
+                            && !workStarted.get()
+                            && ConnectionFailures.isAcquisitionTimeout(failure))
+                    .recoverWithUni(failure -> {
+                        LOG.info("No database connection became free for a write within the acquisition "
+                                + "timeout; nothing was sent, trying again");
+                        return ConnectionFailures.pauseBeforeRetry()
+                                .chain(() -> attemptWrite(tenantId, work, retriesLeft - 1));
+                    });
+        });
     }
 
     /**
      * As {@link #inTenant}, for a unit of work that only reads. When the connection fails before
-     * {@code work} has started (the transaction could not begin, or binding the tenant failed),
-     * the transaction is attempted again on a fresh connection, at most {@code iam.db.read-retries}
-     * more times. A failure after {@code work} started is never retried, and neither is a failure
-     * that is not a connection failure ({@link ConnectionFailures}).
+     * {@code work} has started (the transaction could not begin, or binding the tenant failed), or
+     * no connection became free in time, the transaction is attempted again, at most
+     * {@code iam.db.read-retries} more times. A failure after {@code work} started is never
+     * retried, and neither is a failure that is not a connection failure ({@link ConnectionFailures}).
      *
      * <p>Only for work that reads. A retry happens only when nothing of {@code work} ran, so it
      * could not double-apply anything even for a write; limiting it to reads keeps that guarantee
@@ -80,21 +105,35 @@ public class TenantScopedSession {
             UUID tenantId, Function<Mutiny.Session, Uni<T>> work, int retriesLeft) {
         return Uni.createFrom().deferred(() -> {
             AtomicBoolean workStarted = new AtomicBoolean();
-            return sessionFactory.get()
-                    .withTransaction((session, tx) -> setScope(session, tenantId).chain(() -> {
-                        workStarted.set(true);
-                        return work.apply(session);
-                    }))
+            return transaction(tenantId, work, workStarted)
                     .onFailure(failure -> retriesLeft > 0
                             && !workStarted.get()
-                            && ConnectionFailures.isConnectionFailure(failure))
+                            && ConnectionFailures.isRetryableForRead(failure))
                     .recoverWithUni(failure -> {
                         LOG.infof("Database connection failed before a read started (%s); "
-                                + "retrying on a fresh connection", failure.getMessage());
+                                + "trying again", failure.getMessage());
                         return ConnectionFailures.pauseBeforeRetry()
                                 .chain(() -> attemptRead(tenantId, work, retriesLeft - 1));
                     });
         });
+    }
+
+    /**
+     * One unit of work in its own session and transaction. The session is opened here rather than
+     * through {@code SessionFactory.withTransaction}, which joins a session already bound to the
+     * current Vert.x context at the moment it is called. The retries create each attempt when it is
+     * subscribed, and with {@code withTransaction} units of work subscribed concurrently in one
+     * request then shared a session, its connection and its tenant binding. A session of its own does
+     * not depend on when a unit of work is created.
+     */
+    private <T> Uni<T> transaction(UUID tenantId, Function<Mutiny.Session, Uni<T>> work,
+            AtomicBoolean workStarted) {
+        return sessionFactory.get().openSession().chain(session -> session
+                .withTransaction(tx -> setScope(session, tenantId).chain(() -> {
+                    workStarted.set(true);
+                    return work.apply(session);
+                }))
+                .onTermination().call(session::close));
     }
 
     private static Uni<String> setScope(Mutiny.Session session, UUID tenantId) {

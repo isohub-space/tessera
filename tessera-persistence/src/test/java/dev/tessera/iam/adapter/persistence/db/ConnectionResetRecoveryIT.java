@@ -17,10 +17,12 @@ import io.quarkus.test.junit.TestProfile;
 import io.quarkus.test.vertx.RunOnVertxContext;
 import io.quarkus.test.vertx.UniAsserter;
 import io.smallrye.mutiny.Uni;
+import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.PoolOptions;
 import jakarta.inject.Inject;
 import java.time.Instant;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
@@ -53,6 +55,9 @@ class ConnectionResetRecoveryIT {
 
     @Inject
     TesseraPgPoolCreator poolCreator;
+
+    @Inject
+    Pool pool;
 
     @ConfigProperty(name = ResettingProxyPostgresResource.ADMIN_PORT)
     int adminPort;
@@ -87,6 +92,27 @@ class ConnectionResetRecoveryIT {
                         .isTrue());
     }
 
+    /**
+     * Takes the pool's only connection and keeps it busy for {@code seconds}, so requests in the
+     * meantime wait for a connection. Completes once the connection is held; {@code released}
+     * completes when it is back in the pool.
+     */
+    private Uni<Void> holdTheOnlyConnection(double seconds, CompletableFuture<Void> released) {
+        return Uni.createFrom().completionStage(pool.getConnection()
+                .onSuccess(conn -> conn.query("select pg_sleep(" + seconds + ")").execute()
+                        .onComplete(done -> conn.close().onComplete(closed -> released.complete(null))))
+                .mapEmpty()
+                .toCompletionStage())
+                .replaceWithVoid();
+    }
+
+    /** A second create of the same family must fail on its primary key, not on the connection. */
+    private static <T> void assertConnectionFailureFree(UniAsserter asserter, Supplier<Uni<T>> duplicate) {
+        asserter.assertFailedWith(duplicate,
+                failure -> assertThat(ConnectionFailures.isRetryableForRead(failure))
+                        .as("a constraint violation, not a connection problem: %s", failure).isFalse());
+    }
+
     private int resetsSoFar() {
         return Integer.parseInt(ResettingTcpProxy.command(adminPort, "resets"));
     }
@@ -101,10 +127,11 @@ class ConnectionResetRecoveryIT {
             assertThat(options.getTcpKeepAliveIdleSeconds()).isEqualTo(30);
             assertThat(options.getTcpKeepAliveIntervalSeconds()).isEqualTo(10);
             assertThat(options.getTcpKeepAliveCount()).isEqualTo(3);
-            assertThat(options.getConnectTimeout()).isEqualTo(5_000);
+            assertThat(options.getConnectTimeout()).isEqualTo(1_000);
         });
-        PoolOptions pool = poolCreator.configuredPoolOptions();
-        assertThat(pool.getConnectionTimeoutUnit().toMillis(pool.getConnectionTimeout())).isEqualTo(10_000);
+        PoolOptions poolOptions = poolCreator.configuredPoolOptions();
+        assertThat(poolOptions.getConnectionTimeoutUnit().toMillis(poolOptions.getConnectionTimeout()))
+                .isEqualTo(2_000);
     }
 
     @Test
@@ -128,6 +155,50 @@ class ConnectionResetRecoveryIT {
 
     @Test
     @RunOnVertxContext
+    @DisplayName("a read that gets no connection within the acquisition timeout waits once more and succeeds")
+    void readRetriesAfterAcquisitionTimeout(UniAsserter asserter) {
+        UUID tenant = UUID.randomUUID();
+        CompletableFuture<Void> released = new CompletableFuture<>();
+
+        asserter.execute(() -> holdTheOnlyConnection(3, released));
+        // The first wait ends at 2 s with the acquisition timeout; the retry gets the connection at 3 s.
+        asserter.assertThat(() -> users.findById(tenant, UUID.randomUUID()), found -> assertThat(found).isNull());
+        asserter.execute(() -> Uni.createFrom().completionStage(released));
+    }
+
+    @Test
+    @RunOnVertxContext
+    @DisplayName("a write that gets no connection within the acquisition timeout runs once, on the retry")
+    void writeRetriesAfterAcquisitionTimeout(UniAsserter asserter) {
+        UUID tenant = UUID.randomUUID();
+        FamilyId fid = new FamilyId(UUID.randomUUID());
+        CompletableFuture<Void> released = new CompletableFuture<>();
+
+        asserter.execute(() -> holdTheOnlyConnection(3, released));
+        asserter.execute(() -> refreshTokens.createFamily(family(fid, realm(tenant))));
+        asserter.assertThat(() -> refreshTokens.find(fid, realm(tenant)),
+                found -> assertThat(found).as("the family was written").isNotNull());
+        // Applying it twice would have failed on the primary key; a second create proves it is there once.
+        assertConnectionFailureFree(asserter, () -> refreshTokens.createFamily(family(fid, realm(tenant))));
+        asserter.execute(() -> Uni.createFrom().completionStage(released));
+    }
+
+    @Test
+    @RunOnVertxContext
+    @DisplayName("the acquisition-timeout retry is bounded: a connection held past both waits fails the read")
+    void acquisitionRetryIsBounded(UniAsserter asserter) {
+        UUID tenant = UUID.randomUUID();
+        CompletableFuture<Void> released = new CompletableFuture<>();
+
+        asserter.execute(() -> holdTheOnlyConnection(5, released));
+        asserter.assertFailedWith(() -> users.findById(tenant, UUID.randomUUID()),
+                failure -> assertThat(ConnectionFailures.isAcquisitionTimeout(failure))
+                        .as("two waits of 2 s each, then the timeout surfaces: %s", failure).isTrue());
+        asserter.execute(() -> Uni.createFrom().completionStage(released));
+    }
+
+    @Test
+    @RunOnVertxContext
     @DisplayName("a session state write on a reset pooled connection fails and is not retried")
     void sessionWriteIsNotRetried(UniAsserter asserter) {
         UUID tenant = UUID.randomUUID();
@@ -135,7 +206,7 @@ class ConnectionResetRecoveryIT {
         warmThenDoom(asserter, tenant);
         assertConnectionFailure(asserter, () -> authSessions.updateState(tenant, UUID.randomUUID(), "ENDED"));
         asserter.assertThat(() -> users.findById(tenant, UUID.randomUUID()),
-                found -> assertThat(found).as("the dead connection left the pool").isNull());
+                found -> assertThat(found).as("the next read works").isNull());
     }
 
     @Test
