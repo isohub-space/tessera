@@ -26,13 +26,13 @@ import org.jboss.logging.Logger;
  * unchanged.
  */
 @Singleton
-public class TcpUserTimeoutPgPoolCreator implements PgPoolCreator {
+public class TesseraPgPoolCreator implements PgPoolCreator {
 
-    private static final Logger LOG = Logger.getLogger(TcpUserTimeoutPgPoolCreator.class);
+    private static final Logger LOG = Logger.getLogger(TesseraPgPoolCreator.class);
 
     private final int tcpUserTimeoutMillis;
 
-    public TcpUserTimeoutPgPoolCreator(
+    public TesseraPgPoolCreator(
             @ConfigProperty(name = "iam.db.tcp-user-timeout", defaultValue = "PT5S") Duration tcpUserTimeout) {
         if (tcpUserTimeout == null || tcpUserTimeout.isNegative()) {
             throw new IllegalArgumentException("iam.db.tcp-user-timeout must not be negative");
