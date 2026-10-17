@@ -50,6 +50,9 @@ class ConnectionResetRecoveryIT {
     @Inject
     RefreshTokenStorePort refreshTokens;
 
+    @Inject
+    TesseraPgPoolCreator poolCreator;
+
     @ConfigProperty(name = ResettingProxyPostgresResource.ADMIN_PORT)
     int adminPort;
 
@@ -85,6 +88,19 @@ class ConnectionResetRecoveryIT {
 
     private int resetsSoFar() {
         return Integer.parseInt(ResettingTcpProxy.command(adminPort, "resets"));
+    }
+
+    @Test
+    @DisplayName("Quarkus built the pool through the creator, with the socket options on its connect options")
+    void poolCarriesSocketOptions() {
+        assertThat(poolCreator.configuredOptions()).as("the creator built the runtime pool").isNotEmpty();
+        assertThat(poolCreator.configuredOptions()).allSatisfy(options -> {
+            assertThat(options.getTcpUserTimeout()).isEqualTo(5_000);
+            assertThat(options.isTcpKeepAlive()).isTrue();
+            assertThat(options.getTcpKeepAliveIdleSeconds()).isEqualTo(30);
+            assertThat(options.getTcpKeepAliveIntervalSeconds()).isEqualTo(10);
+            assertThat(options.getTcpKeepAliveCount()).isEqualTo(3);
+        });
     }
 
     @Test
