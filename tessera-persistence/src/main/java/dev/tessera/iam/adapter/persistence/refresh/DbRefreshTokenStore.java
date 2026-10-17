@@ -156,7 +156,7 @@ public class DbRefreshTokenStore implements RefreshTokenStorePort {
         if (id == null || realm == null) {
             throw new IllegalArgumentException("id and realm must not be null");
         }
-        return scoped.inTenant(realm.tenant().value(),
+        return scoped.inTenantRead(realm.tenant().value(),
                 session -> session.find(RefreshTokenFamilyEntity.class, id.value())
                         .map(entity -> {
                             if (entity == null) {

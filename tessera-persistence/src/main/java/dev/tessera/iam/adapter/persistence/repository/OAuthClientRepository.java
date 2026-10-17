@@ -32,7 +32,7 @@ public class OAuthClientRepository {
      * @return a {@link Uni} emitting the client, or {@code null} if none matches
      */
     public Uni<OAuthClientEntity> findByClientKey(UUID tenantId, UUID baselineId, String clientKey) {
-        return scoped.inTenant(tenantId, session ->
+        return scoped.inTenantRead(tenantId, session ->
                 session.createQuery(
                                 "from OAuthClientEntity c "
                                         + "where c.baselineId = :baseline and c.clientKey = :key",
@@ -50,7 +50,7 @@ public class OAuthClientRepository {
      * @return a {@link Uni} emitting the client, or {@code null} if none matches
      */
     public Uni<OAuthClientEntity> findById(UUID tenantId, UUID id) {
-        return scoped.inTenant(tenantId, session -> session.find(OAuthClientEntity.class, id));
+        return scoped.inTenantRead(tenantId, session -> session.find(OAuthClientEntity.class, id));
     }
 
     /**

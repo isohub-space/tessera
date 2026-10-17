@@ -29,7 +29,7 @@ public class ConsentRepository {
      * @return a {@link Uni} emitting the consent, or {@code null} if none matches
      */
     public Uni<ConsentEntity> findByUserAndClient(UUID tenantId, UUID userId, UUID clientId) {
-        return scoped.inTenant(tenantId, session ->
+        return scoped.inTenantRead(tenantId, session ->
                 session.createQuery(
                                 "from ConsentEntity c where c.userId = :user "
                                         + "and c.clientId = :client",

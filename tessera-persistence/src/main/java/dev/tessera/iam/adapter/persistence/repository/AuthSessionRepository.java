@@ -28,7 +28,7 @@ public class AuthSessionRepository {
      * @return a {@link Uni} emitting the session, or {@code null} if none matches
      */
     public Uni<AuthSessionEntity> findById(UUID tenantId, UUID id) {
-        return scoped.inTenant(tenantId, session -> session.find(AuthSessionEntity.class, id));
+        return scoped.inTenantRead(tenantId, session -> session.find(AuthSessionEntity.class, id));
     }
 
     /**

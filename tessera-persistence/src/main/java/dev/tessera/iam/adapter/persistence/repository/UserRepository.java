@@ -29,7 +29,7 @@ public class UserRepository {
      * @return a {@link Uni} emitting the user, or {@code null} if none matches
      */
     public Uni<UserEntity> findBySubject(UUID tenantId, String subjectId) {
-        return scoped.inTenant(tenantId, session ->
+        return scoped.inTenantRead(tenantId, session ->
                 session.createQuery(
                                 "from UserEntity u where u.subjectId = :sub", UserEntity.class)
                         .setParameter("sub", subjectId)
@@ -44,7 +44,7 @@ public class UserRepository {
      * @return a {@link Uni} emitting the user, or {@code null} if none matches
      */
     public Uni<UserEntity> findById(UUID tenantId, UUID id) {
-        return scoped.inTenant(tenantId, session -> session.find(UserEntity.class, id));
+        return scoped.inTenantRead(tenantId, session -> session.find(UserEntity.class, id));
     }
 
     /**
@@ -55,7 +55,7 @@ public class UserRepository {
      * @return a {@link Uni} emitting the user, or {@code null} if none matches
      */
     public Uni<UserEntity> findByUsername(UUID tenantId, String username) {
-        return scoped.inTenant(tenantId, session ->
+        return scoped.inTenantRead(tenantId, session ->
                 session.createQuery(
                                 "from UserEntity u where u.username = :username", UserEntity.class)
                         .setParameter("username", username)

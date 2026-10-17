@@ -53,7 +53,7 @@ public class DbKeyProviderAdapter implements KeyProviderPort {
         UUID tenantId = realm.tenant().value();
         // Tenant-scoped (RLS) lookup of the key by kid, then decrypt the private key and
         // sign — the key bytes are loaded, used and discarded entirely inside the adapter.
-        return scoped.inTenant(tenantId, session ->
+        return scoped.inTenantRead(tenantId, session ->
                 loadByKid(session, keyId).map(entity -> {
                     PrivateKey privateKey = recoverPrivateKey(entity);
                     byte[] signature = Ed25519Keys.sign(privateKey, input);
@@ -64,14 +64,14 @@ public class DbKeyProviderAdapter implements KeyProviderPort {
     @Override
     public Uni<List<PublicJwk>> publishedJwks(RealmKey realm) {
         UUID tenantId = realm.tenant().value();
-        return scoped.inTenant(tenantId, session ->
+        return scoped.inTenantRead(tenantId, session ->
                 publishedKeys(session).map(KeyRotationPolicy::publishedJwks));
     }
 
     @Override
     public Uni<ActiveKey> currentSigningKey(RealmKey realm) {
         UUID tenantId = realm.tenant().value();
-        return scoped.inTenant(tenantId, session ->
+        return scoped.inTenantRead(tenantId, session ->
                 allKeys(session).map(descriptors -> {
                     SigningKeyDescriptor current = KeyRotationPolicy.currentSigningKey(descriptors)
                             .orElseThrow(() -> new IllegalStateException(
