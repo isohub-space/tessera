@@ -7,6 +7,7 @@ import io.vertx.sqlclient.Pool;
 import jakarta.inject.Singleton;
 import java.time.Duration;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.jboss.logging.Logger;
 
 /**
  * Creates the reactive PostgreSQL pool with a TCP user timeout on every connection.
@@ -27,10 +28,12 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 @Singleton
 public class TcpUserTimeoutPgPoolCreator implements PgPoolCreator {
 
+    private static final Logger LOG = Logger.getLogger(TcpUserTimeoutPgPoolCreator.class);
+
     private final int tcpUserTimeoutMillis;
 
     public TcpUserTimeoutPgPoolCreator(
-            @ConfigProperty(name = "iam.db.tcp-user-timeout", defaultValue = "PT15S") Duration tcpUserTimeout) {
+            @ConfigProperty(name = "iam.db.tcp-user-timeout", defaultValue = "PT5S") Duration tcpUserTimeout) {
         if (tcpUserTimeout == null || tcpUserTimeout.isNegative()) {
             throw new IllegalArgumentException("iam.db.tcp-user-timeout must not be negative");
         }
@@ -39,7 +42,13 @@ public class TcpUserTimeoutPgPoolCreator implements PgPoolCreator {
 
     @Override
     public Pool create(Input input) {
+        // Without the native transport the option is silently ignored; say which case applies, so
+        // a deployment can confirm the bound is in force.
         if (tcpUserTimeoutMillis > 0) {
+            LOG.infof("Database connections: TCP user timeout %d ms (%s)", tcpUserTimeoutMillis,
+                    input.vertx().isNativeTransportEnabled()
+                            ? "native transport, applied"
+                            : "no native transport, ignored");
             for (PgConnectOptions options : input.pgConnectOptionsList()) {
                 options.setTcpUserTimeout(tcpUserTimeoutMillis);
             }
