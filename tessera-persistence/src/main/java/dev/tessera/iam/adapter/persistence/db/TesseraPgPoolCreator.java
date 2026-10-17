@@ -6,24 +6,34 @@ import io.vertx.pgclient.spi.PgDriver;
 import io.vertx.sqlclient.Pool;
 import jakarta.inject.Singleton;
 import java.time.Duration;
+import java.util.List;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 /**
- * Creates the reactive PostgreSQL pool with a TCP user timeout on every connection.
+ * Creates the reactive PostgreSQL pool with socket options that keep a database connection's
+ * network path alive and detect a dead one.
  *
- * <p>A connection whose network path was dropped silently (a NAT or firewall forgetting an idle
- * flow) accepts a write, and the kernel then retransmits it unacknowledged for many minutes before
- * giving up; the request waiting on that connection hangs, and others queue behind it until the
- * pool's acquisition timeout. {@code TCP_USER_TIMEOUT} bounds how long sent data may stay
- * unacknowledged, so such a connection fails fast with a connection error that the read path can
- * retry on a fresh connection. Pool lifetimes ({@code quarkus.datasource.reactive.idle-timeout},
- * {@code max-lifetime}) remain the first defence: they retire connections before the path drops
- * them.
+ * <p>A connection that crosses a NAT or firewall can be dropped there after a period of silence
+ * while both ends still consider it open. Two kernel options address that:
+ * <ul>
+ *   <li><b>TCP keepalive</b> ({@code SO_KEEPALIVE} with {@code TCP_KEEPIDLE}, {@code TCP_KEEPINTVL},
+ *       {@code TCP_KEEPCNT}): after {@code iam.db.tcp-keepalive.idle} without traffic the kernel sends
+ *       a probe. The probe keeps the flow alive on the path, so it is not dropped as idle, and a
+ *       path that has died anyway is noticed while the connection sits in the pool, not when a
+ *       request borrows it.</li>
+ *   <li><b>{@code TCP_USER_TIMEOUT}</b>: how long sent data may stay unacknowledged before the
+ *       kernel closes the connection. It turns a statement written into a dead path into an error
+ *       instead of a hang. When both are set, Linux lets the user timeout decide when an unanswered
+ *       keepalive probe ends the connection (tcp(7)); the probe count matters only when the user
+ *       timeout is off.</li>
+ * </ul>
+ * Pool lifetimes ({@code quarkus.datasource.reactive.idle-timeout}, {@code max-lifetime}) still
+ * retire connections, but only when the pool's cleaner timer runs.
  *
- * <p>The option is honoured by the native epoll transport only (Linux). Elsewhere it is ignored,
- * which is harmless. Everything else about the pool is Quarkus' own configuration, passed through
- * unchanged.
+ * <p>Vert.x applies these options on the native epoll transport (Linux) only; with the NIO
+ * transport they are ignored without an error. Everything else about the pool is Quarkus' own
+ * configuration, passed through unchanged.
  */
 @Singleton
 public class TesseraPgPoolCreator implements PgPoolCreator {
@@ -31,28 +41,68 @@ public class TesseraPgPoolCreator implements PgPoolCreator {
     private static final Logger LOG = Logger.getLogger(TesseraPgPoolCreator.class);
 
     private final int tcpUserTimeoutMillis;
+    private final int keepAliveIdleSeconds;
+    private final int keepAliveIntervalSeconds;
+    private final int keepAliveCount;
+
+    // The connect options of the pool this creator built, for tests to check what reached the driver.
+    private volatile List<PgConnectOptions> configured = List.of();
 
     public TesseraPgPoolCreator(
-            @ConfigProperty(name = "iam.db.tcp-user-timeout", defaultValue = "PT5S") Duration tcpUserTimeout) {
-        if (tcpUserTimeout == null || tcpUserTimeout.isNegative()) {
-            throw new IllegalArgumentException("iam.db.tcp-user-timeout must not be negative");
+            @ConfigProperty(name = "iam.db.tcp-user-timeout", defaultValue = "PT5S") Duration tcpUserTimeout,
+            @ConfigProperty(name = "iam.db.tcp-keepalive.idle", defaultValue = "PT30S") Duration keepAliveIdle,
+            @ConfigProperty(name = "iam.db.tcp-keepalive.interval", defaultValue = "PT10S") Duration keepAliveInterval,
+            @ConfigProperty(name = "iam.db.tcp-keepalive.count", defaultValue = "3") int keepAliveCount) {
+        this.tcpUserTimeoutMillis = Math.toIntExact(nonNegative(tcpUserTimeout, "iam.db.tcp-user-timeout").toMillis());
+        this.keepAliveIdleSeconds = wholeSeconds(keepAliveIdle, "iam.db.tcp-keepalive.idle");
+        this.keepAliveIntervalSeconds = wholeSeconds(keepAliveInterval, "iam.db.tcp-keepalive.interval");
+        this.keepAliveCount = keepAliveCount;
+        if (keepAliveIdleSeconds > 0 && (keepAliveIntervalSeconds < 1 || keepAliveCount < 1)) {
+            throw new IllegalArgumentException("with iam.db.tcp-keepalive.idle set, iam.db.tcp-keepalive.interval "
+                    + "must be at least 1 s and iam.db.tcp-keepalive.count at least 1");
         }
-        this.tcpUserTimeoutMillis = Math.toIntExact(tcpUserTimeout.toMillis());
+    }
+
+    private static Duration nonNegative(Duration value, String name) {
+        if (value == null || value.isNegative()) {
+            throw new IllegalArgumentException(name + " must not be negative");
+        }
+        return value;
+    }
+
+    // The kernel takes keepalive timings in whole seconds.
+    private static int wholeSeconds(Duration value, String name) {
+        nonNegative(value, name);
+        if (value.toMillis() % 1000 != 0) {
+            throw new IllegalArgumentException(name + " must be a whole number of seconds");
+        }
+        return Math.toIntExact(value.toSeconds());
     }
 
     @Override
     public Pool create(Input input) {
-        // Without the native transport the option is silently ignored; say which case applies, so
-        // a deployment can confirm the bound is in force.
-        if (tcpUserTimeoutMillis > 0) {
-            LOG.infof("Database connections: TCP user timeout %d ms (%s)", tcpUserTimeoutMillis,
-                    input.vertx().isNativeTransportEnabled()
-                            ? "native transport, applied"
-                            : "no native transport, ignored");
-            for (PgConnectOptions options : input.pgConnectOptionsList()) {
+        // Without the native transport these options are silently ignored; say which case applies,
+        // so a deployment can confirm they are in force.
+        LOG.infof("Database connections: TCP user timeout %d ms, keepalive %s (%s)", tcpUserTimeoutMillis,
+                keepAliveIdleSeconds > 0
+                        ? "idle " + keepAliveIdleSeconds + " s, interval " + keepAliveIntervalSeconds
+                                + " s, count " + keepAliveCount
+                        : "off",
+                input.vertx().isNativeTransportEnabled()
+                        ? "native transport, applied"
+                        : "no native transport, ignored");
+        for (PgConnectOptions options : input.pgConnectOptionsList()) {
+            if (tcpUserTimeoutMillis > 0) {
                 options.setTcpUserTimeout(tcpUserTimeoutMillis);
             }
+            if (keepAliveIdleSeconds > 0) {
+                options.setTcpKeepAlive(true);
+                options.setTcpKeepAliveIdleSeconds(keepAliveIdleSeconds);
+                options.setTcpKeepAliveIntervalSeconds(keepAliveIntervalSeconds);
+                options.setTcpKeepAliveCount(keepAliveCount);
+            }
         }
+        configured = List.copyOf(input.pgConnectOptionsList());
         // Quarkus, with no creator, passes the driver a supplier over these same options; that
         // differs only when a datasource credentials provider is configured, which tessera does not
         // use (a creator would bypass it). The driver returns the PgPool Quarkus casts the result to.
@@ -60,7 +110,7 @@ public class TesseraPgPoolCreator implements PgPoolCreator {
                 input.vertx(), input.pgConnectOptionsList(), input.poolOptions());
     }
 
-    int tcpUserTimeoutMillis() {
-        return tcpUserTimeoutMillis;
+    List<PgConnectOptions> configuredOptions() {
+        return configured;
     }
 }
