@@ -14,8 +14,8 @@ import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-@DisplayName("TcpUserTimeoutPgPoolCreator — every pooled connection gets the TCP user timeout")
-class TcpUserTimeoutPgPoolCreatorTest {
+@DisplayName("TesseraPgPoolCreator — socket and pool options for every database connection")
+class TesseraPgPoolCreatorTest {
 
     private static PgPoolCreator.Input input(Vertx vertx, List<PgConnectOptions> options) {
         return new PgPoolCreator.Input() {
@@ -43,7 +43,7 @@ class TcpUserTimeoutPgPoolCreatorTest {
         Vertx vertx = Vertx.vertx();
         try {
             List<PgConnectOptions> options = List.of(new PgConnectOptions(), new PgConnectOptions());
-            Pool pool = new TcpUserTimeoutPgPoolCreator(Duration.ofSeconds(15)).create(input(vertx, options));
+            Pool pool = new TesseraPgPoolCreator(Duration.ofSeconds(15)).create(input(vertx, options));
             assertThat(pool).isInstanceOf(PgPool.class);
             assertThat(options).allSatisfy(o -> assertThat(o.getTcpUserTimeout()).isEqualTo(15_000));
             pool.close();
@@ -59,7 +59,7 @@ class TcpUserTimeoutPgPoolCreatorTest {
         try {
             PgConnectOptions option = new PgConnectOptions();
             int before = option.getTcpUserTimeout();
-            new TcpUserTimeoutPgPoolCreator(Duration.ZERO).create(input(vertx, List.of(option))).close();
+            new TesseraPgPoolCreator(Duration.ZERO).create(input(vertx, List.of(option))).close();
             assertThat(option.getTcpUserTimeout()).isEqualTo(before);
         } finally {
             vertx.close();
@@ -69,7 +69,7 @@ class TcpUserTimeoutPgPoolCreatorTest {
     @Test
     @DisplayName("a negative timeout is refused at startup")
     void negativeRefused() {
-        assertThatThrownBy(() -> new TcpUserTimeoutPgPoolCreator(Duration.ofSeconds(-1)))
+        assertThatThrownBy(() -> new TesseraPgPoolCreator(Duration.ofSeconds(-1)))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }
