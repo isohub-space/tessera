@@ -13,15 +13,21 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Pins which operations may use the retrying read path ({@link TenantScopedSession#inTenantRead}).
+ * Pins which operations use which path of {@link TenantScopedSession}.
  *
- * <p>A retried unit of work runs twice when its first connection fails, so only pure reads may use
- * it. The list below is the reviewed set of read-only call sites: moving a write there (refresh-token
- * creation, rotation or revocation, a persist or a state update) fails this test, and so does adding a
- * new read, which then has to be reviewed and listed. Writes go through {@link TenantScopedSession#inTenant},
- * which never retries.
+ * <p>Both paths attempt a unit of work again only when it failed before its work function was
+ * called (the transaction began, the tenant was bound, or no connection was handed over): nothing of
+ * the unit had been sent, so nothing can be applied twice. {@link TenantScopedSession#inTenantRead}
+ * is for the reviewed read-only operations, {@link TenantScopedSession#inTenant} for everything that
+ * writes; each has its own retry budget. Both lists below are exact: moving an operation from one
+ * path to the other, or adding a caller of either, fails this test until it is reviewed and listed.
+ *
+ * <p>Every write below uses the pre-work retry for the same reason: the retry happens only while its
+ * own statements have not been sent, which does not depend on what those statements are. A failure
+ * after the work started is never retried; {@code ConnectionResetRecoveryIT} checks that for
+ * refresh-token creation, rotation and revocation and for a session update.
  */
-@DisplayName("IAM Persistence — only reviewed read-only operations use the retrying read path (ArchUnit)")
+@DisplayName("IAM Persistence — the read and write paths are used by exactly the reviewed operations (ArchUnit)")
 class ReadRetryScopeArchTest {
 
     private static final Set<String> REVIEWED_READS = Set.of(
@@ -38,7 +44,7 @@ class ReadRetryScopeArchTest {
             "DbKeyProviderAdapter.publishedJwks",
             "DbKeyProviderAdapter.currentSigningKey");
 
-    private static final Set<String> WRITES = Set.of(
+    private static final Set<String> REVIEWED_WRITES = Set.of(
             "DbRefreshTokenStore.createFamily",
             "DbRefreshTokenStore.consumeAndRotate",
             "DbRefreshTokenStore.revokeFamily",
@@ -47,7 +53,10 @@ class ReadRetryScopeArchTest {
             "ConsentRepository.persist",
             "CredentialRepository.persist",
             "OAuthClientRepository.persist",
-            "UserRepository.persist");
+            "UserRepository.persist",
+            "KeyRotationService.mintPending",
+            "KeyRotationService.promoteToActive",
+            "FirstBootProvisioner.ensureSigningKey");
 
     private static JavaClasses persistenceClasses;
 
@@ -75,15 +84,14 @@ class ReadRetryScopeArchTest {
     }
 
     @Test
-    @DisplayName("the retrying read path is used by exactly the reviewed read-only operations")
-    void onlyReviewedReadsRetry() {
+    @DisplayName("the read path is used by exactly the reviewed read-only operations")
+    void onlyReviewedReads() {
         assertThat(callersOf("inTenantRead")).containsExactlyInAnyOrderElementsOf(REVIEWED_READS);
     }
 
     @Test
-    @DisplayName("refresh-token creation, rotation and revocation and every persist or update stay on the non-retrying path")
-    void writesNeverRetry() {
-        assertThat(callersOf("inTenantRead")).doesNotContainAnyElementsOf(WRITES);
-        assertThat(callersOf("inTenant")).containsAll(WRITES);
+    @DisplayName("the write path is used by exactly the reviewed writes, refresh-token creation, rotation and revocation among them")
+    void onlyReviewedWrites() {
+        assertThat(callersOf("inTenant")).containsExactlyInAnyOrderElementsOf(REVIEWED_WRITES);
     }
 }

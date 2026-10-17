@@ -33,11 +33,16 @@ import org.junit.jupiter.api.Test;
  * The pooled connection's network path dies while the pool still holds it (what a NAT or firewall
  * idle cut-off does), then the next request borrows it.
  *
- * <p>A read recovers on a fresh connection within the same call. A write is not retried: it fails,
- * leaves no trace, and the request after it works again because the dead connection has left the
- * pool. The write cases cover the refresh-token operations whose double application would matter
- * (family creation, rotation, revocation): each fails here if it is ever moved to the retrying read
- * path, because the retry would make the call succeed.
+ * <p>When the connection fails before a unit of work's own statements go out (it begins its
+ * transaction and binds the tenant first), the unit runs again on a fresh connection within the same
+ * call, read or write; nothing of it had been sent. When the connection fails after its statements
+ * went out, the unit fails, is not retried and leaves no trace. The after-start cases cover the
+ * refresh-token operations whose double application would matter (family creation, rotation,
+ * revocation): each fails here if the retry window is ever widened past the start of the work,
+ * because the retry would make the call succeed.
+ *
+ * <p>The acquisition cases hold the pool's only connection, so a request gets none within the 2 s
+ * acquisition timeout.
  */
 @QuarkusTest
 @TestProfile(ResettingProxyProfile.class)
@@ -81,11 +86,23 @@ class ConnectionResetRecoveryIT {
                 "h0", null, 0, false, T0, T0.plusSeconds(3600));
     }
 
-    /** Warms the single pooled connection with a read, then kills its network path. */
+    /** Warms the single pooled connection with a read, then kills its network path at once. */
     private void warmThenDoom(UniAsserter asserter, UUID tenant) {
         asserter.assertThat(() -> users.findById(tenant, UUID.randomUUID()),
                 warm -> assertThat(warm).isNull());
         asserter.execute(() -> assertThat(doomPooledConnections()).isEqualTo(1));
+    }
+
+    /**
+     * Warms the single pooled connection, then kills its network path when the first statement
+     * naming {@code table} goes out: after the transaction began and the tenant was bound, that is
+     * once the unit's own work has started.
+     */
+    private void warmThenDoomOnceWorkStarts(UniAsserter asserter, UUID tenant, String table) {
+        asserter.assertThat(() -> users.findById(tenant, UUID.randomUUID()),
+                warm -> assertThat(warm).isNull());
+        asserter.execute(() -> assertThat(Integer.parseInt(ResettingTcpProxy.command(adminPort, "doom-on " + table)))
+                .isEqualTo(1));
     }
 
     private static <T> void assertConnectionFailure(UniAsserter asserter, Supplier<Uni<T>> write) {
@@ -112,7 +129,7 @@ class ConnectionResetRecoveryIT {
     /** A second create of the same family must fail on its primary key, not on the connection. */
     private static <T> void assertConnectionFailureFree(UniAsserter asserter, Supplier<Uni<T>> duplicate) {
         asserter.assertFailedWith(duplicate,
-                failure -> assertThat(ConnectionFailures.isRetryableForRead(failure))
+                failure -> assertThat(ConnectionFailures.isRetryableBeforeWork(failure))
                         .as("a constraint violation, not a connection problem: %s", failure).isFalse());
     }
 
@@ -215,11 +232,26 @@ class ConnectionResetRecoveryIT {
 
     @Test
     @RunOnVertxContext
-    @DisplayName("a session state write on a reset pooled connection fails and is not retried")
+    @DisplayName("a write whose connection fails before its statements go out runs again, once")
+    void writeFailingBeforeItStartsIsRetried(UniAsserter asserter) {
+        UUID tenant = UUID.randomUUID();
+        FamilyId fid = new FamilyId(UUID.randomUUID());
+
+        warmThenDoom(asserter, tenant);
+        asserter.execute(() -> refreshTokens.createFamily(family(fid, realm(tenant))));
+        asserter.assertThat(() -> refreshTokens.find(fid, realm(tenant)),
+                found -> assertThat(found).as("the family was written").isNotNull());
+        // Applying it twice would have failed on the primary key; a second create proves it is there once.
+        assertConnectionFailureFree(asserter, () -> refreshTokens.createFamily(family(fid, realm(tenant))));
+    }
+
+    @Test
+    @RunOnVertxContext
+    @DisplayName("a session state write whose connection fails after it started is not retried")
     void sessionWriteIsNotRetried(UniAsserter asserter) {
         UUID tenant = UUID.randomUUID();
 
-        warmThenDoom(asserter, tenant);
+        warmThenDoomOnceWorkStarts(asserter, tenant, "auth_session");
         assertConnectionFailure(asserter, () -> authSessions.updateState(tenant, UUID.randomUUID(), "ENDED"));
         asserter.assertThat(() -> users.findById(tenant, UUID.randomUUID()),
                 found -> assertThat(found).as("the next read works").isNull());
@@ -227,12 +259,12 @@ class ConnectionResetRecoveryIT {
 
     @Test
     @RunOnVertxContext
-    @DisplayName("refresh-token family creation on a reset connection fails, is not retried and creates nothing")
+    @DisplayName("refresh-token family creation whose connection fails after it started is not retried and creates nothing")
     void familyCreationIsNotRetried(UniAsserter asserter) {
         UUID tenant = UUID.randomUUID();
         FamilyId fid = new FamilyId(UUID.randomUUID());
 
-        warmThenDoom(asserter, tenant);
+        warmThenDoomOnceWorkStarts(asserter, tenant, "refresh_token_family");
         assertConnectionFailure(asserter, () -> refreshTokens.createFamily(family(fid, realm(tenant))));
         asserter.assertThat(() -> refreshTokens.find(fid, realm(tenant)),
                 found -> assertThat(found).as("no family was written").isNull());
@@ -240,13 +272,13 @@ class ConnectionResetRecoveryIT {
 
     @Test
     @RunOnVertxContext
-    @DisplayName("refresh-token rotation on a reset connection fails, is not retried and rotates nothing")
+    @DisplayName("refresh-token rotation whose connection fails after it started is not retried and rotates nothing")
     void rotationIsNotRetried(UniAsserter asserter) {
         UUID tenant = UUID.randomUUID();
         FamilyId fid = new FamilyId(UUID.randomUUID());
 
         asserter.execute(() -> refreshTokens.createFamily(family(fid, realm(tenant))));
-        warmThenDoom(asserter, tenant);
+        warmThenDoomOnceWorkStarts(asserter, tenant, "refresh_token_family");
         assertConnectionFailure(asserter,
                 () -> refreshTokens.consumeAndRotate(fid, realm(tenant), "h0", "h1", T0.plusSeconds(60)));
         // Had the failed call rotated (h0 -> h1), presenting h0 again would be a replay.
@@ -257,13 +289,13 @@ class ConnectionResetRecoveryIT {
 
     @Test
     @RunOnVertxContext
-    @DisplayName("refresh-token family revocation on a reset connection fails, is not retried and revokes nothing")
+    @DisplayName("refresh-token family revocation whose connection fails after it started is not retried and revokes nothing")
     void revocationIsNotRetried(UniAsserter asserter) {
         UUID tenant = UUID.randomUUID();
         FamilyId fid = new FamilyId(UUID.randomUUID());
 
         asserter.execute(() -> refreshTokens.createFamily(family(fid, realm(tenant))));
-        warmThenDoom(asserter, tenant);
+        warmThenDoomOnceWorkStarts(asserter, tenant, "refresh_token_family");
         assertConnectionFailure(asserter, () -> refreshTokens.revokeFamily(fid, realm(tenant)));
         asserter.assertThat(
                 () -> refreshTokens.consumeAndRotate(fid, realm(tenant), "h0", "h1", T0.plusSeconds(60)),

@@ -25,9 +25,14 @@ import java.util.concurrent.atomic.AtomicInteger;
  * upstream side, so the client sees {@code Connection reset by peer} exactly when it first reuses
  * the pooled connection. Links opened afterwards pass through untouched.
  *
- * <p>A small admin port takes one line per connection: {@code doom} (answers the number of links
- * marked) or {@code resets} (answers the number of resets sent so far). The test drives it over
- * TCP because the test resource and the test run in different class loaders.
+ * <p>{@link #doomExistingOn(String)} marks them more selectively: the reset comes only with the
+ * first client bytes that contain the given text, such as a table name, so a unit of work can be
+ * cut off after its transaction began and its tenant was bound, when its own statements go out.
+ *
+ * <p>A small admin port takes one line per connection: {@code doom} or {@code doom-on <text>}
+ * (answers the number of links marked) or {@code resets} (answers the number of resets sent so
+ * far). The test drives it over TCP because the test resource and the test run in different class
+ * loaders.
  */
 final class ResettingTcpProxy implements AutoCloseable {
 
@@ -66,6 +71,12 @@ final class ResettingTcpProxy implements AutoCloseable {
         return links.size();
     }
 
+    int doomExistingOn(String text) {
+        byte[] marker = text.getBytes(StandardCharsets.UTF_8);
+        links.forEach(link -> link.doomMarker = marker);
+        return links.size();
+    }
+
     int resets() {
         return resets.get();
     }
@@ -91,7 +102,7 @@ final class ResettingTcpProxy implements AutoCloseable {
             OutputStream out = link.upstream.getOutputStream();
             int read;
             while ((read = in.read(buffer)) >= 0) {
-                if (link.doomed) {
+                if (link.doomed || contains(buffer, read, link.doomMarker)) {
                     link.client.setSoLinger(true, 0);
                     resets.incrementAndGet();
                     break;
@@ -104,6 +115,22 @@ final class ResettingTcpProxy implements AutoCloseable {
         } finally {
             link.close();
         }
+    }
+
+    private static boolean contains(byte[] buffer, int length, byte[] marker) {
+        if (marker == null) {
+            return false;
+        }
+        for (int i = 0; i + marker.length <= length; i++) {
+            int j = 0;
+            while (j < marker.length && buffer[i + j] == marker[j]) {
+                j++;
+            }
+            if (j == marker.length) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void pumpServerToClient(Link link) {
@@ -131,6 +158,8 @@ final class ResettingTcpProxy implements AutoCloseable {
                 String command = in.readLine();
                 if ("doom".equals(command)) {
                     out.println(doomExisting());
+                } else if (command != null && command.startsWith("doom-on ")) {
+                    out.println(doomExistingOn(command.substring("doom-on ".length())));
                 } else if ("resets".equals(command)) {
                     out.println(resets());
                 } else {
@@ -169,6 +198,7 @@ final class ResettingTcpProxy implements AutoCloseable {
         final Socket client;
         final Socket upstream;
         volatile boolean doomed;
+        volatile byte[] doomMarker;
 
         Link(Socket client, Socket upstream) {
             this.client = client;

@@ -66,9 +66,10 @@ public final class ConnectionFailures {
 
     /**
      * @param failure a failure (may be {@code null})
-     * @return {@code true} if a read that failed this way before it started may run again
+     * @return {@code true} if a unit of work that failed this way before its work started may run
+     *         again: the connection failed or none was handed over
      */
-    public static boolean isRetryableForRead(Throwable failure) {
+    public static boolean isRetryableBeforeWork(Throwable failure) {
         return isConnectionFailure(failure) || isAcquisitionTimeout(failure);
     }
 
