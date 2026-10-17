@@ -11,6 +11,7 @@ import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.PoolOptions;
 import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -53,7 +54,7 @@ class TesseraPgPoolCreatorTest {
     private static TesseraPgPoolCreator creator(Duration userTimeout, Duration idle, Duration interval, int count,
             Duration connect, Duration acquire) {
         return new TesseraPgPoolCreator(userTimeout, idle, interval, count, connect, acquire,
-                new PoolDiagnostics(Duration.ofSeconds(1)));
+                Optional.empty(), new PoolDiagnostics(Duration.ofSeconds(1)));
     }
 
     private static TesseraPgPoolCreator creator(Duration userTimeout) {
@@ -111,6 +112,15 @@ class TesseraPgPoolCreatorTest {
         } finally {
             vertx.close();
         }
+    }
+
+    @Test
+    @DisplayName("a datasource credentials provider, which the creator would bypass, is refused at startup")
+    void credentialsProviderRefused() {
+        assertThatThrownBy(() -> new TesseraPgPoolCreator(Duration.ofSeconds(5), IDLE, INTERVAL, 3, CONNECT, ACQUIRE,
+                Optional.of("vault-credentials"), new PoolDiagnostics(Duration.ofSeconds(1))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("credentials-provider");
     }
 
     @Test
