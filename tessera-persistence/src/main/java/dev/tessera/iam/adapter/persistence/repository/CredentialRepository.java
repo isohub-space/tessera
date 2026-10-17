@@ -30,7 +30,7 @@ public class CredentialRepository {
      * @return a {@link Uni} emitting the user's credentials (possibly empty)
      */
     public Uni<List<CredentialEntity>> findByUser(UUID tenantId, UUID userId) {
-        return scoped.inTenant(tenantId, session ->
+        return scoped.inTenantRead(tenantId, session ->
                 session.createQuery(
                                 "from CredentialEntity c where c.userId = :user",
                                 CredentialEntity.class)

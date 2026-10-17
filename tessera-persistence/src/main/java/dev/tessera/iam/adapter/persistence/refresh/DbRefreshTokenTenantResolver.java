@@ -1,5 +1,6 @@
 package dev.tessera.iam.adapter.persistence.refresh;
 
+import dev.tessera.iam.adapter.persistence.db.ConnectionFailures;
 import dev.tessera.iam.application.port.out.RefreshTokenTenantResolverPort;
 import dev.tessera.iam.domain.refresh.FamilyId;
 import dev.tessera.iam.domain.tenancy.BaselineId;
@@ -11,6 +12,7 @@ import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import java.util.Optional;
 import java.util.UUID;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.hibernate.reactive.mutiny.Mutiny;
 
 /**
@@ -33,16 +35,32 @@ public class DbRefreshTokenTenantResolver implements RefreshTokenTenantResolverP
     @Inject
     Instance<Mutiny.SessionFactory> sessionFactory;
 
+    // A pure read, so a connection that died while idle is retried on a fresh one, like the
+    // tenant-scoped reads (TenantScopedSession.inTenantRead).
+    @ConfigProperty(name = "iam.db.read-retries", defaultValue = "1")
+    int readRetries;
+
     @Override
     public Uni<Optional<RealmKey>> resolveOwningRealm(FamilyId id) {
         if (id == null) {
             throw new IllegalArgumentException("id must not be null");
         }
-        return sessionFactory.get().withSession(session ->
-                session.createNativeQuery(SELECT_OWNER, Object[].class)
-                        .setParameter("fid", id.value())
-                        .getSingleResultOrNull()
-                        .map(DbRefreshTokenTenantResolver::toRealm));
+        Uni<Optional<RealmKey>> read = Uni.createFrom().deferred(() ->
+                sessionFactory.get().withSession(session ->
+                        session.createNativeQuery(SELECT_OWNER, Object[].class)
+                                .setParameter("fid", id.value())
+                                .getSingleResultOrNull()
+                                .map(DbRefreshTokenTenantResolver::toRealm)));
+        return withRetries(read, readRetries);
+    }
+
+    private static <T> Uni<T> withRetries(Uni<T> read, int retriesLeft) {
+        if (retriesLeft <= 0) {
+            return read;
+        }
+        return read.onFailure(ConnectionFailures::isConnectionFailure)
+                .recoverWithUni(failure -> ConnectionFailures.pauseBeforeRetry()
+                        .chain(() -> withRetries(read, retriesLeft - 1)));
     }
 
     private static Optional<RealmKey> toRealm(Object[] row) {
