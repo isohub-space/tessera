@@ -60,6 +60,14 @@
       <artifactId>password4j</artifactId>
     </dependency>
 
+    <!-- Compile-only: the annotations on the Vert.x PostgreSQL client options used by the pool
+         creator. Without them javac warns about missing annotation classes, which -Werror fails. -->
+    <dependency>
+      <groupId>io.vertx</groupId>
+      <artifactId>vertx-codegen</artifactId>
+      <scope>provided</scope>
+    </dependency>
+
     <!-- Test -->
     <dependency>
       <groupId>org.junit.jupiter</groupId>
