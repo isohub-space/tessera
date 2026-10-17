@@ -158,7 +158,8 @@ public class TesseraPgPoolCreator implements PgPoolCreator {
                 .withConnectHandler(diagnostics::opened)
                 .using(input.vertx())
                 .build();
-        diagnostics.attach(pool, poolOptions.getMaxSize());
+        diagnostics.attach(pool, poolOptions.getMaxSize(),
+                Duration.ofMillis((long) connectTimeoutMillis + acquireTimeoutMillis));
         return pool;
     }
 
