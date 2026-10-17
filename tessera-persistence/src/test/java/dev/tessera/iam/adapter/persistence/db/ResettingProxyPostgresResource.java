@@ -12,7 +12,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  *
  * <p>Flyway (JDBC) connects directly; only the runtime reactive pool goes through the proxy. The
  * pool is limited to one connection so the connection a test dooms is the one the next request
- * borrows.
+ * borrows, and a test can make the pool's acquisition timeout (2 s here) happen by holding it.
  */
 public class ResettingProxyPostgresResource implements QuarkusTestResourceLifecycleManager {
 
@@ -43,6 +43,8 @@ public class ResettingProxyPostgresResource implements QuarkusTestResourceLifecy
                 "quarkus.datasource.password", "iam_app",
                 "quarkus.datasource.reactive.url", reactiveUrl,
                 "quarkus.datasource.reactive.max-size", "1",
+                "iam.db.connect-timeout", "PT1S",
+                "iam.db.acquire-timeout", "PT2S",
                 "quarkus.datasource.jdbc.url", postgres.getJdbcUrl(),
                 "quarkus.flyway.username", "iam_migrator",
                 "quarkus.flyway.password", "iam_migrator",

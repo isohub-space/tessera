@@ -45,12 +45,15 @@ public class DbRefreshTokenTenantResolver implements RefreshTokenTenantResolverP
         if (id == null) {
             throw new IllegalArgumentException("id must not be null");
         }
+        // Its own session: the lookup is created at subscription, when withSession could join a
+        // session another unit of work has bound to the current Vert.x context.
         Uni<Optional<RealmKey>> read = Uni.createFrom().deferred(() ->
-                sessionFactory.get().withSession(session ->
+                sessionFactory.get().openSession().chain(session ->
                         session.createNativeQuery(SELECT_OWNER, Object[].class)
                                 .setParameter("fid", id.value())
                                 .getSingleResultOrNull()
-                                .map(DbRefreshTokenTenantResolver::toRealm)));
+                                .map(DbRefreshTokenTenantResolver::toRealm)
+                                .onTermination().call(session::close)));
         return withRetries(read, readRetries);
     }
 
@@ -58,7 +61,7 @@ public class DbRefreshTokenTenantResolver implements RefreshTokenTenantResolverP
         if (retriesLeft <= 0) {
             return read;
         }
-        return read.onFailure(ConnectionFailures::isConnectionFailure)
+        return read.onFailure(ConnectionFailures::isRetryableForRead)
                 .recoverWithUni(failure -> ConnectionFailures.pauseBeforeRetry()
                         .chain(() -> withRetries(read, retriesLeft - 1)));
     }
