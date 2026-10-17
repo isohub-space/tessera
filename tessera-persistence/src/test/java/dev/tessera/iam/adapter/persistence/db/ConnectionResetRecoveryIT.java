@@ -17,6 +17,7 @@ import io.quarkus.test.junit.TestProfile;
 import io.quarkus.test.vertx.RunOnVertxContext;
 import io.quarkus.test.vertx.UniAsserter;
 import io.smallrye.mutiny.Uni;
+import io.vertx.sqlclient.PoolOptions;
 import jakarta.inject.Inject;
 import java.time.Instant;
 import java.util.UUID;
@@ -100,7 +101,10 @@ class ConnectionResetRecoveryIT {
             assertThat(options.getTcpKeepAliveIdleSeconds()).isEqualTo(30);
             assertThat(options.getTcpKeepAliveIntervalSeconds()).isEqualTo(10);
             assertThat(options.getTcpKeepAliveCount()).isEqualTo(3);
+            assertThat(options.getConnectTimeout()).isEqualTo(5_000);
         });
+        PoolOptions pool = poolCreator.configuredPoolOptions();
+        assertThat(pool.getConnectionTimeoutUnit().toMillis(pool.getConnectionTimeout())).isEqualTo(10_000);
     }
 
     @Test

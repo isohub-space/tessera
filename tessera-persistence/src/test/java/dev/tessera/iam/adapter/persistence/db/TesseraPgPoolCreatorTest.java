@@ -18,6 +18,10 @@ import org.junit.jupiter.api.Test;
 class TesseraPgPoolCreatorTest {
 
     private static PgPoolCreator.Input input(Vertx vertx, List<PgConnectOptions> options) {
+        return input(vertx, options, new PoolOptions().setMaxSize(1));
+    }
+
+    private static PgPoolCreator.Input input(Vertx vertx, List<PgConnectOptions> options, PoolOptions poolOptions) {
         return new PgPoolCreator.Input() {
             @Override
             public Vertx vertx() {
@@ -26,7 +30,7 @@ class TesseraPgPoolCreatorTest {
 
             @Override
             public PoolOptions poolOptions() {
-                return new PoolOptions().setMaxSize(1);
+                return poolOptions;
             }
 
             @Override
@@ -39,8 +43,16 @@ class TesseraPgPoolCreatorTest {
     private static final Duration IDLE = Duration.ofSeconds(30);
     private static final Duration INTERVAL = Duration.ofSeconds(10);
 
+    private static final Duration CONNECT = Duration.ofSeconds(5);
+    private static final Duration ACQUIRE = Duration.ofSeconds(10);
+
     private static TesseraPgPoolCreator creator(Duration userTimeout, Duration idle, Duration interval, int count) {
-        return new TesseraPgPoolCreator(userTimeout, idle, interval, count);
+        return creator(userTimeout, idle, interval, count, CONNECT, ACQUIRE);
+    }
+
+    private static TesseraPgPoolCreator creator(Duration userTimeout, Duration idle, Duration interval, int count,
+            Duration connect, Duration acquire) {
+        return new TesseraPgPoolCreator(userTimeout, idle, interval, count, connect, acquire);
     }
 
     private static TesseraPgPoolCreator creator(Duration userTimeout) {
@@ -62,6 +74,7 @@ class TesseraPgPoolCreatorTest {
                 assertThat(o.getTcpKeepAliveIdleSeconds()).isEqualTo(30);
                 assertThat(o.getTcpKeepAliveIntervalSeconds()).isEqualTo(10);
                 assertThat(o.getTcpKeepAliveCount()).isEqualTo(3);
+                assertThat(o.getConnectTimeout()).isEqualTo(5_000);
             });
             pool.close();
         } finally {
@@ -86,6 +99,20 @@ class TesseraPgPoolCreatorTest {
     }
 
     @Test
+    @DisplayName("the acquisition timeout replaces the Vert.x default on the pool options")
+    void setsAcquisitionTimeout() {
+        Vertx vertx = Vertx.vertx();
+        try {
+            PoolOptions poolOptions = new PoolOptions().setMaxSize(1);
+            creator(Duration.ofSeconds(5)).create(input(vertx, List.of(new PgConnectOptions()), poolOptions)).close();
+            assertThat(poolOptions.getConnectionTimeoutUnit().toMillis(poolOptions.getConnectionTimeout()))
+                    .isEqualTo(10_000);
+        } finally {
+            vertx.close();
+        }
+    }
+
+    @Test
     @DisplayName("invalid settings are refused at startup")
     void invalidRefused() {
         assertThatThrownBy(() -> creator(Duration.ofSeconds(-1))).isInstanceOf(IllegalArgumentException.class);
@@ -94,6 +121,11 @@ class TesseraPgPoolCreatorTest {
         assertThatThrownBy(() -> creator(Duration.ofSeconds(5), IDLE, Duration.ZERO, 3))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> creator(Duration.ofSeconds(5), IDLE, INTERVAL, 0))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> creator(Duration.ofSeconds(5), IDLE, INTERVAL, 3, Duration.ZERO, ACQUIRE))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> creator(Duration.ofSeconds(5), IDLE, INTERVAL, 3, ACQUIRE, CONNECT))
+                .as("a connect timeout as long as the acquisition timeout could never surface")
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }
