@@ -23,17 +23,19 @@ import org.jboss.logging.Logger;
  * schema fails closed. Centralising the {@code set_config(...)} call means no adapter
  * can accidentally talk to the database without a tenant bound.
  *
- * <p>Read-only units of work go through {@link #inTenantRead}, which survives a pooled connection
- * that died while idle: if the connection fails before the unit of work has started (while the
- * transaction begins or the tenant is bound), or no connection became free within the pool's
- * acquisition timeout, the whole transaction is attempted again, at most
- * {@code iam.db.read-retries} more times (default 1).
+ * <p>A unit of work is attempted again only when it failed before its work function was called:
+ * while the transaction began or the tenant was bound, with a connection failure, or because no
+ * connection was handed over within the pool's acquisition timeout ({@link ConnectionFailures}).
+ * The work function is called only after the server has answered the tenant binding, and its
+ * statements are issued only from inside it, so at that point the server has seen at most
+ * {@code BEGIN} and the transaction-local {@code set_config} of a transaction that never commits:
+ * running the unit again cannot apply anything twice, for a read or for a write. A failure after
+ * the work function was called, including at commit, is never retried, because the outcome of what
+ * was sent is unknown.
  *
- * <p>Units of work that write use {@link #inTenant}. They are retried only when no connection was
- * ever handed to them (the acquisition timeout, see {@link ConnectionFailures#isAcquisitionTimeout}),
- * at most {@code iam.db.write-acquire-retries} more times (default 1): without a connection nothing
- * was sent, so nothing can be applied twice. A write whose connection fails after it was obtained
- * is never retried.
+ * <p>Reads ({@link #inTenantRead}) may be attempted again {@code iam.db.read-retries} more times
+ * (default 1), writes ({@link #inTenant}) {@code iam.db.write-retries} more times (default 1). Which
+ * operations use which path is pinned by {@code ReadRetryScopeArchTest}.
  */
 @ApplicationScoped
 public class TenantScopedSession {
@@ -52,12 +54,13 @@ public class TenantScopedSession {
     @ConfigProperty(name = "iam.db.read-retries", defaultValue = "1")
     int readRetries;
 
-    @ConfigProperty(name = "iam.db.write-acquire-retries", defaultValue = "1")
-    int writeAcquireRetries;
+    @ConfigProperty(name = "iam.db.write-retries", defaultValue = "1")
+    int writeRetries;
 
     /**
      * Runs {@code work} in a single transaction scoped to {@code tenantId}: it sets the
-     * RLS GUC first, then hands the session to the supplied function.
+     * RLS GUC first, then hands the session to the supplied function. Retried only when it fails
+     * before {@code work} is called (see the class description).
      *
      * @param tenantId the owning tenant (the RLS scoping key)
      * @param work     the unit of work to run against the scoped session
@@ -65,7 +68,7 @@ public class TenantScopedSession {
      * @return a {@link Uni} emitting the work's result
      */
     public <T> Uni<T> inTenant(UUID tenantId, Function<Mutiny.Session, Uni<T>> work) {
-        return attemptWrite(tenantId, work, writeAcquireRetries);
+        return attemptWrite(tenantId, work, writeRetries);
     }
 
     private <T> Uni<T> attemptWrite(
@@ -76,10 +79,10 @@ public class TenantScopedSession {
             return transaction(tenantId, work, workStarted, started)
                     .onFailure(failure -> retriesLeft > 0
                             && !workStarted.get()
-                            && ConnectionFailures.isAcquisitionTimeout(failure))
+                            && ConnectionFailures.isRetryableBeforeWork(failure))
                     .recoverWithUni(failure -> {
-                        LOG.infof("No database connection became free for a write within the acquisition "
-                                + "timeout (%s); nothing was sent, trying again", diagnostics.state());
+                        LOG.infof("Database connection failed before a write started (%s; %s); none of its "
+                                + "statements was sent, trying again", failure.getMessage(), diagnostics.state());
                         return ConnectionFailures.pauseBeforeRetry()
                                 .chain(() -> attemptWrite(tenantId, work, retriesLeft - 1));
                     });
@@ -93,9 +96,8 @@ public class TenantScopedSession {
      * {@code iam.db.read-retries} more times. A failure after {@code work} started is never
      * retried, and neither is a failure that is not a connection failure ({@link ConnectionFailures}).
      *
-     * <p>Only for work that reads. A retry happens only when nothing of {@code work} ran, so it
-     * could not double-apply anything even for a write; limiting it to reads keeps that guarantee
-     * from depending on where a connection happens to fail.
+     * <p>The same rule as {@link #inTenant}, with its own budget; the separate path keeps the
+     * reviewed read-only operations listed apart from the writes.
      *
      * @param tenantId the owning tenant (the RLS scoping key)
      * @param work     the read-only unit of work to run against the scoped session
@@ -114,7 +116,7 @@ public class TenantScopedSession {
             return transaction(tenantId, work, workStarted, started)
                     .onFailure(failure -> retriesLeft > 0
                             && !workStarted.get()
-                            && ConnectionFailures.isRetryableForRead(failure))
+                            && ConnectionFailures.isRetryableBeforeWork(failure))
                     .recoverWithUni(failure -> {
                         LOG.infof("Database connection failed before a read started (%s; %s); "
                                 + "trying again", failure.getMessage(), diagnostics.state());

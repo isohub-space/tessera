@@ -61,7 +61,7 @@ public class DbRefreshTokenTenantResolver implements RefreshTokenTenantResolverP
         if (retriesLeft <= 0) {
             return read;
         }
-        return read.onFailure(ConnectionFailures::isRetryableForRead)
+        return read.onFailure(ConnectionFailures::isRetryableBeforeWork)
                 .recoverWithUni(failure -> ConnectionFailures.pauseBeforeRetry()
                         .chain(() -> withRetries(read, retriesLeft - 1)));
     }

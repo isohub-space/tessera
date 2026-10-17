@@ -52,7 +52,7 @@ class ConnectionFailuresTest {
         Throwable timeout = new NoStackTraceThrowable("Timeout");
         assertThat(ConnectionFailures.isAcquisitionTimeout(timeout)).isTrue();
         assertThat(ConnectionFailures.isAcquisitionTimeout(new CompletionException(timeout))).isTrue();
-        assertThat(ConnectionFailures.isRetryableForRead(timeout)).isTrue();
+        assertThat(ConnectionFailures.isRetryableBeforeWork(timeout)).isTrue();
         assertThat(ConnectionFailures.isConnectionFailure(timeout)).isFalse();
         assertThat(ConnectionFailures.isAcquisitionTimeout(new NoStackTraceThrowable("Pool closed"))).isFalse();
         assertThat(ConnectionFailures.isAcquisitionTimeout(new RuntimeException("Timeout"))).isFalse();
