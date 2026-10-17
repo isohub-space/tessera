@@ -8,6 +8,7 @@ import io.vertx.sqlclient.PoolOptions;
 import jakarta.inject.Singleton;
 import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
@@ -66,7 +67,14 @@ public class TesseraPgPoolCreator implements PgPoolCreator {
             @ConfigProperty(name = "iam.db.tcp-keepalive.count", defaultValue = "3") int keepAliveCount,
             @ConfigProperty(name = "iam.db.connect-timeout", defaultValue = "PT5S") Duration connectTimeout,
             @ConfigProperty(name = "iam.db.acquire-timeout", defaultValue = "PT10S") Duration acquireTimeout,
+            @ConfigProperty(name = "quarkus.datasource.credentials-provider") Optional<String> credentialsProvider,
             PoolDiagnostics diagnostics) {
+        // Quarkus applies a credentials provider in the connect options supplier it builds when no
+        // creator is present; this creator builds its own and would silently connect without it.
+        if (credentialsProvider.isPresent()) {
+            throw new IllegalStateException("quarkus.datasource.credentials-provider is set, but the database pool "
+                    + "creator does not apply credentials providers; configure the username and password instead");
+        }
         this.diagnostics = diagnostics;
         this.tcpUserTimeoutMillis = Math.toIntExact(nonNegative(tcpUserTimeout, "iam.db.tcp-user-timeout").toMillis());
         this.keepAliveIdleSeconds = wholeSeconds(keepAliveIdle, "iam.db.tcp-keepalive.idle");
@@ -141,8 +149,8 @@ public class TesseraPgPoolCreator implements PgPoolCreator {
         configured = List.copyOf(input.pgConnectOptionsList());
         configuredPool = poolOptions;
         // Quarkus, with no creator, passes the driver a supplier over these same options; that
-        // differs only when a datasource credentials provider is configured, which tessera does not
-        // use (a creator would bypass it). This supplier is the same round robin, counting attempts.
+        // differs only when a datasource credentials provider is configured, which the constructor
+        // refuses. This supplier is the same round robin, counting attempts.
         // The PostgreSQL driver builds the PgPool Quarkus casts the result to.
         Pool pool = PgBuilder.pool()
                 .with(poolOptions)
