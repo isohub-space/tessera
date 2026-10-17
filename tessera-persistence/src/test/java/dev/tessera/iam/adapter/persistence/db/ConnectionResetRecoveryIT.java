@@ -59,6 +59,9 @@ class ConnectionResetRecoveryIT {
     @Inject
     Pool pool;
 
+    @Inject
+    PoolDiagnostics diagnostics;
+
     @ConfigProperty(name = ResettingProxyPostgresResource.ADMIN_PORT)
     int adminPort;
 
@@ -132,6 +135,19 @@ class ConnectionResetRecoveryIT {
         PoolOptions poolOptions = poolCreator.configuredPoolOptions();
         assertThat(poolOptions.getConnectionTimeoutUnit().toMillis(poolOptions.getConnectionTimeout()))
                 .isEqualTo(2_000);
+    }
+
+    @Test
+    @RunOnVertxContext
+    @DisplayName("the pool's new connections pass through the diagnostics and are handed over")
+    void diagnosticsSeeNewConnections(UniAsserter asserter) {
+        asserter.assertThat(() -> users.findById(UUID.randomUUID(), UUID.randomUUID()),
+                found -> assertThat(found).isNull());
+        asserter.execute(() -> {
+            assertThat(diagnostics.attemptsStarted()).isPositive();
+            assertThat(diagnostics.connectionsOpened()).isPositive();
+            assertThat(diagnostics.state()).contains("of 1 open");
+        });
     }
 
     @Test

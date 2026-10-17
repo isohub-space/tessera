@@ -1,8 +1,8 @@
 package dev.tessera.iam.adapter.persistence.db;
 
 import io.quarkus.reactive.pg.client.PgPoolCreator;
+import io.vertx.pgclient.PgBuilder;
 import io.vertx.pgclient.PgConnectOptions;
-import io.vertx.pgclient.spi.PgDriver;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.PoolOptions;
 import jakarta.inject.Singleton;
@@ -53,6 +53,7 @@ public class TesseraPgPoolCreator implements PgPoolCreator {
     private final int keepAliveCount;
     private final int connectTimeoutMillis;
     private final int acquireTimeoutMillis;
+    private final PoolDiagnostics diagnostics;
 
     // The connect options of the pool this creator built, for tests to check what reached the driver.
     private volatile List<PgConnectOptions> configured = List.of();
@@ -64,7 +65,9 @@ public class TesseraPgPoolCreator implements PgPoolCreator {
             @ConfigProperty(name = "iam.db.tcp-keepalive.interval", defaultValue = "PT10S") Duration keepAliveInterval,
             @ConfigProperty(name = "iam.db.tcp-keepalive.count", defaultValue = "3") int keepAliveCount,
             @ConfigProperty(name = "iam.db.connect-timeout", defaultValue = "PT5S") Duration connectTimeout,
-            @ConfigProperty(name = "iam.db.acquire-timeout", defaultValue = "PT10S") Duration acquireTimeout) {
+            @ConfigProperty(name = "iam.db.acquire-timeout", defaultValue = "PT10S") Duration acquireTimeout,
+            PoolDiagnostics diagnostics) {
+        this.diagnostics = diagnostics;
         this.tcpUserTimeoutMillis = Math.toIntExact(nonNegative(tcpUserTimeout, "iam.db.tcp-user-timeout").toMillis());
         this.keepAliveIdleSeconds = wholeSeconds(keepAliveIdle, "iam.db.tcp-keepalive.idle");
         this.keepAliveIntervalSeconds = wholeSeconds(keepAliveInterval, "iam.db.tcp-keepalive.interval");
@@ -105,17 +108,6 @@ public class TesseraPgPoolCreator implements PgPoolCreator {
 
     @Override
     public Pool create(Input input) {
-        // Without the native transport these options are silently ignored; say which case applies,
-        // so a deployment can confirm they are in force.
-        LOG.infof("Database connections: connect timeout %d ms, acquisition timeout %d ms, TCP user timeout %d ms, "
-                + "keepalive %s (%s)", connectTimeoutMillis, acquireTimeoutMillis, tcpUserTimeoutMillis,
-                keepAliveIdleSeconds > 0
-                        ? "idle " + keepAliveIdleSeconds + " s, interval " + keepAliveIntervalSeconds
-                                + " s, count " + keepAliveCount
-                        : "off",
-                input.vertx().isNativeTransportEnabled()
-                        ? "native transport, applied"
-                        : "no native transport, ignored");
         PoolOptions poolOptions = input.poolOptions()
                 .setConnectionTimeout(acquireTimeoutMillis)
                 .setConnectionTimeoutUnit(TimeUnit.MILLISECONDS);
@@ -131,13 +123,39 @@ public class TesseraPgPoolCreator implements PgPoolCreator {
                 options.setTcpKeepAliveCount(keepAliveCount);
             }
         }
+        // One line with the effective options, so a deployment can confirm the creator ran and what is
+        // in force. Without the native transport the socket options are silently ignored; it says so.
+        LOG.infof("Database pool: max size %d, idle timeout %s, max lifetime %s, acquisition timeout %d ms, "
+                + "connect timeout %d ms, TCP user timeout %d ms, keepalive %s; %s",
+                poolOptions.getMaxSize(),
+                millisOrNone(poolOptions.getIdleTimeoutUnit().toMillis(poolOptions.getIdleTimeout())),
+                millisOrNone(poolOptions.getMaxLifetimeUnit().toMillis(poolOptions.getMaxLifetime())),
+                acquireTimeoutMillis, connectTimeoutMillis, tcpUserTimeoutMillis,
+                keepAliveIdleSeconds > 0
+                        ? "idle " + keepAliveIdleSeconds + " s, interval " + keepAliveIntervalSeconds
+                                + " s, count " + keepAliveCount
+                        : "off",
+                input.vertx().isNativeTransportEnabled()
+                        ? "native transport, socket options applied"
+                        : "no native transport, socket options ignored");
         configured = List.copyOf(input.pgConnectOptionsList());
         configuredPool = poolOptions;
         // Quarkus, with no creator, passes the driver a supplier over these same options; that
         // differs only when a datasource credentials provider is configured, which tessera does not
-        // use (a creator would bypass it). The driver returns the PgPool Quarkus casts the result to.
-        return PgDriver.INSTANCE.createPool(
-                input.vertx(), input.pgConnectOptionsList(), poolOptions);
+        // use (a creator would bypass it). This supplier is the same round robin, counting attempts.
+        // The PostgreSQL driver builds the PgPool Quarkus casts the result to.
+        Pool pool = PgBuilder.pool()
+                .with(poolOptions)
+                .connectingTo(diagnostics.connectAttempts(input.pgConnectOptionsList()))
+                .withConnectHandler(diagnostics::opened)
+                .using(input.vertx())
+                .build();
+        diagnostics.attach(pool, poolOptions.getMaxSize());
+        return pool;
+    }
+
+    private static String millisOrNone(long millis) {
+        return millis > 0 ? millis + " ms" : "none";
     }
 
     List<PgConnectOptions> configuredOptions() {

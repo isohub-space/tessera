@@ -52,7 +52,8 @@ class TesseraPgPoolCreatorTest {
 
     private static TesseraPgPoolCreator creator(Duration userTimeout, Duration idle, Duration interval, int count,
             Duration connect, Duration acquire) {
-        return new TesseraPgPoolCreator(userTimeout, idle, interval, count, connect, acquire);
+        return new TesseraPgPoolCreator(userTimeout, idle, interval, count, connect, acquire,
+                new PoolDiagnostics(Duration.ofSeconds(1)));
     }
 
     private static TesseraPgPoolCreator creator(Duration userTimeout) {
