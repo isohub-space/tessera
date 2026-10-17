@@ -4,9 +4,11 @@ import io.quarkus.reactive.pg.client.PgPoolCreator;
 import io.vertx.pgclient.PgConnectOptions;
 import io.vertx.pgclient.spi.PgDriver;
 import io.vertx.sqlclient.Pool;
+import io.vertx.sqlclient.PoolOptions;
 import jakarta.inject.Singleton;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
@@ -31,6 +33,11 @@ import org.jboss.logging.Logger;
  * Pool lifetimes ({@code quarkus.datasource.reactive.idle-timeout}, {@code max-lifetime}) still
  * retire connections, but only when the pool's cleaner timer runs.
  *
+ * <p>It also bounds the two waits Quarkus has no property for: the TCP connect of a new connection
+ * ({@code iam.db.connect-timeout}, Vert.x default 60 s) and a request's wait for a pooled connection
+ * ({@code iam.db.acquire-timeout}, Vert.x default 30 s). The connect timeout must be the shorter, or
+ * a stalled connect would only ever surface as the acquisition timeout.
+ *
  * <p>Vert.x applies these options on the native epoll transport (Linux) only; with the NIO
  * transport they are ignored without an error. Everything else about the pool is Quarkus' own
  * configuration, passed through unchanged.
@@ -44,19 +51,29 @@ public class TesseraPgPoolCreator implements PgPoolCreator {
     private final int keepAliveIdleSeconds;
     private final int keepAliveIntervalSeconds;
     private final int keepAliveCount;
+    private final int connectTimeoutMillis;
+    private final int acquireTimeoutMillis;
 
     // The connect options of the pool this creator built, for tests to check what reached the driver.
     private volatile List<PgConnectOptions> configured = List.of();
+    private volatile PoolOptions configuredPool;
 
     public TesseraPgPoolCreator(
             @ConfigProperty(name = "iam.db.tcp-user-timeout", defaultValue = "PT5S") Duration tcpUserTimeout,
             @ConfigProperty(name = "iam.db.tcp-keepalive.idle", defaultValue = "PT30S") Duration keepAliveIdle,
             @ConfigProperty(name = "iam.db.tcp-keepalive.interval", defaultValue = "PT10S") Duration keepAliveInterval,
-            @ConfigProperty(name = "iam.db.tcp-keepalive.count", defaultValue = "3") int keepAliveCount) {
+            @ConfigProperty(name = "iam.db.tcp-keepalive.count", defaultValue = "3") int keepAliveCount,
+            @ConfigProperty(name = "iam.db.connect-timeout", defaultValue = "PT5S") Duration connectTimeout,
+            @ConfigProperty(name = "iam.db.acquire-timeout", defaultValue = "PT10S") Duration acquireTimeout) {
         this.tcpUserTimeoutMillis = Math.toIntExact(nonNegative(tcpUserTimeout, "iam.db.tcp-user-timeout").toMillis());
         this.keepAliveIdleSeconds = wholeSeconds(keepAliveIdle, "iam.db.tcp-keepalive.idle");
         this.keepAliveIntervalSeconds = wholeSeconds(keepAliveInterval, "iam.db.tcp-keepalive.interval");
         this.keepAliveCount = keepAliveCount;
+        this.connectTimeoutMillis = Math.toIntExact(positive(connectTimeout, "iam.db.connect-timeout").toMillis());
+        this.acquireTimeoutMillis = Math.toIntExact(positive(acquireTimeout, "iam.db.acquire-timeout").toMillis());
+        if (acquireTimeoutMillis <= connectTimeoutMillis) {
+            throw new IllegalArgumentException("iam.db.acquire-timeout must be longer than iam.db.connect-timeout");
+        }
         if (keepAliveIdleSeconds > 0 && (keepAliveIntervalSeconds < 1 || keepAliveCount < 1)) {
             throw new IllegalArgumentException("with iam.db.tcp-keepalive.idle set, iam.db.tcp-keepalive.interval "
                     + "must be at least 1 s and iam.db.tcp-keepalive.count at least 1");
@@ -66,6 +83,13 @@ public class TesseraPgPoolCreator implements PgPoolCreator {
     private static Duration nonNegative(Duration value, String name) {
         if (value == null || value.isNegative()) {
             throw new IllegalArgumentException(name + " must not be negative");
+        }
+        return value;
+    }
+
+    private static Duration positive(Duration value, String name) {
+        if (value == null || value.isNegative() || value.isZero()) {
+            throw new IllegalArgumentException(name + " must be positive");
         }
         return value;
     }
@@ -83,7 +107,8 @@ public class TesseraPgPoolCreator implements PgPoolCreator {
     public Pool create(Input input) {
         // Without the native transport these options are silently ignored; say which case applies,
         // so a deployment can confirm they are in force.
-        LOG.infof("Database connections: TCP user timeout %d ms, keepalive %s (%s)", tcpUserTimeoutMillis,
+        LOG.infof("Database connections: connect timeout %d ms, acquisition timeout %d ms, TCP user timeout %d ms, "
+                + "keepalive %s (%s)", connectTimeoutMillis, acquireTimeoutMillis, tcpUserTimeoutMillis,
                 keepAliveIdleSeconds > 0
                         ? "idle " + keepAliveIdleSeconds + " s, interval " + keepAliveIntervalSeconds
                                 + " s, count " + keepAliveCount
@@ -91,7 +116,11 @@ public class TesseraPgPoolCreator implements PgPoolCreator {
                 input.vertx().isNativeTransportEnabled()
                         ? "native transport, applied"
                         : "no native transport, ignored");
+        PoolOptions poolOptions = input.poolOptions()
+                .setConnectionTimeout(acquireTimeoutMillis)
+                .setConnectionTimeoutUnit(TimeUnit.MILLISECONDS);
         for (PgConnectOptions options : input.pgConnectOptionsList()) {
+            options.setConnectTimeout(connectTimeoutMillis);
             if (tcpUserTimeoutMillis > 0) {
                 options.setTcpUserTimeout(tcpUserTimeoutMillis);
             }
@@ -103,14 +132,19 @@ public class TesseraPgPoolCreator implements PgPoolCreator {
             }
         }
         configured = List.copyOf(input.pgConnectOptionsList());
+        configuredPool = poolOptions;
         // Quarkus, with no creator, passes the driver a supplier over these same options; that
         // differs only when a datasource credentials provider is configured, which tessera does not
         // use (a creator would bypass it). The driver returns the PgPool Quarkus casts the result to.
         return PgDriver.INSTANCE.createPool(
-                input.vertx(), input.pgConnectOptionsList(), input.poolOptions());
+                input.vertx(), input.pgConnectOptionsList(), poolOptions);
     }
 
     List<PgConnectOptions> configuredOptions() {
         return configured;
+    }
+
+    PoolOptions configuredPoolOptions() {
+        return configuredPool;
     }
 }
