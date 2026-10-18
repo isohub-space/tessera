@@ -237,6 +237,22 @@ class AuthorizationCodeFlowTest extends AuthorizationCodeFlowSupport {
     }
 
     @Test
+    @DisplayName("a code is bound to the exact redirect_uri: near-misses of it are invalid_grant")
+    void codeIsBoundToTheExactRedirectUri() {
+        // Each near-miss would pass a prefix, case-insensitive or normalising comparison.
+        for (String nearMiss : java.util.List.of(REDIRECT_URI + "/", REDIRECT_URI + "?next=x",
+                "https://CLIENT.example/callback", "https://client.example/Callback")) {
+            String verifier = newVerifier();
+            String code = authorizeAndExtractCode(FakeClientRepository.PUBLIC_CLIENT_ID,
+                    verifier, "state-x", "nonce-x");
+
+            token(FakeClientRepository.PUBLIC_CLIENT_ID, code, nearMiss, verifier, null)
+                    .then().statusCode(400)
+                    .body("error", org.hamcrest.Matchers.equalTo("invalid_grant"));
+        }
+    }
+
+    @Test
     @DisplayName("a confidential client presenting a wrong secret is invalid_client (401)")
     void wrongClientSecretIsRejected() {
         String verifier = newVerifier();
@@ -256,6 +272,16 @@ class AuthorizationCodeFlowTest extends AuthorizationCodeFlowSupport {
         // /authorize), so it surfaces as a 400 body rather than an error redirect.
         authorize(FakeClientRepository.PUBLIC_CLIENT_ID, REDIRECT_URI,
                 "openid", "state-m", "nonce-m", null, null, "user-sub-1")
+                .then().statusCode(400)
+                .header("Location", org.hamcrest.Matchers.nullValue())
+                .body("error", org.hamcrest.Matchers.equalTo("invalid_request"));
+    }
+
+    @Test
+    @DisplayName("authorize without a state is a non-redirectable 400 invalid_request (CSRF)")
+    void missingStateIsRejected() {
+        authorize(FakeClientRepository.PUBLIC_CLIENT_ID, REDIRECT_URI, "openid", " ", "nonce-s",
+                s256(newVerifier()), "S256", "user-sub-1")
                 .then().statusCode(400)
                 .header("Location", org.hamcrest.Matchers.nullValue())
                 .body("error", org.hamcrest.Matchers.equalTo("invalid_request"));
