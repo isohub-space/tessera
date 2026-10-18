@@ -28,8 +28,9 @@ package dev.tessera.iam.adapter.rest.tenancy;
  * {@code X-Tenant-Id}'s answer is a different one: a standalone public origin sets
  * {@code iam.tenancy.fixed-tenant}, and {@code TenantResolutionFilter} then ignores the tenant
  * and baseline headers entirely rather than checking them, so a forged value selects nothing
- * (see {@code docs/adr/0001}). Unset — a multi-tenant deployment — the header is still trusted
- * verbatim, and closing it remains an edge/ingress decision that nothing in this codebase makes.
+ * (see {@code docs/adr/ADR-IAM-002}). Unset — a multi-tenant deployment — the header is still
+ * trusted verbatim, and closing it remains an edge/ingress decision that nothing in this codebase
+ * makes.
  *
  * <p>Centralising the header name here (rather than the bare string literal previously
  * repeated at each {@code @HeaderParam}) is so this trust-boundary requirement is discoverable
