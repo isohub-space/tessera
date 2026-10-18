@@ -7,20 +7,33 @@ import dev.tessera.iam.adapter.rest.support.FakeClientRepository;
 import dev.tessera.iam.adapter.rest.support.FakeClientSecretVerifier;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.response.Response;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
 
 /**
  * Fail-closed on a signing-key provider outage. With the realm's provider unavailable, {@code /token}
  * issues nothing (no unsigned or fallback token) and {@code /introspect} never reports a token
- * active from keys it can no longer read. One method, because the outage is permanent for this
- * class's realm once switched on.
+ * active from keys it can no longer read.
+ *
+ * <p>The realm is shared with every other {@link AuthorizationCodeFlowSupport} test, so the outage
+ * is ended after each test; the second test runs after the outage on the same realm and proves it.
  */
 @QuarkusTest
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 @DisplayName("Signing-key provider outage: /token and /introspect deny, never serve unsigned or stale")
 class SigningKeyOutageTest extends AuthorizationCodeFlowSupport {
 
+    @AfterEach
+    void endOutage() {
+        keyProvider.makeAvailable(REALM);
+    }
+
     @Test
+    @Order(1)
     @DisplayName("during an outage /token issues no token and /introspect reports nothing active")
     void outageDeniesTokenAndIntrospection() {
         // Before the outage: a live access token, and a fresh code still to redeem.
@@ -49,6 +62,17 @@ class SigningKeyOutageTest extends AuthorizationCodeFlowSupport {
         // Test mode renders a 5xx with a diagnostic body; it must still carry no introspection claim.
         assertThat(introspection.asString())
                 .doesNotContain("\"active\":true", "\"sub\":", "\"scope\":");
+    }
+
+    @Test
+    @Order(2)
+    @DisplayName("after the outage ends, the shared realm issues tokens again")
+    void realmIsUsableAfterTheOutage() {
+        String verifier = newVerifier();
+        tokenWithDpop(FakeClientRepository.PUBLIC_CLIENT_ID,
+                authorizeAndExtractCode(FakeClientRepository.PUBLIC_CLIENT_ID, verifier, "s-3", "n-3"),
+                REDIRECT_URI, verifier, dpop.proof(TOKEN_ENDPOINT))
+                .then().statusCode(200);
     }
 
     private Response introspect(String token) {

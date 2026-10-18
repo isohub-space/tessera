@@ -37,7 +37,9 @@ import java.util.concurrent.ConcurrentMap;
  *
  * <p>{@link #makeUnavailable(RealmKey)} simulates a signing-key provider outage for one realm:
  * every operation on that realm then fails, as the production provider does when its datasource
- * or KMS is unreachable. It is per realm so a test using its own tenant cannot disturb another.
+ * or KMS is unreachable. It is per realm, and a test that switches it on restores the realm with
+ * {@link #makeAvailable(RealmKey)} afterwards: the bean is application-scoped, so an outage left on
+ * would break every later test sharing that realm.
  */
 @Mock
 @ApplicationScoped
@@ -108,6 +110,11 @@ public class FakeKeyProvider implements KeyProviderPort {
     /** From now on every operation on {@code realm} fails, as during a provider outage. */
     public void makeUnavailable(RealmKey realm) {
         unavailable.add(realm);
+    }
+
+    /** Ends a simulated outage for {@code realm}. */
+    public void makeAvailable(RealmKey realm) {
+        unavailable.remove(realm);
     }
 
     private static <T> Uni<T> outage(RealmKey realm) {

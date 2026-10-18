@@ -24,6 +24,14 @@ import org.junit.jupiter.api.Test;
  * sites that compare raw values must call {@code MessageDigest.isEqual}. Client secrets and user
  * passwords are compared by password4j's Argon2 check, whose own comparison is pinned too, so a
  * dependency upgrade that dropped it would fail here.
+ *
+ * <p>At the sites that compare raw secret values the rule is stricter: no call or method reference
+ * named like an equality or ordering at all, whatever its owner, so {@code Object.equals}, a
+ * record's generated {@code equals} wrapping the hash, or {@code Arrays.mismatch} are caught too.
+ *
+ * <p>The list is closed on purpose: a new place that compares a presented secret with a stored one
+ * must be added to {@link #COMPARISON_SITES} (and, if it compares raw values, to
+ * {@link #RAW_COMPARATORS}) in the same change.
  */
 @DisplayName("Credential and token comparisons are constant-time (ArchUnit, structural)")
 class ConstantTimeComparisonArchTest {
@@ -60,6 +68,10 @@ class ConstantTimeComparisonArchTest {
             "java.util.Objects.equals",
             "java.util.Arrays.equals");
 
+    /** Method names that compare by early exit, whichever class declares them. */
+    private static final Set<String> EARLY_EXIT_NAMES = Set.of(
+            "equals", "equalsIgnoreCase", "contentEquals", "compareTo", "compare", "mismatch");
+
     private static JavaClasses classes;
 
     @BeforeAll
@@ -75,6 +87,20 @@ class ConstantTimeComparisonArchTest {
         for (String site : COMPARISON_SITES) {
             assertThat(calls(site).filter(EARLY_EXIT_EQUALITY::contains).toList())
                     .as("early-exit equality in %s", site)
+                    .isEmpty();
+        }
+    }
+
+    @Test
+    @DisplayName("raw secret comparisons call no method named equals, compare or mismatch, on any owner")
+    void rawComparatorsCallNoEqualityByName() {
+        for (String site : RAW_COMPARATORS) {
+            JavaClass owner = classes.get(site);
+            Stream<String> called = Stream.concat(
+                    owner.getMethodCallsFromSelf().stream().map(call -> call.getTarget().getName()),
+                    owner.getMethodReferencesFromSelf().stream().map(ref -> ref.getTarget().getName()));
+            assertThat(called.filter(EARLY_EXIT_NAMES::contains).toList())
+                    .as("early-exit equality by name in %s", site)
                     .isEmpty();
         }
     }
