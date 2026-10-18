@@ -4,13 +4,26 @@
 |---|---|
 | Status | **Proposed** — awaiting ratification. Not a decision until accepted. |
 | Date | 2026-09-11 |
-| Moved here | 2026-10-18, from the project's planning notes. The decision and its evidence are unchanged; references to planning items are restated as plain descriptions, and links to the other records here are added. This record supersedes an earlier unaccepted draft. |
+| Moved here | 2026-10-18, from the project's planning notes. The decision and its evidence are unchanged; references to planning items are restated as plain descriptions, and links to the other records here are added. What has changed on `main` since is listed in [Re-checked on main](#re-checked-on-main-on-the-move-2026-10-18). This record supersedes an earlier unaccepted draft. |
 | Spike | can the OIDF Basic OP conformance plan run in CI against Tessera (time-box 3 days nominal; this used well under one; deliverable = this record) |
 | Evidence date | 2026-09-11. Tessera read at `3397096` (`fix(iam): close the X-Subject-Id authentication bypass, default-closed (#86)`), with no code changes made. OIDF conformance-suite sources read at `master` on the same day through the GitLab raw/API endpoints; spec and openid.net pages fetched the same day. |
 | Affects | CI, `/authorize`, session semantics, `/userinfo`, discovery metadata, key bootstrap and provisioning |
 | Relates to | [ADR-IAM-001](ADR-IAM-001-audit-checkpoint-key-custody.md) (key custody), [ADR-IAM-003](ADR-IAM-003-tenant-tier-and-path-scoped-issuer.md) (tenant tier and path-scoped issuer), [ADR-IAM-004](ADR-IAM-004-end-user-session-and-consent.md) (session and consent) |
 
 ---
+
+## Re-checked on `main` on the move (2026-10-18)
+
+The sections below are dated history: they describe Tessera at `3397096` and are not rewritten. Re-checked against `main` at `0fc2922` on the move, these statements have since changed:
+
+- **D1 is fixed.** `AuthorizeResource` treats `nonce` as optional in the code flow (OIDC Core §3.1.2.1), so an omitted `nonce` is no longer a 400.
+- **D2 is fixed.** `DiscoveryDocument` no longer advertises `userinfo_endpoint`. The §6 rows that D2 turned into hard FAILs (the userinfo and scope modules) would have to be re-derived; that is not done here. `OP-UserInfo-Endpoint` is still a `y` row, so G3 still blocks certification. D3 is unchanged: `scopes_supported` still lists `profile` and `email`.
+- **G4 is partly superseded.** `FirstBootProvisioner` (2026-09-16) provisions an ACTIVE signing key with private material, one confidential client and one password user at startup, when `iam.bootstrap.enabled` is set, which requires fixed-tenant mode. In that mode, §2's "no runtime, startup or admin path mints a key" and G4's "tests only" no longer hold. The harness still needs three clients (§1.2), so two must still be seeded another way.
+- **The tenant-header 400 is avoidable.** In fixed-tenant mode (`iam.tenancy.fixed-tenant`, [ADR-IAM-002](ADR-IAM-002-standalone-public-origin.md), Accepted), `TenantResolutionFilter` binds every request to the fixed tenant and ignores the tenant headers. Discovery and JWKS answer without `X-Tenant-Id`, and the §3 proxy no longer has to inject it for a single-tenant run; it still terminates TLS and sets `X-Forwarded-Proto`.
+- **D6 is half fixed.** `iam.keys.issuer` now derives from `iam.oidc.issuer`, and a contradicting value aborts startup. The issuer default is still `http://localhost:8080` while the server listens on `8090`.
+- **Unchanged:** D4 (`client_secret_post` accepted but not advertised) and D5 (`/authorize` is `@GET` only).
+
+**The conclusion still holds.** G1, G2 and G3 are all still open. There is no HTML login page, and `/authorize` with no subject still returns a non-redirected 400 `access_denied`. `prompt`, `max_age` and `auth_time` are still not modelled. There is no `/userinfo` resource. An unattended suite run would still stall before it produced a ledger.
 
 ## The answer
 
@@ -396,12 +409,15 @@ contents. They are prerequisites for a *green* ledger and for certification.
    That is legitimate for a harness and settles nothing for a real deployment: every endpoint
    including discovery and JWKS is `@TenantScoped`, and a conformant RP sends standard headers
    only. The candidates, each with consequences far beyond conformance, are a per-tenant
-   hostname mapped to a realm at the edge; a per-tenant path prefix; or a conformance-only
-   single-tenant deployment profile — the last being the cheapest and the least honest, since
-   it would certify a configuration nobody runs. **This is a product question, it was not
-   answered at the time of this record, and it is not made moot by closing G1–G4.**
-   [ADR-IAM-003](ADR-IAM-003-tenant-tier-and-path-scoped-issuer.md) (2026-09-23, Proposed)
-   later proposes a path-scoped issuer, which bears on it.
+   hostname mapped to a realm at the edge; a per-tenant path prefix; or a single-tenant
+   deployment. **This is a product question, it was not answered at the time of this record,
+   and it is not made moot by closing G1–G4.** Two later records bear on it.
+   [ADR-IAM-002](ADR-IAM-002-standalone-public-origin.md) (2026-09-17, Accepted) makes
+   single-tenant a real deployment mode: with `iam.tenancy.fixed-tenant` set, every request is
+   bound to the fixed tenant and a standard RP needs no tenant header, so a conformance run in
+   that mode certifies a configuration that is deployed, though it says nothing about a
+   multi-tenant origin. [ADR-IAM-003](ADR-IAM-003-tenant-tier-and-path-scoped-issuer.md)
+   (2026-09-23, Proposed) proposes a path-scoped issuer for the multi-tenant case.
 
 ## 10. Sources actually read
 

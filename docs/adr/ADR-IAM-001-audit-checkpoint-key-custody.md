@@ -389,9 +389,9 @@ and `enc` (RFC 7517 §4.2), so overloading it needs care.
 ### Finding 8 — Provider algorithm support, with a dated source
 
 D2 warns that the major clouds have historically not offered Ed25519 for KMS signing. For
-Google Cloud, the target `docker/cloudbuild.yaml` already builds for, that does not hold.
-The provider's algorithm reference (`cloud.google.com/kms/docs/algorithms`), read
-2026-09-15, lists:
+Google Cloud, the platform `docker/cloudbuild.yaml` builds and pushes images for, that does
+not hold. The provider's algorithm reference, read at `docs.cloud.google.com/kms/docs/algorithms`
+on 2026-09-15 through a summarising fetch and not archived as served, lists:
 
 | Need | Identifier | Description as published |
 |---|---|---|
@@ -419,8 +419,9 @@ production drives retirement. `SigningKeyConfig.maxSigningTtl` (default `PT24H`)
 by a test stub, `KeyRotationPolicy.isDueForRetiring`/`isDueForRetired` are called only from
 `KeyRotationPolicyTest`, and the `retiringGrace` parameter has no configuration property. The
 retire-after-max-TTL invariant is modelled but not enforced. Re-checked on `main` on the move:
-a first-boot provisioner now mints and promotes the initial key, and still nothing calls the
-retirement checks. This gap is separate from custody and needs its own item.
+a first-boot provisioner now mints and promotes the initial key, but only when
+`iam.bootstrap.enabled` is set, which requires fixed-tenant mode (`iam.tenancy.fixed-tenant`);
+still nothing calls the retirement checks. This gap is separate from custody and needs its own item.
 
 ### Further alternatives considered
 
