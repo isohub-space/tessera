@@ -7,7 +7,7 @@
 | Amended | 2026-09-29: security review. D1, D2, D3, D4b and D5 are tightened, the threat model is extended, and two statements about the existing code are corrected. Each amendment is marked **Amendment** in place. |
 | Spike | tenant tier as source of truth + path-scoped issuer vs header-only tenant resolution (time-box 3 days, deliverable = this record) |
 | Affects | tenant resolution, issuer configuration, signing-key topology, introspection, discovery/JWKS |
-| Relates to | [ADR-IAM-002](ADR-IAM-002-standalone-public-origin.md) (standalone public origin), [ADR-001](ADR-001-audit-checkpoint-key-custody.md) (key custody) |
+| Relates to | [ADR-IAM-002](ADR-IAM-002-standalone-public-origin.md) (standalone public origin), [ADR-IAM-001](ADR-IAM-001-audit-checkpoint-key-custody.md) (key custody) |
 
 ---
 
@@ -416,7 +416,7 @@ trusting a request-derived value.
 | **Issuer spoofing via `Host`** | Unchanged: the issuer derives from configuration, never from the request (D3); the existing test is kept verbatim and extended | None known |
 | **Issuer spoofing via the new path channel** | D2: the path cannot select a realm, so no token can be minted under a realm the caller merely asked for | An attacker able to register a slug visually close to a victim's — see OQ-1 |
 | **Tier escalation** | D1: tier is read from an administratively written registry, never from a request header or claim; the runtime role has no write privilege on it (D1 amendment) | Compromise of the separate administrative role; out of scope here |
-| **Key custody across tiers** | ADR-001's single provider behind `KeyProviderPort` | N keysets multiply the custody surface. ADR-001's D3 asks for a budget line on sign-request cost and provider throttling; under D4a that line must be re-run against tenants × keys-per-tenant, and against the provider's **key-count** quota, not only its request rate. Per-tenant keysets still share one envelope key-encryption key or KMS key, so D4a separates keys logically under a single custody root |
+| **Key custody across tiers** | ADR-IAM-001's single provider behind `KeyProviderPort` | N keysets multiply the custody surface. ADR-IAM-001's D3 asks for a budget line on sign-request cost and provider throttling; under D4a that line must be re-run against tenants × keys-per-tenant, and against the provider's **key-count** quota, not only its request rate. Per-tenant keysets still share one envelope key-encryption key or KMS key, so D4a separates keys logically under a single custody root |
 | **Registry read as an RLS bypass** | D1's narrow port, plus an enumerated allowlist in an arch rule that covers the whole persistence layer (D1 amendment) | The exemption exists by design. Its value depends entirely on it being enumerated; with the rule widened, moving a class to another persistence package no longer hides it |
 
 ---

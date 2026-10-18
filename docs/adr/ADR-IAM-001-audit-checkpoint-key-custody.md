@@ -1,12 +1,13 @@
-# ADR-001 — Key custody for audit checkpoint signing
+# ADR-IAM-001 — Key custody for audit checkpoint signing
 
-- **Status:** Proposed — awaiting ratification. Not a decision until accepted.
-- **Date:** 2026-09-11
-- **Spike:** key custody for audit checkpoint signing (time-box 2 days, deliverable = this record)
-- **Unblocks:** the KMS-backed audit-checkpoint signing-key work, referred to below as
-  *the implementation item*.
-- **Supersedes:** nothing. This is the first ADR in this repository; see
-  [Conventions established here](#conventions-established-here).
+| Field | Value |
+|---|---|
+| Status | **Proposed** — awaiting ratification. Not a decision until accepted. |
+| Date | 2026-09-11 |
+| Renamed | 2026-10-18: filed as `ADR-001`, renamed `ADR-IAM-001` to join the series of the later records. Findings from a parallel draft of the same review are merged in [Additional findings](#additional-findings-merged-2026-10-18). |
+| Spike | key custody for audit checkpoint signing (time-box 2 days, deliverable = this record) |
+| Unblocks | the KMS-backed audit-checkpoint signing-key work, referred to below as *the implementation item* |
+| Supersedes | nothing. This is the first ADR in this repository; see [Conventions established here](#conventions-established-here). |
 
 ---
 
@@ -326,6 +327,127 @@ current scope):
 
 ---
 
+## Additional findings (merged 2026-10-18)
+
+A parallel draft of this record, written from the same review, carried the findings below,
+which the text above lacks. They are merged here so the decision is recorded in one place.
+They do not change D1–D6. Line references are as read on 2026-09-11 at `3397096`. Where a
+finding was re-checked against `main` on the move, the note says so.
+
+### Finding 4 — One process-wide key signs every tenant's checkpoints
+
+`TenantAuditLog` injects a single `CheckpointSigner` (`TenantAuditLog.java:53`), and
+`CheckpointScheduler` loops every tenant through it (`CheckpointScheduler.java:45-52`). The
+audit subsystem has no `RealmKey`: it keys chains by a bare `String tenant`
+(`TenantAuditLog.java:92,120`). D1 moves checkpoint signing onto the realm-scoped
+`KeyProviderPort`, so the implementation item has to settle which realm's key signs a
+tenant's checkpoint.
+
+### Finding 5 — There are no already-signed checkpoints to migrate
+
+Finding 1 shows no format change is needed. Separately, nothing durable exists to migrate:
+
+- Nothing calls `TenantAuditLog.record(...)` outside the audit package and its own tests, so
+  `auditLog.tenants()` is always empty and `CheckpointScheduler.checkpointAllTenants()`
+  returns early every time it fires (`CheckpointScheduler.java:43`).
+- `TenantAuditLogRepository` (`:23-79`) has no checkpoint method. A signed checkpoint is
+  fired as a CDI event (`TenantAuditLog.java:131`), counted, and discarded.
+- Nothing observes `AuditEvent`, so the durable sink described at `AuditEvent.java:5-11` has
+  no implementation, and no migration creates an audit table.
+- The domain emits `SideEffectRequest.RecordAuditEvent` (from `AuthFlowReducer`) and nothing
+  interprets it. It carries a `RealmKey` while `TenantAuditLog.record` takes a
+  `String tenant`, so the two halves are not type-compatible as written.
+
+The implementation item is therefore free to change the tenant type from `String` to
+`RealmKey` without a data migration.
+
+### Finding 6 — D1 moves a module boundary
+
+`tessera-observability` depends on no other `tessera-*` module and is built before
+`tessera-domain`, `tessera-api` and `tessera-persistence` in the reactor, so
+`CheckpointSigner` cannot reach `KeyProviderPort` or `RealmKey` today. The implementation
+item picks one of:
+
+- **(a)** supply the `KeyProviderPort`-backed `CheckpointSigner` from `tessera-server`, the
+  composition root, through the `@DefaultBean` override seam at `AuditBeans.java:30`. This
+  changes no module dependency and is the recommended option; or
+- **(b)** move the audit core into `tessera-api`/`tessera-domain` and leave observability
+  only the metrics wiring.
+
+This is an implementation choice, not a custody decision, and is left open.
+
+### Finding 7 — Telling the checkpoint key apart from token keys in the JWKS
+
+D5 resolves `keyId` through the realm JWKS. The checkpoint key must still be
+distinguishable from the token-signing keys published there. The `signing_key` table already
+carries a `key_use` column defaulting to `'sig'` (`V2__signing_key_material.sql:19-25`), and
+the selection index is `(tenant_id, issuer, key_use, state)`. Whether the checkpoint key is
+published in the same JWKS under a distinct `key_use` or at a separate endpoint is left open
+for the implementation item: the JWK `use` parameter has only the registered values `sig`
+and `enc` (RFC 7517 §4.2), so overloading it needs care.
+
+### Finding 8 — Provider algorithm support, with a dated source
+
+D2 warns that the major clouds have historically not offered Ed25519 for KMS signing. For
+Google Cloud, the target `docker/cloudbuild.yaml` already builds for, that does not hold.
+The provider's algorithm reference (`cloud.google.com/kms/docs/algorithms`), read
+2026-09-15, lists:
+
+| Need | Identifier | Description as published |
+|---|---|---|
+| Ed25519 signing | `EC_SIGN_ED25519` | *EdDSA on the Curve25519 in PureEdDSA mode* |
+| ES256 fallback | `EC_SIGN_P256_SHA256` | *ECDSA on the P-256 Curve with a SHA-256 digest* |
+| DEK wrapping | `GOOGLE_SYMMETRIC_ENCRYPTION` | *AES-256 in Galois Counter Mode*, `ENCRYPT_DECRYPT` purpose |
+
+So on that provider the checkpoint key can stay on EdDSA, the published asymmetric-only
+policy does not move, and the same provider can wrap `EnvelopeCipher`'s data keys, so the
+estate does not split between a signing custodian and a separate key-wrapping custodian.
+
+Not established: whether `EC_SIGN_ED25519` is generally available or in preview. That
+matters for a compliance-adjacent signing path and must be confirmed against the page's own
+status markers, as D2's verification note already requires.
+
+Two criteria for the provider choice stay open: the credential model on an ephemeral CI
+runner versus production, and whether custody is a compliance requirement or a hardening
+goal, which sets whether it blocks a release.
+
+### Finding 9 — Rotation is not enforced for token keys either
+
+D1 inherits this. The rotation mechanics exist and are proven by integration tests
+(`KeyRotationService.mintPending`/`promoteToActive`, `SigningKeyPipelineIT`), but nothing in
+production drives retirement. `SigningKeyConfig.maxSigningTtl` (default `PT24H`) is read only
+by a test stub, `KeyRotationPolicy.isDueForRetiring`/`isDueForRetired` are called only from
+`KeyRotationPolicyTest`, and the `retiringGrace` parameter has no configuration property. The
+retire-after-max-TTL invariant is modelled but not enforced. Re-checked on `main` on the move:
+a first-boot provisioner now mints and promotes the initial key, and still nothing calls the
+retirement checks. This gap is separate from custody and needs its own item.
+
+### Further alternatives considered
+
+**Keep the in-process key and publish its public half at boot.** Rejected. A key that
+changes on every restart cannot anchor a tamper-evidence claim across the restart, which is
+the only interval that matters. Publishing it would make checkpoints look verifiable while
+the verification window stayed one process lifetime.
+
+**Derive the checkpoint key deterministically from `iam.keys.master-key`.** Rejected. It
+makes a master-key compromise silently also a checkpoint-forgery capability with no separate
+rotation, and it puts long-lived signing material in the same blast radius as the
+data-key-wrapping key.
+
+### Documentation defects found in passing
+
+Neither is in this record's scope. Both were re-checked on `main` on the move and are still
+present.
+
+- `KeyProviderPort.java:65` links `{@link #sign(KeyId, byte[])}`, but the method takes three
+  arguments (`:48`).
+- `V900__dev_seed.sql` starts with `- dev-only seed.`, a single hyphen that is not a valid
+  SQL comment token, and its seeded `ACTIVE` key has no private material and the literal
+  public key `"x":"dev-placeholder-public-key"`. It satisfies the readiness count
+  (`SigningKeyReadinessCheck`) while being unable to sign.
+
+---
+
 ## Exit criteria status
 
 | Spike exit criterion | Status |
@@ -350,11 +472,11 @@ splitting out as an independent fix that does not depend on the custody decision
 This repository had no ADR directory and no decision records before this file. It
 therefore establishes, and should be confirmed or overridden on review:
 
-- Location `docs/adr/`, filename `ADR-<number>-kebab-title.md`, zero-padded sequence from
-  `001`. The number is plain digits only: a letter-coded prefix is reserved vocabulary and
-  is rejected by the `pr-hygiene` workflow.
-- A `Status` line taking `Proposed | Accepted | Superseded by ADR-<number>`, with
+- Location `docs/adr/`, filename `ADR-IAM-<number>-kebab-title.md`, zero-padded three-digit
+  sequence from `001`. `IAM` is this project's own code, the one letter-coded ADR prefix the
+  `pr-hygiene` workflow lets through. Every ADR of this project lives here and nowhere else.
+- A `Status` taking `Proposed | Accepted | Superseded by ADR-IAM-<number>`, with
   **`Proposed` meaning not yet in force**.
 
-If a convention already exists elsewhere in the estate, this file should be moved to
-match it rather than becoming a second standard.
+This file was first filed as `ADR-001`, with plain-digit numbers. It was renamed on
+2026-10-18 to match the `ADR-IAM-<number>` series the later records use.
