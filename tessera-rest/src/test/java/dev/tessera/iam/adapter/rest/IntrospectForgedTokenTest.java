@@ -10,9 +10,15 @@ import dev.tessera.iam.domain.tenancy.RealmKey;
 import dev.tessera.iam.domain.tenancy.TenantId;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.response.Response;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.security.KeyPair;
 import java.security.KeyPairGenerator;
+import java.security.PublicKey;
 import java.security.Signature;
+import java.security.cert.CertificateFactory;
+import java.security.cert.X509Certificate;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.Map;
@@ -62,9 +68,13 @@ class IntrospectForgedTokenTest extends AuthorizationCodeFlowSupport {
     }
 
     @Test
-    @DisplayName("HS256 keyed with the published JWK (key confusion) is inactive")
+    @DisplayName("HS256 keyed with the realm's public key, in any encoding (key confusion), is inactive")
     void hs256KeyedWithPublicKey() {
-        assertInactive(forge("HS256", "at+jwt", kid(), payload(ISSUER, ISSUER), Sig.HMAC_WITH_JWK));
+        // Whichever encoding a verifier that picks the algorithm from the header would feed to HMAC.
+        for (Sig keyEncoding : new Sig[] {
+                Sig.HMAC_WITH_JWK_X, Sig.HMAC_WITH_RAW_KEY, Sig.HMAC_WITH_DER_KEY, Sig.HMAC_WITH_PEM_KEY}) {
+            assertInactive(forge("HS256", "at+jwt", kid(), payload(ISSUER, ISSUER), keyEncoding));
+        }
     }
 
     @Test
@@ -101,6 +111,36 @@ class IntrospectForgedTokenTest extends AuthorizationCodeFlowSupport {
     }
 
     @Test
+    @DisplayName("an attacker key embedded as a jwk header, under the realm kid, is never used: inactive")
+    void embeddedJwkIsIgnored() {
+        KeyPair attacker = ed25519();
+        String jwk = "{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"x\":\""
+                + B64URL.encodeToString(raw(attacker.getPublic())) + "\"}";
+        assertInactive(signedBy(attacker, "\"jwk\":" + jwk));
+    }
+
+    @Test
+    @DisplayName("a jku header pointing at an attacker's key set, under the realm kid, is never fetched: inactive")
+    void jkuIsIgnored() {
+        assertInactive(signedBy(ed25519(), "\"jku\":\"https://attacker.example/jwks.json\""));
+    }
+
+    @Test
+    @DisplayName("an attacker certificate in an x5c header, under the realm kid, is never used: inactive")
+    void x5cIsIgnored() throws Exception {
+        KeyPair attacker = ed25519();
+        byte[] certificate = selfSignedCertificate(attacker);
+        // The forgery is genuine: the chain parses, and its key is the one that signed the token.
+        X509Certificate parsed = (X509Certificate) CertificateFactory.getInstance("X.509")
+                .generateCertificate(new ByteArrayInputStream(certificate));
+        parsed.verify(attacker.getPublic());
+        assertThat(parsed.getPublicKey().getEncoded()).isEqualTo(attacker.getPublic().getEncoded());
+
+        assertInactive(signedBy(attacker,
+                "\"x5c\":[\"" + Base64.getEncoder().encodeToString(certificate) + "\"]"));
+    }
+
+    @Test
     @DisplayName("a token signed by another realm's key under that realm's kid is inactive here")
     void otherRealmsKid() {
         RealmKey other = new RealmKey(new TenantId(UUID.randomUUID()), new BaselineId(new UUID(0L, 0L)));
@@ -133,7 +173,10 @@ class IntrospectForgedTokenTest extends AuthorizationCodeFlowSupport {
     // --------------------------------------------------------------------- helpers
 
     /** How the third JWS segment is produced. */
-    private enum Sig { EMPTY, REALM_EDDSA, HMAC_WITH_JWK, ATTACKER_RSA }
+    private enum Sig {
+        EMPTY, REALM_EDDSA, ATTACKER_RSA,
+        HMAC_WITH_JWK_X, HMAC_WITH_RAW_KEY, HMAC_WITH_DER_KEY, HMAC_WITH_PEM_KEY
+    }
 
     private String kid() {
         return keyProvider.keyId(REALM);
@@ -145,10 +188,28 @@ class IntrospectForgedTokenTest extends AuthorizationCodeFlowSupport {
         byte[] signature = switch (sig) {
             case EMPTY -> new byte[0];
             case REALM_EDDSA -> keyProvider.signRaw(REALM, input);
-            case HMAC_WITH_JWK -> hmac(publishedX(), input);
+            case HMAC_WITH_JWK_X -> hmac(publishedX().getBytes(StandardCharsets.US_ASCII), input);
+            case HMAC_WITH_RAW_KEY -> hmac(raw(realmPublicKey()), input);
+            case HMAC_WITH_DER_KEY -> hmac(realmPublicKey().getEncoded(), input);
+            case HMAC_WITH_PEM_KEY -> hmac(pem(realmPublicKey()).getBytes(StandardCharsets.US_ASCII), input);
             case ATTACKER_RSA -> rsa(input);
         };
         return signingInput + "." + B64URL.encodeToString(signature);
+    }
+
+    /** An EdDSA at+jwt under the realm kid, signed by {@code signer}, with extra header members. */
+    private String signedBy(KeyPair signer, String extraHeaderMembers) {
+        String header = B64URL.encodeToString(("{\"alg\":\"EdDSA\",\"typ\":\"at+jwt\",\"kid\":\"" + kid()
+                + "\"," + extraHeaderMembers + "}").getBytes(StandardCharsets.UTF_8));
+        String signingInput = header + "." + payload(ISSUER, ISSUER);
+        try {
+            Signature signature = Signature.getInstance("Ed25519");
+            signature.initSign(signer.getPrivate());
+            signature.update(ascii(signingInput));
+            return signingInput + "." + B64URL.encodeToString(signature.sign());
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private static String header(String alg, String typ, String kid) {
@@ -176,10 +237,64 @@ class IntrospectForgedTokenTest extends AuthorizationCodeFlowSupport {
         return keyProvider.publishedJwks(REALM).await().indefinitely().getFirst().x();
     }
 
-    private static byte[] hmac(String secret, byte[] input) {
+    private PublicKey realmPublicKey() {
+        return keyProvider.publicKey(REALM);
+    }
+
+    /** The 32-byte RFC 8032 public key: the tail of the X.509 SubjectPublicKeyInfo encoding. */
+    private static byte[] raw(PublicKey key) {
+        byte[] spki = key.getEncoded();
+        return java.util.Arrays.copyOfRange(spki, spki.length - 32, spki.length);
+    }
+
+    private static String pem(PublicKey key) {
+        return "-----BEGIN PUBLIC KEY-----\n"
+                + Base64.getMimeEncoder(64, new byte[] {'\n'}).encodeToString(key.getEncoded())
+                + "\n-----END PUBLIC KEY-----\n";
+    }
+
+    private static KeyPair ed25519() {
+        try {
+            return KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** A minimal self-signed X.509 (v1) certificate for an Ed25519 key, DER-encoded. */
+    private static byte[] selfSignedCertificate(KeyPair keys) throws Exception {
+        byte[] ed25519 = der(0x30, der(0x06, new byte[] {0x2B, 0x65, 0x70})); // id-Ed25519
+        byte[] name = der(0x30, der(0x31, der(0x30, concat(
+                der(0x06, new byte[] {0x55, 0x04, 0x03}), der(0x0C, ascii("attacker"))))));
+        byte[] validity = der(0x30, concat(der(0x17, ascii("250101000000Z")), der(0x17, ascii("350101000000Z"))));
+        byte[] tbs = der(0x30, concat(der(0x02, new byte[] {0x01}), ed25519, name, validity, name,
+                keys.getPublic().getEncoded()));
+        Signature signer = Signature.getInstance("Ed25519");
+        signer.initSign(keys.getPrivate());
+        signer.update(tbs);
+        return der(0x30, concat(tbs, ed25519, der(0x03, concat(new byte[] {0x00}, signer.sign()))));
+    }
+
+    private static byte[] der(int tag, byte[] content) {
+        int length = content.length;
+        byte[] encodedLength = length < 0x80 ? new byte[] {(byte) length}
+                : length < 0x100 ? new byte[] {(byte) 0x81, (byte) length}
+                : new byte[] {(byte) 0x82, (byte) (length >> 8), (byte) length};
+        return concat(new byte[] {(byte) tag}, encodedLength, content);
+    }
+
+    private static byte[] concat(byte[]... parts) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        for (byte[] part : parts) {
+            out.writeBytes(part);
+        }
+        return out.toByteArray();
+    }
+
+    private static byte[] hmac(byte[] secret, byte[] input) {
         try {
             Mac mac = Mac.getInstance("HmacSHA256");
-            mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.US_ASCII), "HmacSHA256"));
+            mac.init(new SecretKeySpec(secret, "HmacSHA256"));
             return mac.doFinal(input);
         } catch (Exception e) {
             throw new IllegalStateException(e);
