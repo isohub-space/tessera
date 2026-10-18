@@ -88,6 +88,43 @@ class SessionSeamIntegrationTest {
         authorize.then().statusCode(400).body("error", org.hamcrest.Matchers.equalTo("access_denied"));
     }
 
+    @Test
+    @DisplayName("session fixation: login never adopts a session id the client presented before it")
+    void loginMintsAFreshSessionIdNeverThePresentedOne() {
+        String tenant = UUID.randomUUID().toString();
+        String planted = UUID.randomUUID().toString();
+
+        // The attacker plants a cookie in the victim's browser; the victim then logs in with it.
+        Response login = given().header("X-Tenant-Id", tenant)
+                .cookie(SessionCookies.NAME, planted)
+                .contentType("application/x-www-form-urlencoded")
+                .formParam("username", FakePasswordCredentialVerifier.USERNAME)
+                .formParam("password", FakePasswordCredentialVerifier.CORRECT_PASSWORD)
+                .when().post("/login");
+        login.then().statusCode(204);
+        String issued = login.getCookie(SessionCookies.NAME);
+        assertThat(issued).isNotBlank().isNotEqualTo(planted);
+
+        // The planted id is still not a session: the attacker holding it is not the victim.
+        authorizeWithSession(tenant, planted).then().statusCode(400)
+                .body("error", org.hamcrest.Matchers.equalTo("access_denied"));
+        authorizeWithSession(tenant, issued).then().statusCode(302);
+    }
+
+    private static Response authorizeWithSession(String tenant, String sessionId) {
+        return given().config(noFollow())
+                .header("X-Tenant-Id", tenant)
+                .cookie(SessionCookies.NAME, sessionId)
+                .queryParam("response_type", "code")
+                .queryParam("client_id", FakeClientRepository.PUBLIC_CLIENT_ID)
+                .queryParam("redirect_uri", FakeClientRepository.REDIRECT_URI)
+                .queryParam("scope", "openid")
+                .queryParam("state", "state-fixation")
+                .queryParam("code_challenge", s256(newVerifier()))
+                .queryParam("code_challenge_method", "S256")
+                .when().get("/authorize");
+    }
+
     private static String newVerifier() {
         byte[] bytes = new byte[48];
         new SecureRandom().nextBytes(bytes);
