@@ -241,7 +241,7 @@ public final class RefreshService implements RefreshUseCase {
                 }
                 String successor = RefreshTokenCodec.successorSecret(
                         successorKey, fid, presentedSecret, family.rotationSalt());
-                if (!RefreshTokenCodec.sha256(successor).equals(family.currentTokenHash())) {
+                if (!RefreshTokenCodec.matches(successor, family.currentTokenHash())) {
                     yield invalidGrant("refresh token is invalid");
                 }
                 yield issue(command, family, authoritativeRealm, fid, successor, now);

@@ -87,6 +87,20 @@ public final class RefreshTokenCodec {
     }
 
     /**
+     * Whether {@code secret} hashes to {@code storedHash}, compared in constant time so a mismatch
+     * does not reveal how many leading characters of the stored hash it shares. A {@code null}
+     * stored hash (no such token) never matches.
+     */
+    public static boolean matches(String secret, String storedHash) {
+        if (storedHash == null) {
+            return false;
+        }
+        return MessageDigest.isEqual(
+                sha256(secret).getBytes(StandardCharsets.US_ASCII),
+                storedHash.getBytes(StandardCharsets.US_ASCII));
+    }
+
+    /**
      * The secret of the token that succeeds {@code presentedSecret} in family {@code id}, derived as
      * {@code base64url(HMAC-SHA256(key, label | familyId | presentedSecret | salt))}: 256 bits, the
      * same shape as a random secret. {@code salt} is random per rotation and stored with the family.

@@ -103,8 +103,7 @@ public final class IntrospectService implements IntrospectUseCase {
                 return inactive();
             }
             // Only the family's current (live) token is active; a superseded token is inactive.
-            String presentedHash = RefreshTokenCodec.sha256(parsed.secret());
-            if (!presentedHash.equals(family.currentTokenHash())) {
+            if (!RefreshTokenCodec.matches(parsed.secret(), family.currentTokenHash())) {
                 return inactive();
             }
             return active(refreshClaims(family));
