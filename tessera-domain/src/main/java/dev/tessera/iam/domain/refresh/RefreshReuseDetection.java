@@ -1,5 +1,7 @@
 package dev.tessera.iam.domain.refresh;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
 
@@ -90,15 +92,24 @@ public final class RefreshReuseDetection {
         if (family.isExpired(now)) {
             return new RefreshDecision.Expired();
         }
-        if (presentedHash.equals(family.currentTokenHash())) {
+        if (sameHash(presentedHash, family.currentTokenHash())) {
             return new RefreshDecision.Rotate(family.id());
         }
-        if (presentedHash.equals(family.previousTokenHash())) {
+        if (sameHash(presentedHash, family.previousTokenHash())) {
             if (family.rotatedWithin(reuseGrace, now)) {
                 return new RefreshDecision.Reissue(family.id());
             }
             return new RefreshDecision.Replay(family.id());
         }
         return new RefreshDecision.Unknown();
+    }
+
+    /**
+     * Constant-time equality of two token hashes, so a mismatch does not reveal how long a prefix of
+     * the stored hash it shares; a {@code null} stored hash (no previous token yet) never matches.
+     */
+    private static boolean sameHash(String presented, String stored) {
+        return stored != null && MessageDigest.isEqual(
+                presented.getBytes(StandardCharsets.US_ASCII), stored.getBytes(StandardCharsets.US_ASCII));
     }
 }
