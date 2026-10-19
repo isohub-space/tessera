@@ -4,6 +4,7 @@
 |---|---|
 | Status | **Accepted** |
 | Date | 2026-09-17 |
+| Ratified | 2026-10-19 (confirmed unchanged) |
 | Issue | [#87](https://github.com/isohub-space/tessera/issues/87) |
 | Relates to | [ADR-IAM-003](ADR-IAM-003-tenant-tier-and-path-scoped-issuer.md) (multi-tenant issuers), [ADR-IAM-004](ADR-IAM-004-end-user-session-and-consent.md) (session and consent) |
 

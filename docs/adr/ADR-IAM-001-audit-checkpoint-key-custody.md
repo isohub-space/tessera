@@ -43,7 +43,7 @@ Two facts the decisions rest on:
 1. No new vendor and no new trust root.
 2. Confirm the provider's current algorithm list and general availability before building.
 3. Enabling it needs the maintainers' cost approval.
-4. Per-tenant key sets (ADR-IAM-003) multiply the number of keys.
+4. Per-tenant key sets (ADR-IAM-003) multiply the number of keys. They count against the provider's key-count quota as well as its request rate.
 
 ## D3 — Remote sign per checkpoint
 
@@ -58,7 +58,10 @@ Two facts the decisions rest on:
 
 **Decision.** The signed format does not change. `keyId` is derived from the key (a JWK thumbprint, RFC 7638, or the provider's key version), never configured. The verifier resolves the key the checkpoint names, not the one currently signing.
 
-**What it means.** This is already how `main` works. `keyId` is inside the signed bytes, so relabelling a checkpoint breaks its signature. `TenantAuditLog.verifyCheckpoint` resolves the named key through `CheckpointKeyResolver`. Setting the old `iam.audit.checkpoint.key-id` property stops the server at startup.
+**What it means.** This is already how `main` works. `keyId` is inside the signed bytes, so relabelling a checkpoint breaks its signature. `TenantAuditLog.verifyCheckpoint` resolves the named key through `CheckpointKeyResolver`. Setting the old `iam.audit.checkpoint.key-id` property is refused, but lazily: the refusal is thrown when the signer is first created, on the first checkpoint run, and the scheduler logs it while the server keeps running.
+
+**Consequences.**
+1. The signing input does not bind the algorithm. That is fine while a `keyId` names exactly one key of one algorithm; if that stops holding, this decision reopens.
 
 ## D5 — Old checkpoints stay verifiable
 
@@ -70,7 +73,7 @@ Two facts the decisions rest on:
 
 ## D6 — Production refuses to start without an external signer
 
-**Decision.** The in-memory signer stays for development and tests. A production-mode start with no external checkpoint signer fails with an actionable message, as `SigningKeyBeans` already does for a development master key. There is no opt-out.
+**Decision.** The in-memory signer stays for development and tests. A production-mode start with no external checkpoint signer fails with an actionable message, as `SigningKeyBeans` already does for a development master key. There is no opt-out. Refusing at startup is what this decision requires, and it is not yet built: today a production start with the in-memory signer succeeds.
 
 **Consequences.**
 1. Once the audit log is wired, every production-mode deployment, demonstration ones included, needs a checkpoint KMS key or must run in a non-production mode.

@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | **Accepted**, with one open item (see [Open items](#open-items)) |
+| Status | **Accepted** |
 | Date | 2026-09-23 |
 | Ratified | 2026-10-19 |
 | Relates to | [ADR-IAM-002](ADR-IAM-002-standalone-public-origin.md) (standalone public origin), [ADR-IAM-001](ADR-IAM-001-audit-checkpoint-key-custody.md) (key custody) |
@@ -70,23 +70,25 @@ Facts the decisions rest on:
 
 **Decision.** (a) Tenants never share key material, in any tier. (b) Access tokens carry their tenant and baseline, and introspection refuses a token whose realm or `iss` does not match the realm it is presented in.
 
-**What it means.** Rollout is in two phases: emit the claims, wait one token lifetime, then enforce. Tokens without the claims are inactive.
+**What it means.** Rollout is in two phases: emit the claims, wait one token lifetime, then enforce. Tokens without the realm claims, without `iss` or without `exp` are inactive. Today a token with no `exp` introspects as active.
 
 **Consequences.**
 1. Two independent tenant boundaries instead of one.
 2. D4b depends on nothing else here and goes first, followed by D1, then D2, D3 and D5.
 3. The comparison lives in `IntrospectService`, so no adapter can drop it. It covers the full realm, `(tenant, baseline)`: today a token minted for one baseline introspects as active in another baseline of the same tenant.
-4. Both mint paths, the token service and the refresh service, emit the claims, after every claim contributor and under names a contributor cannot set.
+4. Both mint paths, the token service and the refresh service, emit the claims, after every claim contributor. The realm claim names become reserved, so a contributor cannot set them. Today `ClaimContributor` writes `realm_tenant` on the `profile` path, and that has to change.
 5. Comparing `iss` separates tenants only once D3 ships.
-6. One key set per tenant multiplies the KMS keys under ADR-IAM-001.
+6. One key set per tenant multiplies the KMS keys under ADR-IAM-001. They count against the provider's key-count quota as well as its request rate.
+7. Authenticating the introspecting client is not a tenant control: a public client can introspect with its `client_id` alone (RFC 7662 §4).
 
 ## D5 — Per-tenant discovery and key sets, global timings
 
 **Decision.** Each tenant has its own discovery and JWKS routes. The cache TTL and the key dwell stay global, so one startup check enforces TTL < dwell. A promoted key waits out the dwell before it signs, except at first boot. The base key set serves only the base realm.
 
 **Consequences.**
-1. Relying parties that hard-coded the base JWKS for another realm must move to that realm's URL.
-2. Known defect: in header mode, discovery and JWKS are publicly cacheable on a shared URL without `Vary: X-Tenant-Id`, so a shared cache can serve one tenant's keys to another. The fix is `Vary`, or per-tenant URLs.
+1. Dwell enforcement is not yet built. `KeyRotationService.promoteToActive` has no time check, and first boot promotes a key as soon as it is minted.
+2. Relying parties that hard-coded the base JWKS for another realm must move to that realm's URL.
+3. Known defect: in header mode, discovery and JWKS are publicly cacheable on a shared URL without `Vary: X-Tenant-Id`, so a shared cache can serve one tenant's keys to another. The fix is `Vary`, or per-tenant URLs.
 
 ## Rejected alternatives
 
@@ -97,6 +99,7 @@ Facts the decisions rest on:
 - **A shared Starter key set with a compensating claim.** Trades a cryptographic boundary for a check one deleted line removes.
 - **Customer-chosen slugs.** Squatting, lookalikes, and reuse after deletion inside a value relying parties pin.
 - **An append-only issuer ledger.** More machinery than the rare mode switches need.
+- **One global `iss`, with the realm only in endpoint paths.** `iss` would carry no tenant information.
 - **Per-tenant subdomain issuers.** Multiplies DNS, certificates and internal addressing by the number of tenants.
 
 ## Open items

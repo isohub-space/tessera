@@ -57,7 +57,7 @@ Facts the decision rests on:
 **Decision.** The engineering goal is a green nightly against the known-failures list. Whether to certify a release is decided separately.
 
 **Consequences.**
-1. Certification has a fee: USD 700 per deployment for OIDF members and 3,500 for non-members, with an open-source waiver on request.
+1. Certification has a fee: USD 700 per deployment for OIDF members and 3,500 for non-members, with an open-source waiver for projects whose primary maintainers are not paid by an employer for the work.
 2. It also needs a signed declaration naming a software version and a responsible signer.
 
 ## Follow-ups, fixable now

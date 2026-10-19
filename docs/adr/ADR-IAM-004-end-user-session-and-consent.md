@@ -41,7 +41,7 @@
 
 **Decision.** `SessionCookieFilter` turns the session cookie into `X-Subject-Id` and, by default, strips any header a caller sent. `/authorize` is unchanged.
 
-**What it means.** The filter runs after `TenantResolutionFilter` on every tenant-scoped request. If the cookie does not resolve, the header stays absent and the resource refuses with `access_denied`: `400` at `/authorize`, `401` at `/consent`. The filter never answers with an error itself, so it cannot be used to probe for sessions. `iam.subject.trust-header=true` turns off the stripping, for a deployment whose own ingress sets the header.
+**What it means.** The filter runs after `TenantResolutionFilter` on every tenant-scoped request. If the cookie does not resolve, the header stays absent and the resource refuses with `access_denied`: `400` at `/authorize`, `401` at `/consent`. The filter never answers with an error itself, so it cannot be used to probe for sessions. `iam.subject.trust-header=true` turns off the stripping, for a deployment whose own ingress sets the header and strips any value the client sent.
 
 **Consequences.**
 1. One session lookup per request with a cookie.
