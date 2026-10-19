@@ -5,96 +5,39 @@
 | Status | **Accepted** |
 | Date | 2026-09-17 |
 | Issue | [#87](https://github.com/isohub-space/tessera/issues/87) |
-| Affects | deployment topology, tenant resolution at ingress, first-boot provisioning |
+| Relates to | [ADR-IAM-003](ADR-IAM-003-tenant-tier-and-path-scoped-issuer.md) (multi-tenant issuers), [ADR-IAM-004](ADR-IAM-004-end-user-session-and-consent.md) (session and consent) |
 
 ---
 
-## Context
+## Background
 
-Tessera's tenant contract was written for a deployment with a gateway in front of it. Every
-tenant-scoped route — `/authorize`, `/token`, `/introspect`, `/revoke`, discovery, JWKS, and
-the `/login`, `/consent`, `/logout` endpoints — reads a gateway-asserted `X-Tenant-Id` and
-fails closed without one. That expectation is stated in `TenantHeaders`, and the fail-closed
-part of it is real and not in question here.
+Tessera's tenant contract assumed a gateway in front of it. Every tenant-scoped route reads a gateway-asserted `X-Tenant-Id` and fails closed without one: `/authorize`, `/token`, `/introspect`, `/revoke`, discovery, JWKS, `/login`, `/consent` and `/logout`. That fail-closed rule stays.
 
-The open question was *which* gateway. The obvious candidate in a platform that already runs
-one is the application gateway that fronts the product's own back-end services: a
-deny-by-default reverse proxy with a curated route table, which authenticates an existing
-session and proxies it onward.
+The obvious gateway is the application gateway that fronts the product's own back-end services. It is a deny-by-default proxy that authenticates an existing session and passes it on. That is the wrong shape for an authorization server:
+- The user's own browser must reach `/authorize`, `/login`, `/consent`, `/logout`, and `/token` for public PKCE clients before anything has authenticated the user. A gateway that checks sessions has nothing to check on the request that creates the session.
+- Any relying party's backend must reach discovery and JWKS as a plain HTTP client. That includes the application gateway itself, once it trusts tessera.
+- Together, nearly every tessera route would have to be allow-listed. That empties the deny-by-default posture while keeping its cost.
 
-That is the wrong shape for an authorization server, for a reason that is structural rather
-than a matter of configuration:
+An application gateway's natural relationship with an identity provider is that of an OIDC client. It redirects the browser to the provider and calls the token and introspection endpoints server to server. It is a sibling, not a parent.
 
-- `/authorize`, `/login`, `/consent`, `/logout`, and `/token` for public PKCE clients must be
-  reachable by the **end user's own browser, before that user is authenticated by anything**.
-  By the time a browser arrives at tessera there is, by definition, no session — so a gateway
-  whose job is to authenticate a session has nothing to authenticate, and the request it is
-  asked to protect is the request that creates the very thing it checks for.
-- Discovery and JWKS must additionally be reachable by **any relying party's backend as a
-  plain HTTP client**, including that same application gateway once it starts trusting tessera
-  as its identity provider.
-- Between those two, nearly tessera's entire route surface would have to be allow-listed
-  anyway, which empties the deny-by-default posture of its meaning while keeping its cost.
+## D1 — Tessera is its own public origin
 
-The relationship an application gateway actually wants with an identity provider is the one it
-already has with whatever provider it uses today: it is the provider's **OIDC relying party /
-client** — it redirects the browser out to the provider, and calls the token and introspection
-endpoints server-to-server. That is a sibling, not a parent.
+**Decision.** Tessera runs as its own public origin on a dedicated subdomain (for example `iam.example.com`), with its own domain mapping and certificate, next to the application gateway rather than behind it. The gateway is a tessera client.
 
-## Decision
+**What it means.** With no proxy to assert `X-Tenant-Id`, a single-tenant deployment settles the tenant inside tessera. With `iam.tenancy.fixed-tenant` set, `TenantResolutionFilter` binds every tenant-scoped request to that tenant at the zero baseline and ignores the tenant and baseline headers. A caller cannot select another tenant. A malformed value stops the server at startup.
 
-**Tessera is deployed as its own public origin on a dedicated subdomain** (for example
-`iam.example.com`), with its own domain mapping and certificate, alongside the application
-gateway rather than behind it. The gateway is tessera's client.
+**Consequences.**
+1. Nothing asserts `X-Tenant-Id`. `iam.tenancy.fixed-tenant` (`TESSERA_FIXED_TENANT`) answers this: the headers are ignored, not merged.
+2. Discovery and JWKS must answer an anonymous relying-party backend. In fixed-tenant mode they resolve with no header.
+3. `X-Subject-Id` arrives straight from the internet. `iam.subject.trust-header` defaults to `false`, `SessionCookieFilter` strips any inbound value, and only a verified session cookie establishes a subject.
+4. A fresh origin has an empty database, so nobody can sign in. `iam.bootstrap.*` provisions the signing key, one client and one user at first boot. It is idempotent and takes its secrets from the environment.
+5. The issuer must match the public origin. `TESSERA_OIDC_ISSUER` is set to it, and the signing-key issuer must resolve to the same value.
+6. The relying party's login page is cross-origin. It is allowed through `TESSERA_CORS_ORIGINS`, against the deny-by-default CORS policy.
+7. This record does not solve multi-tenant on a standalone origin. Without `iam.tenancy.fixed-tenant`, a missing tenant header is still a `400`. A deployment serving several tenants without a proxy needs the tenant asserted at the load balancer that terminates TLS, for example by a fixed custom request header. That is an infrastructure choice. It is recorded so that nobody "fixes" it later by trusting a client-supplied value. ADR-IAM-003 covers per-tenant issuers.
+8. Forwarded headers are weaker on a public origin. `quarkus.http.proxy.trusted-proxies` is unset, so `X-Forwarded-For` is whatever the caller sent, and the rate limiter treats source IP as a secondary axis. `/login` has no client identifier and is limited by IP only, so a caller can evade its ingress bucket by varying the header. The separate failure budget per tenant and username still bounds password guessing. This weaker outer tier needs its own change.
 
-There is then no proxy hop that could assert `X-Tenant-Id`, so the tenant has to be
-established some other way. For the single-tenant deployment that a first rollout actually is,
-that is settled **in tessera itself**, not at the edge: with `iam.tenancy.fixed-tenant` set,
-`TenantResolutionFilter` binds every tenant-scoped request to that tenant at the zero baseline
-and ignores the tenant and baseline headers entirely, so a caller cannot select another tenant
-by sending one. A malformed value refuses to boot rather than silently serving no tenant.
+## Rejected alternatives
 
-## Consequences
-
-### What this forced, and what now carries it
-
-| Concern raised by having no proxy in front | How it is answered |
-|---|---|
-| Nothing asserts `X-Tenant-Id` | `iam.tenancy.fixed-tenant` (`TESSERA_FIXED_TENANT`) — headers ignored, not merged |
-| Discovery/JWKS must answer an anonymous relying-party backend | Same: in fixed-tenant mode those routes resolve with no header at all |
-| `X-Subject-Id` arrives straight from the public internet | `iam.subject.trust-header` defaults to `false`; `SessionCookieFilter` strips any inbound value, and a verified session cookie is the only way to establish a subject |
-| A fresh origin has an empty database and nobody can sign in | `iam.bootstrap.*` first-boot provisioning of the signing key, one client and one user — idempotent, secrets from the environment |
-| The issuer must match the public origin | `TESSERA_OIDC_ISSUER` is set to it, and the signing-key issuer must resolve to the same value — otherwise discovery, minted tokens and key material disagree in a way that surfaces only at the relying party |
-| The relying party's own login page is cross-origin | `TESSERA_CORS_ORIGINS`, against the deny-by-default CORS policy |
-
-### What it leaves open
-
-- **Multi-tenant on a standalone origin is not solved in code.** There is no hostname- or
-  path-derived tenant resolution; a missing header is still a hard `400` whenever
-  `iam.tenancy.fixed-tenant` is unset. A deployment serving more than one tenant without a
-  proxy needs the tenant asserted at whatever load balancer terminates TLS for the origin —
-  a fixed custom-request-header rule, which an external HTTPS load balancer supports natively.
-  That is an infrastructure decision; it is recorded here so it is not mistaken for a code gap
-  that a future change quietly "fixes" by trusting a client-supplied value.
-- **Forwarded-header trust is weaker on a public origin than it was behind a gateway.**
-  `quarkus.http.proxy.trusted-proxies` is left unset (see the comment in
-  `application.properties`), so `X-Forwarded-For` is whatever the caller sent. The rate
-  limiter treats source IP as a secondary axis for this reason — except on `/login`, which has
-  no client identifier to key on and is therefore IP-only, so its ingress bucket is evadable by
-  a caller that varies the header. Per-account credential guessing is still bounded by the
-  separate `(tenant, username)` failure budget, so this is a weakened outer tier rather than an
-  open door — but it is a consequence of this decision and wants its own change.
-
-## Alternatives considered
-
-- **Behind the application gateway, with the pre-auth routes allow-listed.** Rejected: the
-  allow-list would cover nearly the whole surface, the gateway cannot authenticate a caller
-  who is by definition not yet authenticated, and it puts a session-proxying hop in the path of
-  the flow that mints sessions.
-- **Deriving the tenant from the request host or path.** Rejected for now: it moves a
-  security-load-bearing decision into string handling over a value the caller controls, to
-  serve a multi-tenant standalone deployment that does not exist yet. A fixed tenant chosen by
-  configuration cannot be influenced by a request at all, which is the stronger property while
-  one tenant is all that is being served.
-- **Trusting a client-supplied `X-Tenant-Id` when no gateway is present.** Rejected outright:
-  on a public origin that is tenant selection by the attacker.
+- **Behind the application gateway, with the pre-authentication routes allow-listed.** The allow-list would cover nearly everything, and the gateway cannot authenticate a caller who is not yet authenticated.
+- **Derive the tenant from the request host or path.** Rejected for now. It moves a security decision into string handling over a value the caller controls, to serve a multi-tenant standalone deployment that did not exist. A fixed tenant set by configuration cannot be influenced by a request at all.
+- **Trust a client-supplied `X-Tenant-Id` when no gateway is present.** On a public origin that lets the attacker choose the tenant.
