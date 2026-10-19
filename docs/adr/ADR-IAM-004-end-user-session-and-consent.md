@@ -2,120 +2,82 @@
 
 | Field | Value |
 |---|---|
-| Status | **Proposed** — awaiting ratification. Not a decision until accepted. |
+| Status | **Accepted** |
 | Date | 2026-10-03 |
-| Records | decisions already implemented on `main` by [#76](https://github.com/isohub-space/tessera/pull/76); this record is written after the fact, from the code |
-| Affects | `/login`, `/logout`, `/consent`, `/authorize`; session and consent persistence; credential throttling |
-| Relates to | [ADR-IAM-002](ADR-IAM-002-standalone-public-origin.md) (standalone public origin) |
+| Ratified | 2026-10-19 |
+| Relates to | [ADR-IAM-002](ADR-IAM-002-standalone-public-origin.md) (standalone public origin), [ADR-IAM-005](ADR-IAM-005-oidf-basic-op-conformance-in-ci.md) (conformance) |
 
 ---
 
-## Context
+## Background
 
-`AuthorizeResource` was written with a gap in it: it takes the authenticated end user's `sub` from the `X-Subject-Id` header and says that a login/consent front end, or an upstream authenticating proxy, is what puts it there. Nothing did. The `auth_session` and `consent` tables existed in V3, under RLS, with nothing writing them.
+`/authorize` takes the logged-in user from an `X-Subject-Id` header, but nothing set it. Login, a session cookie and consent were added to fill that gap ([#76](https://github.com/isohub-space/tessera/pull/76)). This record states those choices. D1's enforcement rule and D5's login page are decided but not yet built.
 
-[#76](https://github.com/isohub-space/tessera/pull/76) filled that gap. It made several choices on the way that are easy to mistake for accidents: consent granularity, the cookie's flags, where the session meets `/authorize`, which credential to support first, and what not to build. This record states them, with the evidence in the code, so they can be ratified or reopened on purpose.
+## D1 — Consent per user and client, enforced for every client
 
-Every statement below is derived from the code on `main`. Where the code does not settle a point, the record says so under [Open points](#open-points-the-code-does-not-settle).
+**Decision.** Consent is stored per `(user, client)` as a set of scopes. `/authorize` requires consent covering the requested scopes for every client, with no first-party exemption. Enforcement is not yet built.
 
-## Decisions
+**What it means.** Recording consent again replaces the set. The `consent` table is unique on `(tenant_id, baseline_id, user_id, client_id)` and stores the scopes as `granted_scopes`.
 
-### D1 — Consent is recorded per (subject, client), not per scope
+**Consequences.**
+1. A consent change replaces the whole set, with no history of earlier grants.
+2. Per-scope consent would need a new schema grain, a consent request with a decision per scope, and a rule for partial grants at `/authorize`.
 
-`ConsentUseCase` (`tessera-api/.../application/port/in/ConsentUseCase.java`) states the granularity: one consent per `(subject, client)` within a realm, holding the set of scopes the user agreed to release. `hasConsented` asks whether that set covers *at least* the requested scopes. By the port contract, `recordConsent` replaces the previous set for that pair, so narrowing and widening are both a re-record; the persistent store does not yet honour that (see open point 2).
+**Why.** No current flow lets a user grant some requested scopes and refuse others, so a finer grain would store a distinction nothing can produce. An exemption for first-party clients would make the decision depend on how a client is classified.
 
-`PersistentConsentStore` (`tessera-persistence/.../consent/PersistentConsentStore.java`) stores the set as the space-separated `granted_scopes` column and checks coverage with `containsAll`. The `consent` table is unique on `(tenant_id, baseline_id, user_id, client_id)` (V3), which is exactly this grain.
+## D2 — The session cookie
 
-**Why.** It matches the schema that already existed, so it shipped with no migration. It answers the question `/authorize` needs answered: does this user already allow this client these scopes? Nothing in the current flow lets a user grant some requested scopes and refuse others, so a finer grain would store a distinction nothing can produce.
+**Decision.** The session cookie is `HttpOnly; Secure; SameSite=Strict`, with a fixed name (`tessera_session`) and fixed flags. Sessions expire after a configured absolute lifetime (`iam.login.session-ttl`, default 8 hours), never extended on use.
 
-**What per-scope consent would take.** A new grain in the schema: either a child table of `(consent_id, scope)` rows or a unique key that includes the scope, plus a migration that splits existing `granted_scopes` strings. A consent request and response that carry a per-scope decision, rather than the single `scope` form parameter `ConsentResource` reads today. And a rule for a partial grant at `/authorize`: whether the code is issued for the granted subset or the request is refused. `ConsentService` is a pass-through today and is where that rule would go.
+**What it means.** The value is a server-minted UUIDv7 session id with 74 random bits and no claims; login never adopts an id the caller presents. Logout marks the session revoked, clears the cookie, and is idempotent.
 
-### D2 — The session cookie: `HttpOnly`, `Secure`, `SameSite=Strict`, fixed name and flags; lifetime configured, expiry absolute
+**Consequences.**
+1. An active user is logged out at the end of the lifetime, and an idle session lives that long.
+2. `SameSite=Strict` works only when the login form is same-site with tessera.
 
-`SessionCookies` (`tessera-rest/.../session/SessionCookies.java`) builds the only `Set-Cookie` for a session:
+**Why.** The flags are security properties no supported deployment needs weaker, so making them configurable would only add a way to weaken them. The lifetime is policy.
 
-- name `tessera_session`, `Path=/`;
-- `HttpOnly`: the value is a session credential, never needed by script;
-- `Secure`: never sent over plain HTTP;
-- `SameSite=Strict`: never attached to a cross-site request;
-- `Max-Age` equal to the session lifetime on login, and `Max-Age=0` with an empty value on logout.
+## D3 — A filter turns the cookie into `X-Subject-Id`
 
-The value is the session id: a UUIDv7 (`SessionId`, generated by `TimeOrderedUuid`): a 48-bit millisecond timestamp, the version and variant bits, and 74 CSPRNG-drawn bits. It carries no claims; everything else is server-side in `auth_session`. Login always mints a new id server-side and never adopts one presented by the caller.
+**Decision.** `SessionCookieFilter` turns the session cookie into `X-Subject-Id` and, by default, strips any header a caller sent. `/authorize` is unchanged.
 
-**Lifetime and expiry.** The lifetime is `iam.login.session-ttl` (`LoginConfig`, default `PT8H`; `TESSERA_LOGIN_SESSION_TTL` in `tessera-server`'s `application.properties`). `PersistentSessionStore.create` sets `expires_at = now + ttl`. Expiry is absolute: nothing extends it on use, and there is no separate idle timeout. `PersistentSessionStore.find` treats a session as absent unless it is `AUTHENTICATED`, unexpired, and in the caller's baseline; RLS already limits it to the caller's tenant. Logout (`LogoutResource`) marks the row `REVOKED` and clears the cookie, and is idempotent.
+**What it means.** The filter runs after `TenantResolutionFilter` on every tenant-scoped request. If the cookie does not resolve, the header stays absent and the resource refuses with `access_denied`: `400` at `/authorize`, `401` at `/consent`. The filter never answers with an error itself, so it cannot be used to probe for sessions. `iam.subject.trust-header=true` turns off the stripping, for a deployment whose own ingress sets the header.
 
-**What is fixed, and why.** The flags and the name are constants, not configuration. The flags are security properties with no deployment that needs them weaker: every real deployment terminates TLS in front of tessera, and the login form is expected to be same-site with tessera (see the open point on `SameSite`). Making them configurable would only add a way to ship them off. The name is an implementation detail with nothing to tune, and a constant lets `SessionCookieFilter`, which is instantiated before `@ConfigMapping` beans are reliably resolvable, read it without an injection point.
+**Consequences.**
+1. One session lookup per request with a cookie.
+2. One place decides which subject a request carries, for every tenant-scoped resource, including future ones.
 
-The lifetime is the one session property that *is* configurable. It is a policy choice that varies by deployment, and it is not a weakening of the cookie.
+## D4 — Password-only login
 
-### D3 — `SessionCookieFilter` fills `X-Subject-Id`; `AuthorizeResource` is unchanged
+**Decision.** Login is password-only, with Argon2id. An unknown user and a wrong password get identical responses. Failures are throttled per `(tenant, username)` with a refilling budget, not a hard lockout.
 
-`SessionCookieFilter` (`tessera-rest/.../session/SessionCookieFilter.java`) runs on every tenant-scoped request, after `TenantResolutionFilter` and before `RateLimitFilter`. It resolves the session cookie to a subject through `SessionUseCase.resolveSubject` and writes that subject into `X-Subject-Id`. `AuthorizeResource` and `ConsentResource` keep reading the header exactly as before. The session is translated into the existing seam; the seam is not redesigned.
+**What it means.** `POST /login` takes a form and returns `204` with the cookie, or `401 invalid_credentials`. The verifier runs one Argon2 pass on every reject path. A spent budget looks like a wrong password: no `429`. `/login` is also rate limited by source IP.
 
-**The trust boundary.** Unless `iam.subject.trust-header` is `true` (default `false`), the filter first removes any `X-Subject-Id` the caller sent. A verified session cookie is then the only way a subject reaches a resource. Any failure to resolve the cookie (missing, malformed, unknown, expired, revoked, other baseline) leaves the header absent, and the resource refuses with `access_denied`: a `400` at `/authorize`, a `401` at `/consent`. The filter itself never answers with an error, so it cannot be used to probe whether a session exists.
+**Consequences.**
+1. The throttle budget is per instance, so N instances allow N times the guesses, and a restart resets it.
+2. Someone who knows a username can keep its owner locked out, bounded by the refill rate.
+3. Response timing matches only while stored hashes use the same cost as the equaliser hash, and no test covers it.
 
-`SubjectHeaderTrustBoundaryTest` pins this: a forged `X-Subject-Id` with no session cookie is refused at `/authorize` (`400 access_denied`) and at `/consent` (`401 access_denied`). `SessionSeamIntegrationTest` shows the positive path (login, then `/authorize` with only the cookie issues a code) and that an unknown cookie does not authenticate. `LogoutResourceTest` shows that a logged-out cookie no longer authenticates `/authorize`.
+## D5 — A hosted login page: not yet
 
-`trust-header=true` is an explicit escape hatch for a deployment whose own ingress asserts the header and strips any client value. Tessera cannot check that, so it is off unless an operator turns it on.
+**Decision.** MFA is out of scope. A replaceable, server-rendered login and consent page that `/authorize` redirects to is planned for Wave 2. Until then, the relying party serves its own form and posts to `/login`, allowed through the deny-by-default CORS policy.
 
-**Why a filter and not a change to `/authorize`.** It keeps one place that decides what subject a request carries, for every tenant-scoped resource, including ones added later. It leaves the tested authorization code path untouched. And it makes the header safe on a public origin (ADR-IAM-002), where there is no gateway to strip it.
+**Consequences.**
+1. Until the page exists, `/authorize` without a session refuses with `400` and does not redirect. Conformance testing waits for it (ADR-IAM-005).
 
-### D4 — Password-only login first
+## Rejected alternatives
 
-`POST /login` (`LoginResource`) takes `username` and `password` as a form and returns `204` with the session cookie, or `401 invalid_credentials`. It serves no HTML.
+- **Per-scope consent now.** Needs a new schema grain, and no current flow lets a user split a request.
+- **A consent exemption for first-party clients.** Makes the consent decision depend on how a client is classified.
+- **Configurable cookie flags.** The only reason to configure them is to weaken them.
+- **Reading the session inside each resource.** Every subject-bearing resource would have to remember to do it.
+- **Trusting a caller-supplied `X-Subject-Id` by default.** On a public origin it lets any caller name any subject.
+- **A hard account lockout.** Lets anyone who knows a username lock its owner out for the whole window.
 
-- **Argon2id.** A password credential is a `PasswordHash`: an Argon2id PHC string carrying its own parameters and salt (`tessera-domain/.../credential/PasswordHash.java`). `Argon2PasswordCredentialVerifier` reads the parameters from the stored string, rejects absurd ones (memory above 1 GiB, more than 40 iterations, parallelism above 16) and fails closed on a malformed hash. It runs on the dedicated `argon2` worker pool, never the event loop.
-- **Identical responses for unknown user and wrong password.** The verifier runs one Argon2 pass on every reject path, against a timing-equaliser hash when the user or credential is missing. The equaliser is hashed with fixed OWASP parameters (19 MiB, t=2, p=1), so the timings match only when stored hashes use the same cost; a stored hash with a different cost makes a known username slower or faster than an unknown one. The port returns `empty()` for both, `LoginService` maps both to `Denied("invalid_credentials")`, and `LoginResource` renders one fixed `401` body. `LoginResourceTest.unknownUsernameDeniedIdentically` pins that both cases get the same status and error code; the timing property has no test.
-- **Throttling by reuse.** `ThrottlingPasswordCredentialVerifier` is a CDI decorator on the verifier port. It applies the same `TokenBucket` failure budget, configuration (`credential-failure-burst`, default 10; `credential-refill-per-minute`, default 2) and metric as `ThrottlingClientSecretVerifier`, keyed per `(tenant, username)`. A failed verification spends budget and a successful one does not. Once the budget is spent, the decorator returns `empty()` without running Argon2, so the caller sees the same `invalid_credentials` as a wrong password: no `429`, no oracle. It is a throttle that refills, not a fixed lockout. `LoginThrottleTest` pins that a spent budget refuses even the correct password and that the budget is per tenant. `/login` is also `@RateLimited` at ingress, by source IP only (ADR-IAM-002 records why that tier is weak).
+## Known defects
 
-**Why password first.** It is the one credential that needs no client-side ceremony, and it completes the end-to-end flow: login, session, `/authorize`, code, token. `LoginUseCase` records the rest of the sealed `Credential` set (WebAuthn, TOTP, recovery codes) as follow-on work: each is a second verification layered on a session that already exists, not a prerequisite for one.
-
-### D5 — Out of scope
-
-- **MFA, WebAuthn, TOTP.** The domain models these credential kinds; no login path verifies them. Adding one is a new verifier behind the same session establishment, not a change to D2 or D3.
-- **A login page hosted by tessera.** Tessera is a JSON protocol server. The relying party's own front end serves the login form and posts it to `POST /login`. The cross-origin call is permitted through `TESSERA_CORS_ORIGINS` against the deny-by-default CORS policy (ADR-IAM-002).
-
-## Alternatives considered
-
-These are the alternatives the code and its javadoc name as rejected.
-
-- **Per-scope consent now (D1).** Rejected for this cut: it needs a new schema grain and a per-scope consent request, and no current flow lets a user split a request. Kept as the follow-on D1 describes.
-- **Configurable cookie flags (D2).** Rejected: the only reason to configure them is to weaken them, and no supported deployment needs that. The lifetime stays configurable because it is policy, not a security flag.
-- **Reading the session inside `AuthorizeResource` and `ConsentResource` (D3).** Rejected: every subject-bearing resource would have to remember to do it, and the tested authorization path would change. One filter keeps one decision point.
-- **Trusting a caller-supplied `X-Subject-Id` by default (D3).** Rejected: on a public origin (ADR-IAM-002) nothing strips it, so it would let any caller name any subject. Trusting the header is opt-in through `iam.subject.trust-header`.
-- **A hard account lockout instead of a refilling budget (D4).** Rejected, as for client secrets: a fixed lockout lets anyone who knows a username lock its owner out for the whole window.
-
-## Consequences
-
-**Positive.** The `/authorize` seam is filled without touching the authorization code path. `X-Subject-Id` is safe by default on a public origin. Session state lives server-side, so logout and expiry take effect on the next request. Login does not reveal whether a username exists by its response, and runs one Argon2 pass on every reject path; timing equality holds only while stored hashes share the equaliser's cost, and is not tested. Credential guessing is bounded per account by the same mechanism that already protects client secrets.
-
-**Negative / accepted.**
-
-- Every request with a session cookie costs one session lookup.
-- Expiry is absolute: an active user is logged out at the end of the lifetime, and an idle session lives that long. Expired rows are never deleted: nothing purges `auth_session`.
-- The failure budget lives in each node's memory. A fleet of N nodes allows up to N times the budget, and a restart resets it. The server configuration notes the per-node limit.
-- An attacker who knows a username can spend its budget and keep the real user out while they keep failing, bounded by the refill rate. This is the accepted cost of throttling per account.
-- By the port contract, a consent change replaces the whole set for that client, with no history of earlier grants (see open point 2 for what the persistent store does today).
-
-**What would reopen each choice.**
-
-| Choice | Reopen when |
-|---|---|
-| D1 per-client consent | the consent step must let a user grant some requested scopes and refuse others, or an audit needs each scope's grant time |
-| D2 fixed flags | a supported topology needs the login front end on a different site from tessera (see the `SameSite` open point) |
-| D2 absolute expiry | users are logged out mid-task in practice, or an idle timeout is required by policy |
-| D3 header seam | a resource needs more than the subject from the session (authentication time, method, assurance level) |
-| D3 default-closed header | never on its own; `trust-header=true` exists for a deployment that has verified its ingress |
-| D4 password only | a deployment requires a second factor, or a relying party asks for `acr`/`amr` |
-| D4 per-node throttle | more than one node serves `/login` and the per-node budget is measured as too loose |
-| D5 no hosted page | relying parties keep re-implementing the same login form, or a flow needs tessera to render a page (e.g. a WebAuthn ceremony on its own origin) |
-
-## Open points the code does not settle
-
-These are found in the code as it stands. This record does not decide them; each needs a decision or a fix of its own.
-
-1. **Consent is recorded but not enforced.** No production code calls `ConsentUseCase.hasConsented`. `/authorize` issues a code to any subject with a session, whether or not consent was recorded. The "at least the requested scopes" check is exercised only by `ConsentServiceTest`. D1 describes the granularity of what is stored, not a gate the flow applies today.
-2. **The persistent store does not replace a consent.** The port says `grant` "records (or replaces)". `PersistentConsentStore.grant` persists a new row with a fresh id, so a second grant for the same `(tenant, baseline, user, client)` hits `uq_consent_pair` rather than replacing it. Only the in-memory `FakeConsentStore` replaces, and `SessionAndConsentTenantIsolationIT` grants only once.
-3. **`SameSite=Strict` assumes the login front end is same-site with tessera.** The `SessionCookies` javadoc gives that as the reason the strict setting costs nothing. A relying-party page on another subdomain of the same registrable domain is same-site and works. On a different registrable domain, browsers can refuse to store the cookie from the cross-site `POST /login` response, and even if it is stored, the cookie is not sent on requests that the relying party's page starts. No test covers either topology.
-4. **Login is tenant-scoped, not baseline-scoped.** `UserRepository.findByUsername` filters by tenant through RLS only, and `iam_user.username` has no unique constraint. A user from one baseline can therefore establish a session in another baseline of the same tenant, and a username shared across baselines makes the lookup non-unique. The session store does check the baseline (`SessionAndConsentTenantIsolationIT`); the credential lookup in front of it does not. The throttle key `(tenant, username)` has the same grain. The consent path has the same gap: `UserRepository.findBySubject` is also tenant-only, while `sub` is unique only per `(tenant, baseline)` (`uq_iam_user_subject`). A subject present in two baselines makes the user lookup in front of every consent read and grant return several rows, and `getSingleResultOrNull` then fails rather than answering.
-5. **A new login does not end earlier sessions.** Each login creates an additional session, and only `/logout` with that session's cookie revokes it. Whether a password change or an administrative action should revoke all of a subject's sessions is not addressed.
+- A second consent for the same user and client fails instead of replacing.
+- Login is not scoped to the baseline: a user can sign in to another baseline of the same tenant, and the consent path's user lookup has the same gap.
+- Expired sessions are never purged.
+- A new login or a password change does not end earlier sessions.
+- No test covers the same-site and cross-site topologies.
