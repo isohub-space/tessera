@@ -3,6 +3,7 @@ package dev.tessera.iam.application.port.out;
 import io.smallrye.mutiny.Uni;
 import dev.tessera.iam.domain.client.ClientId;
 import dev.tessera.iam.domain.tenancy.RealmKey;
+import java.util.UUID;
 
 /**
  * Outbound port that verifies a confidential client's presented secret against its
@@ -16,6 +17,15 @@ import dev.tessera.iam.domain.tenancy.RealmKey;
  * and never stored or logged.
  */
 public interface ClientSecretVerifierPort {
+
+    /**
+     * The identity to verify against when the request names no confidential client (an unknown
+     * {@code client_id}, another tenant's, or a public client). No client has it, so verifying
+     * against it costs one full, failing comparison, the same as a wrong secret. Callers use it so
+     * that every authentication attempt costs the same whether or not the client exists, and an
+     * implementation or decorator must never answer for it faster than for a real client.
+     */
+    ClientId NO_CLIENT = new ClientId(new UUID(0L, 0L));
 
     /**
      * Verifies a presented client secret for a confidential client.

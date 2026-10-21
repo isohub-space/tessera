@@ -147,7 +147,7 @@ class ClientCredentialsFlowTest extends AuthorizationCodeFlowSupport {
     }
 
     @Test
-    @DisplayName("the token introspects as active for its client; revoking it is accepted")
+    @DisplayName("the token introspects as active; revoking it is accepted and leaves it active until expiry")
     void introspectionAndRevocation() {
         String accessToken = withBasic(MACHINE_TENANT, CLIENT, SECRET).jsonPath().getString("access_token");
 
@@ -170,6 +170,15 @@ class ClientCredentialsFlowTest extends AuthorizationCodeFlowSupport {
                 .formParam("client_id", CLIENT).formParam("client_secret", SECRET)
                 .when().post("/revoke")
                 .then().statusCode(200);
+
+        // Revocation is a no-op for a self-contained access token: it stays active until it expires.
+        given().config(noFollow())
+                .header("X-Tenant-Id", MACHINE_TENANT)
+                .contentType("application/x-www-form-urlencoded")
+                .formParam("token", accessToken)
+                .formParam("client_id", CLIENT).formParam("client_secret", SECRET)
+                .when().post("/introspect")
+                .then().statusCode(200).body("active", Matchers.is(true));
     }
 
     @Test

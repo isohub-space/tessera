@@ -4,11 +4,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import dev.tessera.iam.application.port.in.ClientCredentialsUseCase.ClientCredentialsCommand;
 import dev.tessera.iam.application.port.in.TokenUseCase.TokenResult;
+import dev.tessera.iam.application.port.out.ClaimSourcePort;
 import dev.tessera.iam.application.port.out.ClientRepositoryPort;
 import dev.tessera.iam.application.port.out.ClientSecretVerifierPort;
 import dev.tessera.iam.application.port.out.OpaqueIdentifierPort;
 import dev.tessera.iam.application.port.out.TokenSignerPort;
 import dev.tessera.iam.domain.authcode.AuthorizationError;
+import dev.tessera.iam.domain.authflow.ClaimContext;
+import dev.tessera.iam.domain.authflow.Subject;
 import dev.tessera.iam.domain.client.Client;
 import dev.tessera.iam.domain.client.ClientAuthMethod;
 import dev.tessera.iam.domain.client.ClientId;
@@ -31,6 +34,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -48,6 +52,7 @@ class ClientCredentialsServiceTest {
     private static final Set<String> AUDIENCES = Set.of("https://orders.example", "https://billing.example");
 
     private final AtomicReference<ClaimSet> signed = new AtomicReference<>();
+    private final AtomicInteger verifierCalls = new AtomicInteger();
 
     /** Every client lives in tenant A only: the registry is realm-scoped like the real one. */
     private Map<String, Client> clientsOfTenantA() {
@@ -59,7 +64,9 @@ class ClientCredentialsServiceTest {
                 "no-audience", confidential("no-audience", CC, Set.of("orders.read"), Set.of(),
                         ClientAuthMethod.CLIENT_SECRET),
                 "mtls-auth", confidential("mtls-auth", CC, Set.of("orders.read"), AUDIENCES, ClientAuthMethod.MTLS),
-                "spa", new PublicClient(new ClientId(UUID.randomUUID()), TENANT_A, CC, Set.of()));
+                "spa", new PublicClient(new ClientId(UUID.randomUUID()), TENANT_A, CC, Set.of()),
+                "profile-service", confidential("profile-service", CC, Set.of("profile"), AUDIENCES,
+                        ClientAuthMethod.CLIENT_SECRET));
     }
 
     private static ConfidentialClient confidential(
@@ -68,11 +75,22 @@ class ClientCredentialsServiceTest {
                 auth, Set.of(), scopes, audiences, List.of("ops", "reader"));
     }
 
-    private ClientCredentialsService service(boolean requireSenderConstraint) {
+    private ClientRepositoryPort registry() {
         Map<String, Client> registry = clientsOfTenantA();
-        ClientRepositoryPort clients = (realm, clientId) ->
-                Uni.createFrom().item(realm.equals(TENANT_A) ? registry.get(clientId) : null);
-        ClientSecretVerifierPort secrets = (realm, id, secret) -> Uni.createFrom().item(SECRET.equals(secret));
+        return (realm, clientId) -> Uni.createFrom().item(realm.equals(TENANT_A) ? registry.get(clientId) : null);
+    }
+
+    private ClientCredentialsService service(boolean requireSenderConstraint) {
+        return service(requireSenderConstraint, new RegisteredClientClaimSource(registry()));
+    }
+
+    private ClientCredentialsService service(boolean requireSenderConstraint, ClaimSourcePort claimSource) {
+        ClientRepositoryPort clients = registry();
+        // Like the Argon2 verifier: true only for a known confidential client and its secret.
+        ClientSecretVerifierPort secrets = (realm, id, secret) -> {
+            verifierCalls.incrementAndGet();
+            return Uni.createFrom().item(!ClientSecretVerifierPort.NO_CLIENT.equals(id) && SECRET.equals(secret));
+        };
         TokenSignerPort signer = (realm, typ, claims) -> {
             signed.set(claims);
             return Uni.createFrom().item("signed." + typ);
@@ -98,7 +116,7 @@ class ClientCredentialsServiceTest {
                 return UUID.randomUUID();
             }
         };
-        return new ClientCredentialsService(clients, secrets, new RegisteredClientClaimSource(clients), signer, ids,
+        return new ClientCredentialsService(clients, secrets, claimSource, signer, ids,
                 Clock.fixed(NOW, ZoneOffset.UTC), ISSUER, TTL, requireSenderConstraint);
     }
 
@@ -208,5 +226,42 @@ class ClientCredentialsServiceTest {
                 AuthorizationError.INVALID_REQUEST);
         assertFailed(issue(TENANT_A, "mtls-auth", SECRET, null, List.of(), null, false),
                 AuthorizationError.INVALID_REQUEST);
+    }
+
+    @Test
+    @DisplayName("the secret verifier runs exactly once on every outcome, so a client_id's existence is not timed")
+    void verifierRunsOnceOnEveryPath() {
+        Map<String, Runnable> paths = new java.util.LinkedHashMap<>();
+        paths.put("unknown client", () -> issue("nobody", SECRET, null, List.of()));
+        paths.put("other tenant", () -> issue(TENANT_B, "service", SECRET, null, List.of(), null, false));
+        paths.put("public client", () -> issue("spa", SECRET, null, List.of()));
+        paths.put("missing secret", () -> issue("service", null, null, List.of()));
+        paths.put("wrong secret", () -> issue("service", "wrong", null, List.of()));
+        paths.put("not registered for the grant", () -> issue("code-only", SECRET, null, List.of()));
+        paths.put("invalid scope", () -> issue("service", SECRET, "admin", List.of()));
+        paths.put("success", () -> issue("service", SECRET, null, List.of()));
+        paths.forEach((path, request) -> {
+            verifierCalls.set(0);
+            request.run();
+            assertThat(verifierCalls.get()).as(path).isEqualTo(1);
+        });
+    }
+
+    @Test
+    @DisplayName("realm claims from the claim pipeline are overwritten by the request's realm")
+    void realmClaimsCannotBeSetUpstream() {
+        // A claim source answering for another realm, with profile granted, makes the contributor
+        // write that realm's realm_tenant; the mint path must overwrite it.
+        ClaimSourcePort foreign = (subject, realm, scopes) ->
+                Uni.createFrom().item(new ClaimContext(new Subject(subject.subjectId(), TENANT_B), TENANT_B,
+                        List.of(), scopes));
+        TokenResult result = service(false, foreign)
+                .issue(new ClientCredentialsCommand(TENANT_A, "profile-service", SECRET, "profile", List.of(), null))
+                .await().indefinitely();
+
+        assertThat(result).isInstanceOf(TokenResult.Issued.class);
+        assertThat(signed.get().claims())
+                .containsEntry("realm_tenant", TENANT_A.tenant().value().toString())
+                .containsEntry("realm_baseline", TENANT_A.baseline().value().toString());
     }
 }

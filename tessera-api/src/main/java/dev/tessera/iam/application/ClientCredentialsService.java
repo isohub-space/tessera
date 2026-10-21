@@ -13,8 +13,8 @@ import dev.tessera.iam.domain.authflow.ClaimContributor;
 import dev.tessera.iam.domain.authflow.Subject;
 import dev.tessera.iam.domain.client.Client;
 import dev.tessera.iam.domain.client.ClientAuthMethod;
+import dev.tessera.iam.domain.client.ClientId;
 import dev.tessera.iam.domain.client.ConfidentialClient;
-import dev.tessera.iam.domain.client.PublicClient;
 import dev.tessera.iam.domain.client.grant.ClientCredentials;
 import dev.tessera.iam.domain.token.ClaimSet;
 import dev.tessera.iam.domain.token.Confirmation;
@@ -34,7 +34,8 @@ import java.util.Set;
  * <ol>
  *   <li>the client exists in the request's realm, is confidential and authenticates
  *       ({@code invalid_client} otherwise: an unknown client, a public client and a wrong secret
- *       look the same, and a client of another tenant is invisible under row-level security);</li>
+ *       look the same, in the answer and in the time it takes, and a client of another tenant is
+ *       invisible under row-level security);</li>
  *   <li>the client is registered for the grant ({@code unauthorized_client});</li>
  *   <li>every requested scope is registered for it ({@code invalid_scope}); with none requested
  *       it is granted all its registered scopes;</li>
@@ -109,18 +110,19 @@ public final class ClientCredentialsService implements ClientCredentialsUseCase 
                                 : failed(AuthorizationError.INVALID_CLIENT, "client authentication failed")));
     }
 
-    /** Only a confidential client with a valid secret authenticates; anything else is refused alike. */
+    /**
+     * Only a confidential client with a valid secret authenticates. The verifier runs exactly once
+     * whatever the outcome: against {@link ClientSecretVerifierPort#NO_CLIENT} when the request
+     * names no confidential client of this realm, and with an empty secret when none was
+     * presented. Every refusal therefore costs one full comparison, so the response time does not
+     * tell whether a {@code client_id} exists.
+     */
     private Uni<Boolean> authenticate(ClientCredentialsCommand command, Client client) {
-        return switch (client) {
-            case null -> Uni.createFrom().item(Boolean.FALSE);
-            case PublicClient ignored -> Uni.createFrom().item(Boolean.FALSE);
-            case ConfidentialClient confidential -> {
-                if (command.clientSecret() == null || command.clientSecret().isBlank()) {
-                    yield Uni.createFrom().item(Boolean.FALSE);
-                }
-                yield secretVerifier.verifySecret(command.realm(), confidential.id(), command.clientSecret());
-            }
-        };
+        boolean confidential = client instanceof ConfidentialClient;
+        ClientId identity = confidential ? client.id() : ClientSecretVerifierPort.NO_CLIENT;
+        String secret = command.clientSecret() == null ? "" : command.clientSecret();
+        return secretVerifier.verifySecret(command.realm(), identity, secret)
+                .map(verified -> confidential && Boolean.TRUE.equals(verified));
     }
 
     private Uni<TokenResult> authorize(ClientCredentialsCommand command, ConfidentialClient client) {

@@ -92,6 +92,27 @@ class CredentialThrottleTest {
                 .then().statusCode(200);
     }
 
+    @Test
+    @DisplayName("unknown clients are never short-circuited: each one still runs the verifier")
+    void unknownClientsAlwaysReachTheVerifier() {
+        String tenant = UUID.randomUUID().toString();
+        int before = FakeClientSecretVerifier.NO_CLIENT_CALLS.get();
+        // Well past the failure burst of 3: a throttle on the shared no-client sentinel would answer
+        // these fast without the verifier, which would time unknown client_ids apart from real ones.
+        for (int i = 0; i < 6; i++) {
+            given().config(noFollow())
+                    .header("X-Tenant-Id", tenant)
+                    .contentType("application/x-www-form-urlencoded")
+                    .formParam("grant_type", "client_credentials")
+                    .formParam("client_id", "unknown-" + i)
+                    .formParam("client_secret", "whatever")
+                    .when().post("/token")
+                    .then().statusCode(401).body("error", Matchers.equalTo("invalid_client"));
+        }
+        assertThat(FakeClientSecretVerifier.NO_CLIENT_CALLS.get() - before)
+                .isEqualTo(6);
+    }
+
     // ------------------------------------------------------------------- flow helpers
 
     /** Runs a full authorize→token cycle for the confidential client, presenting {@code secret}. */
