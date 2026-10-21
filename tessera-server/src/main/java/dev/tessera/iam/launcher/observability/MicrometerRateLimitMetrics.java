@@ -54,6 +54,11 @@ public class MicrometerRateLimitMetrics implements RateLimitMetrics {
         metrics.increment(SUBSYSTEM_CREDENTIAL, "throttled", "tenant", text(tenant));
     }
 
+    @Override
+    public void credentialTableFull() {
+        metrics.increment(SUBSYSTEM_CREDENTIAL, "table_full");
+    }
+
     private static String text(String value) {
         return value == null || value.isBlank() ? TAG_NONE : value;
     }

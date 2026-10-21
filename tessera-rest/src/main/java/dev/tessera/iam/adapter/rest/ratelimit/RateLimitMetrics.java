@@ -41,4 +41,10 @@ public interface RateLimitMetrics {
      * @param tenant the tenant whose credential budget was exhausted, or {@code null}
      */
     void credentialThrottled(UUID tenant);
+
+    /**
+     * A credential throttle's budget table was full, so a new key was verified without a failure
+     * budget. Carries no tag: a tenant or key here would be attacker-chosen cardinality.
+     */
+    void credentialTableFull();
 }

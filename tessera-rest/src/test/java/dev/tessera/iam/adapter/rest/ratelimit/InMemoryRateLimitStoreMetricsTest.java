@@ -57,5 +57,10 @@ class InMemoryRateLimitStoreMetricsTest {
         public void credentialThrottled(UUID tenant) {
             credential.incrementAndGet();
         }
+
+        @Override
+        public void credentialTableFull() {
+            // not under test here
+        }
     }
 }

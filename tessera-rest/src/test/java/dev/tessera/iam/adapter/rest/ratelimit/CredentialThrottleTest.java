@@ -95,24 +95,41 @@ class CredentialThrottleTest {
     @Test
     @DisplayName("a real client and an unknown client_id get the same verifier-call pattern past the burst")
     void knownAndUnknownClientsThrottleAlike() {
+        // A tenant of its own, so no other test's spent budget is in play.
+        String tenant = UUID.randomUUID().toString();
+        String realClient = FakeClientRepository.CONFIDENTIAL_CLIENT_ID;
+        String unknownId = "no-such-client-" + UUID.randomUUID();
+
+        // Positive control: the real client really is one. With its correct secret it
+        // authenticates (unauthorized_client: it is not registered for this grant), while an
+        // unknown id with the same secret does not.
+        clientCredentials(tenant, realClient, FakeClientSecretVerifier.CORRECT_SECRET)
+                .then().statusCode(400).body("error", Matchers.equalTo("unauthorized_client"));
+        clientCredentials(tenant, "control-" + unknownId, FakeClientSecretVerifier.CORRECT_SECRET)
+                .then().statusCode(401).body("error", Matchers.equalTo("invalid_client"));
+
         // Past the failure burst of 3, both are answered without the verifier. If only the real
         // client were budgeted, its fast answers would tell it apart from an unknown id.
-        assertThat(verifierCallsPerRequest(FakeClientRepository.MACHINE_CLIENT_ID)).containsExactly(1, 1, 1, 0, 0, 0);
-        assertThat(verifierCallsPerRequest("no-such-machine")).containsExactly(1, 1, 1, 0, 0, 0);
+        assertThat(verifierCallsPerRequest(tenant, realClient)).containsExactly(1, 1, 1, 0, 0, 0);
+        assertThat(verifierCallsPerRequest(tenant, unknownId)).containsExactly(1, 1, 1, 0, 0, 0);
+    }
+
+    private static Response clientCredentials(String tenant, String clientId, String secret) {
+        return given().config(noFollow())
+                .header("X-Tenant-Id", tenant)
+                .contentType("application/x-www-form-urlencoded")
+                .formParam("grant_type", "client_credentials")
+                .formParam("client_id", clientId)
+                .formParam("client_secret", secret)
+                .when().post("/token");
     }
 
     /** Six wrong-secret client_credentials requests; how many verifier calls each one made. */
-    private static java.util.List<Integer> verifierCallsPerRequest(String clientId) {
+    private static java.util.List<Integer> verifierCallsPerRequest(String tenant, String clientId) {
         java.util.List<Integer> calls = new java.util.ArrayList<>();
         for (int i = 0; i < 6; i++) {
             int before = FakeClientSecretVerifier.CALLS.get();
-            given().config(noFollow())
-                    .header("X-Tenant-Id", FakeClientRepository.MACHINE_TENANT)
-                    .contentType("application/x-www-form-urlencoded")
-                    .formParam("grant_type", "client_credentials")
-                    .formParam("client_id", clientId)
-                    .formParam("client_secret", "wrong-" + i)
-                    .when().post("/token")
+            clientCredentials(tenant, clientId, "wrong-" + i)
                     .then().statusCode(401).body("error", Matchers.equalTo("invalid_client"));
             calls.add(FakeClientSecretVerifier.CALLS.get() - before);
         }

@@ -53,6 +53,14 @@ class MicrometerRateLimitMetricsTest {
     }
 
     @Test
+    @DisplayName("credentialTableFull increments iam.credential.table_full (untagged)")
+    void credentialTableFull() {
+        metrics.credentialTableFull();
+
+        assertEquals(1.0, registry.get("iam.credential.table_full").counter().count());
+    }
+
+    @Test
     @DisplayName("credentialThrottled increments iam.credential.throttled tagged by tenant")
     void credentialThrottled() {
         UUID tenant = UUID.fromString("00000000-0000-0000-0000-000000000002");

@@ -10,9 +10,6 @@ import jakarta.decorator.Delegate;
 import jakarta.inject.Inject;
 import jakarta.interceptor.Interceptor;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * A CDI {@link Decorator} that wraps whichever {@link ClientSecretVerifierPort} is active (the
@@ -33,6 +30,10 @@ import java.util.concurrent.atomic.AtomicLong;
  * does. Known and unknown ids therefore run dry after the same number of failures and answer the
  * same way afterwards: neither the timing nor the throttle tells whether a {@code client_id}
  * exists.
+ *
+ * <p><strong>A bounded table.</strong> The budgets live in a {@link CredentialBudgets} table capped
+ * at {@code max-tracked-keys}; at the cap a new key is verified without a budget and counted
+ * ({@link RateLimitMetrics#credentialTableFull()}), the same for a real and an unknown id.
  *
  * <p><strong>Throttle, not lockout — deliberately.</strong> A fixed hard lockout keyed on the
  * public {@code client_id} would let anyone who can reach the credential path deny a legitimate
@@ -61,9 +62,6 @@ import java.util.concurrent.atomic.AtomicLong;
 @Priority(Interceptor.Priority.APPLICATION)
 public class ThrottlingClientSecretVerifier implements ClientSecretVerifierPort {
 
-    /** Run the idle-eviction sweep once per this many verify calls. */
-    private static final int SWEEP_INTERVAL = 1024;
-
     @Inject
     @Delegate
     ClientSecretVerifierPort delegate;
@@ -74,8 +72,7 @@ public class ThrottlingClientSecretVerifier implements ClientSecretVerifierPort 
     @Inject
     RateLimitMetrics metrics;
 
-    private final ConcurrentMap<CredentialKey, TokenBucket> budgets = new ConcurrentHashMap<>();
-    private final AtomicLong callsSinceSweep = new AtomicLong();
+    private final CredentialBudgets<CredentialKey> budgets = new CredentialBudgets<>();
 
     @Override
     public Uni<Boolean> verifySecret(RealmKey realm, ClientId clientId, String presentedSecret) {
@@ -84,7 +81,12 @@ public class ThrottlingClientSecretVerifier implements ClientSecretVerifierPort 
         }
 
         CredentialKey key = new CredentialKey(realm.tenant().value(), clientId.value());
-        TokenBucket budget = budgetFor(key);
+        TokenBucket budget = budgets.budgetFor(key, config);
+        if (budget == null) {
+            // The budget table is full: verify without a budget, as for any new key at the cap.
+            metrics.credentialTableFull();
+            return delegate.verifySecret(realm, clientId, presentedSecret);
+        }
         if (!budget.hasToken()) {
             // Failure allowance exhausted: short-circuit without running Argon2. Collapses to
             // invalid_client downstream, same as a wrong secret — no 429, no client-existence oracle.
@@ -100,22 +102,6 @@ public class ThrottlingClientSecretVerifier implements ClientSecretVerifierPort 
                         budget.tryAcquire();
                     }
                 });
-    }
-
-    private TokenBucket budgetFor(CredentialKey key) {
-        maybeSweep();
-        return budgets.computeIfAbsent(key, k -> new TokenBucket(
-                config.credentialFailureBurst(),
-                config.credentialRefillPerMinute() / 60.0,
-                System::nanoTime));
-    }
-
-    private void maybeSweep() {
-        if (callsSinceSweep.incrementAndGet() >= SWEEP_INTERVAL) {
-            callsSinceSweep.set(0L);
-            // Drop full budgets — a full bucket has spent nothing and is recreated full on next use.
-            budgets.values().removeIf(TokenBucket::isFull);
-        }
     }
 
     /** Composite key: a failure budget is scoped to one client within one tenant. */

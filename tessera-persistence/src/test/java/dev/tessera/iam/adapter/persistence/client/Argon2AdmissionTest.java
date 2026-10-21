@@ -140,49 +140,43 @@ class Argon2AdmissionTest {
     void tenantShareHoldsUnderContention() throws Exception {
         WorkerExecutor eightWorkers = vertx.createSharedWorkerExecutor("argon2-stress", 8);
         try {
-            // Cap 8 + 56 = 64, so only the tenant share (64 * 0.125 = 8) binds.
-            Argon2Admission admission = new Argon2Admission(vertx, eightWorkers, 8, 56, 0.125, Duration.ofSeconds(10));
+            // Cap 8 + 8 = 16 and a share of 1/16, so the tenant may hold exactly one slot and its
+            // count crosses zero on almost every request: where an admit and a release race.
+            Argon2Admission admission = new Argon2Admission(vertx, eightWorkers, 8, 8, 1.0 / 16, Duration.ofSeconds(10));
             UUID tenant = UUID.randomUUID();
             // Initialise Mutiny's context propagation once on this thread; its first use is not safe to race.
             await(start(admission.run(UUID.randomUUID(), () -> true)));
             AtomicInteger peak = new AtomicInteger();
-            // 8 callers keep the tenant's count crossing zero, where admit and release race;
-            // then 48 callers press on its share.
-            hammer(admission, tenant, 8, 3000, peak);
-            hammer(admission, tenant, 48, 200, peak);
+            long until = System.nanoTime() + Duration.ofSeconds(2).toNanos();
+            ExecutorService callers = Executors.newFixedThreadPool(8);
+            List<Future<?>> done = new ArrayList<>();
+            for (int caller = 0; caller < 8; caller++) {
+                done.add(callers.submit(() -> {
+                    while (System.nanoTime() < until) {
+                        try {
+                            await(start(admission.run(tenant, () -> {
+                                // One tenant only, so the global count is that tenant's true count.
+                                peak.accumulateAndGet(admission.admittedCount(), Math::max);
+                                return true;
+                            })));
+                        } catch (CredentialVerificationBusyException refused) {
+                            // expected: the tenant holds its single slot most of the time
+                        }
+                    }
+                    return null;
+                }));
+            }
+            for (Future<?> f : done) {
+                f.get(60, TimeUnit.SECONDS);
+            }
+            callers.shutdown();
 
-            // One tenant only, so the global count is that tenant's true count.
-            assertThat(peak.get()).isBetween(1, 8);
+            assertThat(peak.get()).isEqualTo(1);
             assertThat(admission.admittedCount()).isZero();
             assertThat(admission.trackedTenants()).isZero();
         } finally {
             eightWorkers.closeAndAwait();
         }
-    }
-
-    private static void hammer(Argon2Admission admission, UUID tenant, int threads, int each, AtomicInteger peak)
-            throws Exception {
-        ExecutorService callers = Executors.newFixedThreadPool(threads);
-        List<Future<?>> done = new ArrayList<>();
-        for (int caller = 0; caller < threads; caller++) {
-            done.add(callers.submit(() -> {
-                for (int i = 0; i < each; i++) {
-                    try {
-                        await(start(admission.run(tenant, () -> {
-                            peak.accumulateAndGet(admission.admittedCount(), Math::max);
-                            return true;
-                        })));
-                    } catch (CredentialVerificationBusyException refused) {
-                        // expected under contention
-                    }
-                }
-                return null;
-            }));
-        }
-        for (Future<?> f : done) {
-            f.get(120, TimeUnit.SECONDS);
-        }
-        callers.shutdown();
     }
 
     @Test
