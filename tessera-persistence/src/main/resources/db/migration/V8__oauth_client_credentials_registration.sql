@@ -13,4 +13,4 @@ COMMENT ON COLUMN oauth_client.allowed_scopes IS
 COMMENT ON COLUMN oauth_client.audiences IS
     'Whitespace-separated audiences (aud) its client_credentials tokens may name; NULL for none.';
 COMMENT ON COLUMN oauth_client.roles IS
-    'Whitespace-separated roles its client_credentials tokens carry; NULL for none.';
+    'Whitespace-separated roles its client_credentials tokens carry (a role cannot contain whitespace); NULL for none.';

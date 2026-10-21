@@ -22,10 +22,11 @@ import java.util.Set;
  *
  * <p>The domain deliberately excludes secret material, so this mapper carries only identity,
  * realm, kind, the allowed-grant set and the registration lists (redirect URIs, and for a
- * confidential client its {@code client_credentials} scopes, audiences and roles); the client secret stays in persistence and is
- * verified separately by {@link Argon2ClientSecretVerifier}. Corrupt registry data (an
- * unknown grant token, a confidential client with no auth method) fails loudly rather than
- * degrading into a silently weaker client.
+ * confidential client its {@code client_credentials} scopes, audiences and roles); the client
+ * secret stays in persistence and is verified separately by {@link Argon2ClientSecretVerifier}.
+ * Corrupt registry data (an unknown grant token, a confidential client with no auth method, a
+ * malformed scope, audience or role) fails loudly rather than degrading into a silently weaker
+ * client.
  */
 final class OAuthClientMapper {
 
