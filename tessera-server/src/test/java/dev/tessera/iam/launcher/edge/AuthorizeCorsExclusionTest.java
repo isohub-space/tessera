@@ -25,7 +25,9 @@ class AuthorizeCorsExclusionTest {
         "/realms/r1/authorize", "/realms;v=1/r1/authorize;x=1",
         // An encoded '/' inside a matrix value stays inside its segment, as it does for the router.
         "/authorize;x=%2Fy", "/authorize;x=a%2Fb", "/authorize;x=%2F..", "/authorize;%2F..",
-        "/authorize;x=%2e%2e%2Fy", "/authorize;x=+%2Fy"
+        "/authorize;x=%2e%2e%2Fy", "/authorize;x=+%2Fy",
+        // With a ';' the router rebuilds the path from decoded names: authorize%2F becomes authorize/.
+        "/authorize%2F;x=1", "/authorize%2F;x=1/", "/x%2Fauthorize;x=1"
     })
     @DisplayName("every shape that can route to /authorize matches")
     void authorizeShapesMatch(String rawPath) {

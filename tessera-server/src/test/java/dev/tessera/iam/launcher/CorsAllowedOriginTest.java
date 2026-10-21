@@ -1,6 +1,7 @@
 package dev.tessera.iam.launcher;
 
 import static io.restassured.RestAssured.given;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.nullValue;
@@ -8,10 +9,16 @@ import static org.hamcrest.Matchers.nullValue;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.QuarkusTestProfile;
 import io.quarkus.test.junit.TestProfile;
+import io.restassured.response.ExtractableResponse;
+import io.restassured.response.Response;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
@@ -74,7 +81,7 @@ class CorsAllowedOriginTest {
     @ParameterizedTest(name = "{0}")
     @ValueSource(strings = {"/authorize", "/authorize/", "/authorize;x=1", "/authorize;x=1/",
         "/authorize;x=%2Fy", "/authorize;x=a%2Fb", "/authorize;x=%2F..", "/authorize;%2F..",
-        "/authorize;x=%2e%2e%2Fy", "/authorize;x=+%2Fy"})
+        "/authorize;x=%2e%2e%2Fy", "/authorize;x=+%2Fy", "/authorize%2F;x=1"})
     @DisplayName("a listed-origin preflight to /authorize gets no allow-origin (RFC 9700 §2.6)")
     void corsPreflightNeverOpensAuthorize(String path) {
         given()
@@ -94,7 +101,7 @@ class CorsAllowedOriginTest {
     @ParameterizedTest(name = "{0}")
     @ValueSource(strings = {"/authorize", "/authorize/", "/authorize;x=1", "/authorize;x=1/",
         "/authorize;x=%2Fy", "/authorize;x=a%2Fb", "/authorize;x=%2F..", "/authorize;%2F..",
-        "/authorize;x=%2e%2e%2Fy", "/authorize;x=+%2Fy"})
+        "/authorize;x=%2e%2e%2Fy", "/authorize;x=+%2Fy", "/authorize%2F;x=1"})
     @DisplayName("a listed-origin request to /authorize gets no allow-origin (RFC 9700 §2.6)")
     void corsRequestNeverOpensAuthorize(String path) {
         given()
@@ -108,24 +115,55 @@ class CorsAllowedOriginTest {
                 .header("Access-Control-Allow-Credentials", nullValue());
     }
 
-    // Odd encodings around the endpoint name: whatever the router does with them, a request it
-    // routes must not come back with an allow-origin.
+    /** Encodings of the endpoint name, crossed with a matrix parameter and a trailing slash. */
+    static Stream<String> encodedAuthorizePaths() {
+        List<String> names = List.of(
+                "authorize", "%61uthorize", "authoriz%65", "AUTHORIZE",
+                "%2Fauthorize", "authorize%2F", "x%2Fauthorize", "authorize%2Fx",
+                "authorize%3Bx=1", "authorize%253Bx=1", "authoriz%2565", "%2561uthorize",
+                "authorize%5C", "%5Cauthorize", "authorize%C0%AF", "%C0%AFauthorize",
+                "authorize%20", "authorize%09", "%20authorize");
+        List<String> paths = new ArrayList<>();
+        for (String name : names) {
+            for (String matrix : List.of("", ";x=1")) {
+                for (String trailing : List.of("", "/")) {
+                    paths.add("/" + name + matrix + trailing);
+                }
+            }
+        }
+        return paths.stream();
+    }
+
+    // Whatever the router does with an encoding, a path it routes (GET is not a 404) must get no
+    // allow-origin, on the request and on the preflight. The CORS filter answers a preflight before
+    // routing, so whether a path is routed is read from the GET.
     @ParameterizedTest(name = "{0}")
-    @ValueSource(strings = {"/authorize%253Bx=1", "/authoriz%2565", "/authorize%3Bx=1", "/authorize%2F",
-        "/x%2Fauthorize", "/%2Fauthorize", "/authorize;x=1%2F"})
-    @DisplayName("an odd encoding of /authorize is either not routed or gets no allow-origin")
-    void oddEncodingsNeverOpenAuthorize(String path) {
-        var response = given()
+    @MethodSource("encodedAuthorizePaths")
+    @DisplayName("any encoding of /authorize the router routes gets no allow-origin, GET or preflight")
+    void routedEncodingsNeverOpenAuthorize(String path) {
+        ExtractableResponse<Response> get = given()
                 .urlEncodingEnabled(false)
                 .header("Origin", ALLOWED_ORIGIN)
                 .when()
                 .get(path)
                 .then()
                 .extract();
-        if (response.statusCode() != 404) {
-            org.assertj.core.api.Assertions.assertThat(response.header("Access-Control-Allow-Origin"))
-                    .as("routed (%d) and opened", response.statusCode())
-                    .isNull();
+        if (get.statusCode() == 404) {
+            return;
         }
+        ExtractableResponse<Response> preflight = given()
+                .urlEncodingEnabled(false)
+                .header("Origin", ALLOWED_ORIGIN)
+                .header("Access-Control-Request-Method", "GET")
+                .when()
+                .options(path)
+                .then()
+                .extract();
+        assertThat(get.header("Access-Control-Allow-Origin"))
+                .as("GET %s routed (%d) and opened", path, get.statusCode())
+                .isNull();
+        assertThat(preflight.header("Access-Control-Allow-Origin"))
+                .as("preflight %s opened", path)
+                .isNull();
     }
 }

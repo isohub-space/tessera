@@ -5,9 +5,10 @@ import io.vertx.core.MultiMap;
 import io.vertx.ext.web.RoutingContext;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
-import java.net.URLDecoder;
-import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
+import org.jboss.resteasy.reactive.common.util.Encode;
+import org.jboss.resteasy.reactive.common.util.PathSegmentImpl;
 
 /**
  * Keeps the authorization endpoint outside the CORS policy (RFC 9700 §2.6).
@@ -25,16 +26,24 @@ import java.util.List;
  * <p>Registered ahead of the CORS filter (priority 300), which answers a preflight and ends the
  * response itself, so the strip is in place before any CORS header can be written.
  *
- * <p>The match follows the way Quarkus REST routes: the router's normalized path (dot segments
- * resolved, unreserved characters decoded) is split on {@code /} while still encoded, each raw
- * segment is cut at its first {@code ;} (matrix parameters, which the router strips before it
- * routes, so {@code /authorize;x=1} reaches the endpoint), and only the remaining name is
- * percent-decoded. Decoding before the split would let a {@code %2F} inside a matrix value
- * ({@code /authorize;x=%2Fy}) create a segment the router never sees. The decoded name is cut at
- * {@code ;} once more, empty names are dropped, and the path matches when the last name is
- * {@code authorize}. That also covers a trailing slash, a doubled slash and any realm-scoped
- * {@code …/authorize} route. Erring toward a match only removes CORS headers a path never
- * needed; missing one would open the endpoint.
+ * <p>The match is computed in two steps so it cannot be narrower than the routing:
+ *
+ * <ol>
+ *   <li>The path the router actually matches is rebuilt with Quarkus REST's own code, the way
+ *       {@code ResteasyReactiveRequestContext.initPathSegments} does it: the router's normalized
+ *       path is split on {@code /}, each segment is parsed by {@link PathSegmentImpl} (matrix
+ *       parameters cut, the name decoded by {@link Encode#decodePath}), and when any segment
+ *       carried matrix parameters the path is rebuilt from the decoded names. So
+ *       {@code /authorize;x=1} and {@code /authorize%2F;x=1} both become routable paths here
+ *       exactly as they do for the router.</li>
+ *   <li>That path is then matched widely: each segment is cut at {@code ;}, decoded, split on
+ *       {@code /} again and cut at {@code ;} again, empty names are dropped, and the path matches
+ *       when the last name is {@code authorize}. This also covers a trailing slash, a doubled
+ *       slash and any realm-scoped {@code …/authorize} route.</li>
+ * </ol>
+ *
+ * <p>Erring toward a match only removes CORS headers a path never needed; missing one would open
+ * the endpoint.
  */
 @ApplicationScoped
 public class AuthorizeCorsExclusion {
@@ -75,14 +84,50 @@ public class AuthorizeCorsExclusion {
         if (normalizedPath == null) {
             return false;
         }
-        String lastSegment = null;
-        for (String rawSegment : normalizedPath.split("/")) {
-            String name = cutMatrix(percentDecode(cutMatrix(rawSegment)));
-            if (!name.isEmpty()) {
-                lastSegment = name;
+        String lastName = null;
+        for (String rawSegment : routedPath(normalizedPath).split("/")) {
+            for (String piece : decode(cutMatrix(rawSegment)).split("/")) {
+                String name = cutMatrix(piece);
+                if (!name.isEmpty()) {
+                    lastName = name;
+                }
             }
         }
-        return AUTHORIZE_SEGMENT.equals(lastSegment);
+        return AUTHORIZE_SEGMENT.equals(lastName);
+    }
+
+    /**
+     * The path Quarkus REST routes on, rebuilt with its own segment parsing: unchanged unless a
+     * segment carries matrix parameters, then {@code /}-joined decoded segment names, keeping a
+     * trailing slash.
+     */
+    static String routedPath(String normalizedPath) {
+        List<PathSegmentImpl> segments = new ArrayList<>();
+        boolean matrix = false;
+        try {
+            for (String segment : normalizedPath.split("/")) {
+                if (segment.isEmpty()) {
+                    continue;
+                }
+                PathSegmentImpl parsed = new PathSegmentImpl(segment, true);
+                matrix |= parsed.hasMatrixParams();
+                segments.add(parsed);
+            }
+        } catch (RuntimeException unparseable) {
+            // The router cannot parse it either; the wide match below still applies.
+            return normalizedPath;
+        }
+        if (!matrix) {
+            return normalizedPath;
+        }
+        StringBuilder rebuilt = new StringBuilder();
+        for (PathSegmentImpl segment : segments) {
+            rebuilt.append('/').append(segment.getPath());
+        }
+        if (normalizedPath.endsWith("/")) {
+            rebuilt.append('/');
+        }
+        return rebuilt.toString();
     }
 
     private static String cutMatrix(String segment) {
@@ -90,11 +135,10 @@ public class AuthorizeCorsExclusion {
         return matrix < 0 ? segment : segment.substring(0, matrix);
     }
 
-    private static String percentDecode(String segment) {
+    private static String decode(String segment) {
         try {
-            // '+' is literal in a path; keep URLDecoder from turning it into a space.
-            return URLDecoder.decode(segment.replace("+", "%2B"), StandardCharsets.UTF_8);
-        } catch (IllegalArgumentException malformed) {
+            return Encode.decodePath(segment);
+        } catch (RuntimeException malformed) {
             return segment;
         }
     }
