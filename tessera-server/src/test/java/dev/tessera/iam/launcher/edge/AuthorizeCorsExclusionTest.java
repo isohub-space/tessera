@@ -22,7 +22,10 @@ class AuthorizeCorsExclusionTest {
     @ValueSource(strings = {
         "/authorize", "/authorize/", "//authorize", "/%61uthorize", "/x/../authorize", "/./authorize",
         "/authorize;x=1", "/authorize;x=1/", "/authorize;x=1;y=2", "/authorize/;x=1", "/authorize%3Bx=1",
-        "/realms/r1/authorize", "/realms;v=1/r1/authorize;x=1"
+        "/realms/r1/authorize", "/realms;v=1/r1/authorize;x=1",
+        // An encoded '/' inside a matrix value stays inside its segment, as it does for the router.
+        "/authorize;x=%2Fy", "/authorize;x=a%2Fb", "/authorize;x=%2F..", "/authorize;%2F..",
+        "/authorize;x=%2e%2e%2Fy", "/authorize;x=+%2Fy"
     })
     @DisplayName("every shape that can route to /authorize matches")
     void authorizeShapesMatch(String rawPath) {
@@ -32,7 +35,9 @@ class AuthorizeCorsExclusionTest {
     @ParameterizedTest(name = "{0}")
     @ValueSource(strings = {
         "/", "/token", "/introspect", "/revoke", "/q/health", "/authorizex", "/xauthorize", "/authorize/x",
-        "/authorize;x=1/token", "/.well-known/openid-configuration"
+        "/authorize;x=1/token", "/.well-known/openid-configuration",
+        // Double encoding is decoded once by the router too, so these do not route to /authorize.
+        "/authorize%253Bx=1", "/authoriz%2565"
     })
     @DisplayName("other endpoints do not match")
     void otherPathsDoNotMatch(String rawPath) {

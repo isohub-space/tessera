@@ -25,14 +25,16 @@ import java.util.List;
  * <p>Registered ahead of the CORS filter (priority 300), which answers a preflight and ends the
  * response itself, so the strip is in place before any CORS header can be written.
  *
- * <p>The match is deliberately wider than the routing: Quarkus REST strips matrix parameters
- * ({@code ;x=1}) from each segment before it routes, so {@code /authorize;x=1} reaches the
- * endpoint and must be matched too. The router's normalized path (dot segments resolved,
- * unreserved characters decoded) is percent-decoded, split into segments, each segment loses its
- * matrix parameters, empty segments are dropped, and the path matches when the last segment is
+ * <p>The match follows the way Quarkus REST routes: the router's normalized path (dot segments
+ * resolved, unreserved characters decoded) is split on {@code /} while still encoded, each raw
+ * segment is cut at its first {@code ;} (matrix parameters, which the router strips before it
+ * routes, so {@code /authorize;x=1} reaches the endpoint), and only the remaining name is
+ * percent-decoded. Decoding before the split would let a {@code %2F} inside a matrix value
+ * ({@code /authorize;x=%2Fy}) create a segment the router never sees. The decoded name is cut at
+ * {@code ;} once more, empty names are dropped, and the path matches when the last name is
  * {@code authorize}. That also covers a trailing slash, a doubled slash and any realm-scoped
- * {@code …/authorize} route. Matching a path that is not really the endpoint only removes CORS
- * headers it never needed; missing one would open the endpoint.
+ * {@code …/authorize} route. Erring toward a match only removes CORS headers a path never
+ * needed; missing one would open the endpoint.
  */
 @ApplicationScoped
 public class AuthorizeCorsExclusion {
@@ -74,9 +76,8 @@ public class AuthorizeCorsExclusion {
             return false;
         }
         String lastSegment = null;
-        for (String segment : percentDecode(normalizedPath).split("/")) {
-            int matrix = segment.indexOf(';');
-            String name = matrix < 0 ? segment : segment.substring(0, matrix);
+        for (String rawSegment : normalizedPath.split("/")) {
+            String name = cutMatrix(percentDecode(cutMatrix(rawSegment)));
             if (!name.isEmpty()) {
                 lastSegment = name;
             }
@@ -84,12 +85,17 @@ public class AuthorizeCorsExclusion {
         return AUTHORIZE_SEGMENT.equals(lastSegment);
     }
 
-    private static String percentDecode(String path) {
+    private static String cutMatrix(String segment) {
+        int matrix = segment.indexOf(';');
+        return matrix < 0 ? segment : segment.substring(0, matrix);
+    }
+
+    private static String percentDecode(String segment) {
         try {
             // '+' is literal in a path; keep URLDecoder from turning it into a space.
-            return URLDecoder.decode(path.replace("+", "%2B"), StandardCharsets.UTF_8);
+            return URLDecoder.decode(segment.replace("+", "%2B"), StandardCharsets.UTF_8);
         } catch (IllegalArgumentException malformed) {
-            return path;
+            return segment;
         }
     }
 }

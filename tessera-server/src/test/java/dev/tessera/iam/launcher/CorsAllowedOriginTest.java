@@ -72,7 +72,9 @@ class CorsAllowedOriginTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @ValueSource(strings = {"/authorize", "/authorize/", "/authorize;x=1", "/authorize;x=1/"})
+    @ValueSource(strings = {"/authorize", "/authorize/", "/authorize;x=1", "/authorize;x=1/",
+        "/authorize;x=%2Fy", "/authorize;x=a%2Fb", "/authorize;x=%2F..", "/authorize;%2F..",
+        "/authorize;x=%2e%2e%2Fy", "/authorize;x=+%2Fy"})
     @DisplayName("a listed-origin preflight to /authorize gets no allow-origin (RFC 9700 §2.6)")
     void corsPreflightNeverOpensAuthorize(String path) {
         given()
@@ -90,7 +92,9 @@ class CorsAllowedOriginTest {
     // A matrix parameter is stripped before routing, so /authorize;x=1 reaches the endpoint
     // itself: the request is routed (not a 404) and still gets no allow-origin.
     @ParameterizedTest(name = "{0}")
-    @ValueSource(strings = {"/authorize", "/authorize/", "/authorize;x=1", "/authorize;x=1/"})
+    @ValueSource(strings = {"/authorize", "/authorize/", "/authorize;x=1", "/authorize;x=1/",
+        "/authorize;x=%2Fy", "/authorize;x=a%2Fb", "/authorize;x=%2F..", "/authorize;%2F..",
+        "/authorize;x=%2e%2e%2Fy", "/authorize;x=+%2Fy"})
     @DisplayName("a listed-origin request to /authorize gets no allow-origin (RFC 9700 §2.6)")
     void corsRequestNeverOpensAuthorize(String path) {
         given()
@@ -102,5 +106,26 @@ class CorsAllowedOriginTest {
                 .statusCode(not(404))
                 .header("Access-Control-Allow-Origin", nullValue())
                 .header("Access-Control-Allow-Credentials", nullValue());
+    }
+
+    // Odd encodings around the endpoint name: whatever the router does with them, a request it
+    // routes must not come back with an allow-origin.
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"/authorize%253Bx=1", "/authoriz%2565", "/authorize%3Bx=1", "/authorize%2F",
+        "/x%2Fauthorize", "/%2Fauthorize", "/authorize;x=1%2F"})
+    @DisplayName("an odd encoding of /authorize is either not routed or gets no allow-origin")
+    void oddEncodingsNeverOpenAuthorize(String path) {
+        var response = given()
+                .urlEncodingEnabled(false)
+                .header("Origin", ALLOWED_ORIGIN)
+                .when()
+                .get(path)
+                .then()
+                .extract();
+        if (response.statusCode() != 404) {
+            org.assertj.core.api.Assertions.assertThat(response.header("Access-Control-Allow-Origin"))
+                    .as("routed (%d) and opened", response.statusCode())
+                    .isNull();
+        }
     }
 }
