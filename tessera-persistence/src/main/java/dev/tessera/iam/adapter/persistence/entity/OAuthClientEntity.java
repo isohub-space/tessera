@@ -81,7 +81,14 @@ public class OAuthClientEntity extends PanacheEntityBase {
     @Column(name = "created_at", nullable = false, updatable = false)
     public Instant createdAt;
 
-    /** Refuses a redirect URI the policy does not allow (RFC 9700 §2.6), on insert and on update. */
+    /**
+     * Refuses a redirect URI the policy does not allow (RFC 9700 §2.6), on insert and on update.
+     *
+     * <p>The update check runs on every update of the row, not only one that changes
+     * {@link #redirectUris}. A row registered before this check that holds a non-compliant URI
+     * therefore cannot be updated at all, for example to rotate its secret, until its redirect
+     * URIs are fixed in the same update.
+     */
     @PrePersist
     @PreUpdate
     void checkRedirectUris() {
