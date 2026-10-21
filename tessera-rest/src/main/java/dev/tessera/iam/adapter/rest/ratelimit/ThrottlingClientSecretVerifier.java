@@ -72,6 +72,11 @@ public class ThrottlingClientSecretVerifier implements ClientSecretVerifierPort 
         if (!config.enabled() || realm == null || clientId == null) {
             return delegate.verifySecret(realm, clientId, presentedSecret);
         }
+        if (NO_CLIENT.equals(clientId)) {
+            // Never throttled: one budget shared by every unknown client_id would run dry and then
+            // answer faster than a real client's verification, telling the two apart.
+            return delegate.verifySecret(realm, clientId, presentedSecret);
+        }
 
         CredentialKey key = new CredentialKey(realm.tenant().value(), clientId.value());
         TokenBucket budget = budgetFor(key);
