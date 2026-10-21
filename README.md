@@ -125,7 +125,7 @@ called by the REST adapter:
 |------|-------------|
 | `AuthorizeUseCase` | `GET /authorize` — validates an authorization request against the client's registered `redirect_uri` allow-list, starts the auth flow, returns a sealed `AuthorizeResult.Issued` or `AuthorizeResult.Failed`. |
 | `TokenUseCase` | `POST /token` — redeems a single-use authorization code (PKCE verified), issues signed JWT access token + OIDC ID token + opaque refresh token. |
-| `ClientCredentialsUseCase` | `POST /token` (`grant_type=client_credentials`) — authenticates a confidential client and issues an access token for the client itself: its registered scopes and audiences, its roles through the claim pipeline, its tenant in `realm_tenant`/`realm_baseline`; no refresh token. |
+| `ClientCredentialsUseCase` | `POST /token` (`grant_type=client_credentials`) — authenticates a confidential client and issues an access token for the client itself: its registered scopes and audiences, its roles through the claim pipeline, its tenant in `realm_tenant`/`realm_baseline`; no refresh token. Revoking such a token at `/revoke` is accepted and does nothing: it introspects as active until it expires, so its lifetime is short (5 minutes by default, `iam.client-credentials.access-token-ttl`). |
 | `RefreshUseCase` | `POST /token` (`grant_type=refresh_token`) — rotates a single-use refresh token, detects family reuse (RFC 9700 §4.14) and revokes the family on replay, re-issues the token set. |
 | `IntrospectUseCase` | `POST /introspect` (RFC 7662) — grant-authenticated introspection of an access or refresh token. |
 | `RevokeUseCase` | `POST /revoke` (RFC 7009) — grant-authenticated revocation of a token. |
