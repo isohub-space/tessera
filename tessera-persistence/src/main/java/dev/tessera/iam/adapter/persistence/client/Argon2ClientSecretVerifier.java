@@ -8,10 +8,8 @@ import dev.tessera.iam.application.port.out.ClientSecretVerifierPort;
 import dev.tessera.iam.domain.client.ClientId;
 import dev.tessera.iam.domain.tenancy.RealmKey;
 import io.smallrye.mutiny.Uni;
-import io.vertx.mutiny.core.WorkerExecutor;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import jakarta.inject.Named;
 import java.util.UUID;
 
 /**
@@ -57,8 +55,7 @@ public class Argon2ClientSecretVerifier implements ClientSecretVerifierPort {
     OAuthClientRepository clients;
 
     @Inject
-    @Named("argon2")
-    WorkerExecutor argon2Executor;
+    Argon2Admission argon2;
 
     @Override
     public Uni<Boolean> verifySecret(RealmKey realm, ClientId clientId, String presentedSecret) {
@@ -67,14 +64,14 @@ public class Argon2ClientSecretVerifier implements ClientSecretVerifierPort {
         }
         UUID tenantId = realm.tenant().value();
         // The client lookup is a reactive DB read and must run (and commit) on the event loop.
-        // Argon2 is CPU/memory-hard, so it runs on the dedicated argon2 worker via executeBlocking,
-        // which completes back on the event-loop context — leaving the caller's pipeline on the
+        // Argon2 is CPU/memory-hard, so it runs on the dedicated argon2 worker, admitted by
+        // Argon2Admission, which completes back on the event-loop context — leaving the caller's pipeline on the
         // event loop. (emitOn/runSubscriptionOn would strand the downstream — and the next chained
         // DB call — on a worker thread, which Hibernate Reactive rejects with HR000068.)
         return clients.findById(tenantId, clientId.value())
                 .map(entity -> entity == null ? null : entity.secretHash)
                 .flatMap(storedHash ->
-                        argon2Executor.executeBlocking(() -> check(storedHash, presentedSecret), false));
+                        argon2.run(tenantId, () -> check(storedHash, presentedSecret)));
     }
 
     /**

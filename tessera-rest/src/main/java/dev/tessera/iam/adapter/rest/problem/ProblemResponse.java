@@ -40,6 +40,25 @@ public record ProblemResponse(String type, String title, int status, String deta
     }
 
     /**
+     * Builds a 503 problem response for a request refused because credential verification is
+     * saturated. Carries {@code Retry-After} (whole seconds) and {@code Cache-Control: no-store}.
+     */
+    public static Response serviceUnavailable(long retryAfterSeconds) {
+        ProblemResponse body =
+                new ProblemResponse(
+                        "about:blank",
+                        "Service Unavailable",
+                        Response.Status.SERVICE_UNAVAILABLE.getStatusCode(),
+                        "Credential verification is busy; retry after " + retryAfterSeconds + " seconds.");
+        return Response.status(Response.Status.SERVICE_UNAVAILABLE)
+                .type(MEDIA_TYPE)
+                .header("Retry-After", Long.toString(Math.max(1L, retryAfterSeconds)))
+                .header("Cache-Control", "no-store")
+                .entity(body)
+                .build();
+    }
+
+    /**
      * Builds a 429 problem response for a throttled request. Carries {@code Retry-After} (whole
      * seconds, per RFC 7231) so the caller can back off, and {@code Cache-Control: no-store} so the
      * throttling verdict is never cached.
