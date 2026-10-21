@@ -1,0 +1,41 @@
+package dev.tessera.iam.launcher.edge;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import io.vertx.core.http.impl.HttpUtils;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+
+/**
+ * The path matcher, fed the way the filter feeds it: the raw path goes through Vert.x's own
+ * normalization first, as {@code RoutingContext.normalizedPath()} does.
+ */
+@DisplayName("AuthorizeCorsExclusion — which paths count as the authorization endpoint")
+class AuthorizeCorsExclusionTest {
+
+    private static boolean matches(String rawPath) {
+        return AuthorizeCorsExclusion.isAuthorizeEndpoint(HttpUtils.normalizePath(rawPath));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {
+        "/authorize", "/authorize/", "//authorize", "/%61uthorize", "/x/../authorize", "/./authorize",
+        "/authorize;x=1", "/authorize;x=1/", "/authorize;x=1;y=2", "/authorize/;x=1", "/authorize%3Bx=1",
+        "/realms/r1/authorize", "/realms;v=1/r1/authorize;x=1"
+    })
+    @DisplayName("every shape that can route to /authorize matches")
+    void authorizeShapesMatch(String rawPath) {
+        assertThat(matches(rawPath)).isTrue();
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {
+        "/", "/token", "/introspect", "/revoke", "/q/health", "/authorizex", "/xauthorize", "/authorize/x",
+        "/authorize;x=1/token", "/.well-known/openid-configuration"
+    })
+    @DisplayName("other endpoints do not match")
+    void otherPathsDoNotMatch(String rawPath) {
+        assertThat(matches(rawPath)).isFalse();
+    }
+}
