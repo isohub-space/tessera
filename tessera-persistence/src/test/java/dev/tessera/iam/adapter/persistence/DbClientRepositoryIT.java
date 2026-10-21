@@ -223,6 +223,33 @@ class DbClientRepositoryIT {
                 DbClientRepositoryIT::assertInvalidRedirectUri);
     }
 
+    @Test
+    @RunOnVertxContext
+    @DisplayName("a client_credentials registration resolves its scopes, audiences and roles in its own tenant only")
+    void clientCredentialsRegistrationIsTenantBound(UniAsserter asserter) {
+        UUID tenantA = UUID.randomUUID();
+        UUID tenantB = UUID.randomUUID();
+        OAuthClientEntity service = confidential(tenantA, UUID.randomUUID(), "orders-service", null);
+        service.allowedGrants = "client_credentials";
+        service.redirectUris = null;
+        service.allowedScopes = "orders.read orders.write";
+        service.audiences = "https://orders.example https://billing.example";
+        service.roles = "ops reader";
+
+        asserter.execute(() -> scoped(tenantA, s -> s.persist(service).call(s::flush)));
+        asserter.assertThat(
+                () -> clientRepository.findByClientId(realm(tenantA), "orders-service"),
+                found -> Assertions.assertThat(found).isInstanceOfSatisfying(ConfidentialClient.class, c -> {
+                    Assertions.assertThat(c.allowedScopes()).containsExactly("orders.read", "orders.write");
+                    Assertions.assertThat(c.audiences())
+                            .containsExactly("https://orders.example", "https://billing.example");
+                    Assertions.assertThat(c.roles()).containsExactly("ops", "reader");
+                }));
+        asserter.assertThat(
+                () -> clientRepository.findByClientId(realm(tenantB), "orders-service"),
+                found -> Assertions.assertThat(found).isNull());
+    }
+
     /** Hibernate may wrap a lifecycle-callback exception; the refusal must be in the chain. */
     private static void assertInvalidRedirectUri(Throwable failure) {
         List<Throwable> chain = new ArrayList<>();
