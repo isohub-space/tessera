@@ -8,12 +8,18 @@ import io.smallrye.mutiny.Uni;
 import io.vertx.mutiny.core.Vertx;
 import io.vertx.mutiny.core.WorkerExecutor;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -127,5 +133,96 @@ class Argon2AdmissionTest {
             throw new IllegalStateException("boom");
         })))).hasMessageContaining("boom");
         assertThat(await(start(admission.run(TENANT_A, () -> "next")))).isEqualTo("next");
+    }
+
+    @Test
+    @DisplayName("under concurrent admit and release one tenant never exceeds its share, and nothing leaks")
+    void tenantShareHoldsUnderContention() throws Exception {
+        WorkerExecutor eightWorkers = vertx.createSharedWorkerExecutor("argon2-stress", 8);
+        try {
+            // Cap 8 + 56 = 64, so only the tenant share (64 * 0.125 = 8) binds.
+            Argon2Admission admission = new Argon2Admission(vertx, eightWorkers, 8, 56, 0.125, Duration.ofSeconds(10));
+            UUID tenant = UUID.randomUUID();
+            // Initialise Mutiny's context propagation once on this thread; its first use is not safe to race.
+            await(start(admission.run(UUID.randomUUID(), () -> true)));
+            AtomicInteger peak = new AtomicInteger();
+            // 8 callers keep the tenant's count crossing zero, where admit and release race;
+            // then 48 callers press on its share.
+            hammer(admission, tenant, 8, 3000, peak);
+            hammer(admission, tenant, 48, 200, peak);
+
+            // One tenant only, so the global count is that tenant's true count.
+            assertThat(peak.get()).isBetween(1, 8);
+            assertThat(admission.admittedCount()).isZero();
+            assertThat(admission.trackedTenants()).isZero();
+        } finally {
+            eightWorkers.closeAndAwait();
+        }
+    }
+
+    private static void hammer(Argon2Admission admission, UUID tenant, int threads, int each, AtomicInteger peak)
+            throws Exception {
+        ExecutorService callers = Executors.newFixedThreadPool(threads);
+        List<Future<?>> done = new ArrayList<>();
+        for (int caller = 0; caller < threads; caller++) {
+            done.add(callers.submit(() -> {
+                for (int i = 0; i < each; i++) {
+                    try {
+                        await(start(admission.run(tenant, () -> {
+                            peak.accumulateAndGet(admission.admittedCount(), Math::max);
+                            return true;
+                        })));
+                    } catch (CredentialVerificationBusyException refused) {
+                        // expected under contention
+                    }
+                }
+                return null;
+            }));
+        }
+        for (Future<?> f : done) {
+            f.get(120, TimeUnit.SECONDS);
+        }
+        callers.shutdown();
+    }
+
+    @Test
+    @DisplayName("settings Vert.x cannot honour, or a share outside (0, 1], are refused at construction")
+    void invalidSettingsAreRefused() {
+        assertThatThrownBy(() -> admission(1, 1.0, Duration.ofNanos(500_000)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> admission(1, Double.NaN, Duration.ofSeconds(1)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> admission(1, 0.0, Duration.ofSeconds(1)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> admission(1, 1.5, Duration.ofSeconds(1)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("a hand-off that fails frees its slot, so the node does not answer 'busy' forever")
+    void failedHandOffFreesTheSlot() throws Exception {
+        WorkerExecutor closed = vertx.createSharedWorkerExecutor("argon2-closed", 1);
+        closed.closeAndAwait();
+        Argon2Admission admission = new Argon2Admission(vertx, closed, 1, 1, 1.0, Duration.ofSeconds(1));
+        for (int i = 0; i < 3; i++) {
+            assertThatThrownBy(() -> await(start(admission.run(TENANT_A, () -> "x"))))
+                    .isNotInstanceOf(CredentialVerificationBusyException.class);
+        }
+        assertThat(admission.admittedCount()).isZero();
+        assertThat(admission.trackedTenants()).isZero();
+    }
+
+    @Test
+    @DisplayName("a timer that cannot be armed frees the slot instead of leaking it")
+    void timerFailureFreesTheSlot() throws Exception {
+        Vertx stopped = Vertx.vertx();
+        stopped.closeAndAwait();
+        Argon2Admission admission = new Argon2Admission(stopped, oneWorker, 1, 1, 1.0, Duration.ofSeconds(1));
+        for (int i = 0; i < 3; i++) {
+            assertThatThrownBy(() -> await(start(admission.run(TENANT_A, () -> "x"))))
+                    .isNotInstanceOf(CredentialVerificationBusyException.class);
+        }
+        assertThat(admission.admittedCount()).isZero();
+        assertThat(admission.trackedTenants()).isZero();
     }
 }

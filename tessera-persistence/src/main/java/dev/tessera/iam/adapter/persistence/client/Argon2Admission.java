@@ -1,6 +1,7 @@
 package dev.tessera.iam.adapter.persistence.client;
 
 import dev.tessera.iam.application.port.out.CredentialVerificationBusyException;
+import io.quarkus.runtime.Startup;
 import io.smallrye.mutiny.Uni;
 import io.vertx.mutiny.core.Vertx;
 import io.vertx.mutiny.core.WorkerExecutor;
@@ -12,6 +13,7 @@ import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -34,10 +36,16 @@ import java.util.concurrent.atomic.AtomicInteger;
  * reveals nothing about either.
  *
  * <p>The tenant is the one the request was resolved to: the fixed tenant, or the gateway-asserted
- * {@code X-Tenant-Id}. In header mode the per-tenant share is only as strong as the edge's
- * stripping of a client-supplied {@code X-Tenant-Id}, since a caller who can set it can spread a
- * flood across made-up tenants; it firms up once unknown tenants are refused.
+ * {@code X-Tenant-Id}. The share protects tenants from one flooding tenant, not from several:
+ * {@code ceil(1 / tenantShare)} tenants flooding at once (two at the default half) fill the global
+ * cap between them. In header mode the share is also only as strong as the edge's stripping of a
+ * client-supplied {@code X-Tenant-Id}, since a caller who can set it can spread a flood across
+ * made-up tenants; it firms up once unknown tenants are refused.
+ *
+ * <p>The settings are checked at startup ({@link Startup}), so a deployment with settings Vert.x
+ * cannot honour fails to boot instead of failing its first authentication.
  */
+@Startup
 @ApplicationScoped
 public class Argon2Admission {
 
@@ -51,7 +59,8 @@ public class Argon2Admission {
     private final int tenantCap;
     private final Duration waitDeadline;
     private final AtomicInteger admitted = new AtomicInteger();
-    private final ConcurrentMap<UUID, AtomicInteger> admittedByTenant = new ConcurrentHashMap<>();
+    /** Admitted verifications per tenant; an entry exists only while its count is positive. */
+    private final ConcurrentMap<UUID, Integer> admittedByTenant = new ConcurrentHashMap<>();
 
     @Inject
     Argon2Admission(Vertx vertx, @Named("argon2") WorkerExecutor executor, Argon2PoolConfig config) {
@@ -60,9 +69,16 @@ public class Argon2Admission {
 
     Argon2Admission(Vertx vertx, WorkerExecutor executor, int poolSize, int maxWaiting, double tenantShare,
             Duration waitDeadline) {
-        if (poolSize < 1 || maxWaiting < 0 || tenantShare <= 0 || tenantShare > 1
-                || waitDeadline.isZero() || waitDeadline.isNegative()) {
-            throw new IllegalArgumentException("invalid argon2 admission settings");
+        if (poolSize < 1 || maxWaiting < 0) {
+            throw new IllegalArgumentException("iam.argon2.pool-size must be at least 1 and max-waiting at least 0");
+        }
+        // Written so that NaN fails too.
+        if (!(tenantShare > 0 && tenantShare <= 1)) {
+            throw new IllegalArgumentException("iam.argon2.tenant-share must be in (0, 1], was " + tenantShare);
+        }
+        // Vert.x timers take whole milliseconds and refuse a delay below 1 ms.
+        if (waitDeadline == null || waitDeadline.toMillis() < 1) {
+            throw new IllegalArgumentException("iam.argon2.wait-deadline must be at least 1 ms, was " + waitDeadline);
         }
         this.vertx = vertx;
         this.executor = executor;
@@ -85,49 +101,89 @@ public class Argon2Admission {
 
     private <T> Uni<T> admitted(UUID tenant, Callable<T> work) {
         AtomicInteger state = new AtomicInteger(WAITING);
+        AtomicBoolean released = new AtomicBoolean();
+        Runnable releaseOnce = () -> {
+            if (released.compareAndSet(false, true)) {
+                release(tenant);
+            }
+        };
         return Uni.createFrom().emitter(emitter -> {
-            long timer = vertx.setTimer(waitDeadline.toMillis(), id -> {
-                if (state.compareAndSet(WAITING, ABANDONED)) {
-                    emitter.fail(busy());
+            // A caller that goes away before a worker takes the task: skip its pass.
+            emitter.onTermination(() -> state.compareAndSet(WAITING, ABANDONED));
+            long timer = -1;
+            try {
+                timer = vertx.setTimer(waitDeadline.toMillis(), id -> {
+                    if (state.compareAndSet(WAITING, ABANDONED)) {
+                        emitter.fail(busy());
+                    }
+                });
+                long armed = timer;
+                executor.<T>executeBlocking(() -> state.compareAndSet(WAITING, STARTED) ? work.call() : null, false)
+                        .subscribe().with(
+                                result -> {
+                                    vertx.cancelTimer(armed);
+                                    releaseOnce.run();
+                                    if (state.get() == STARTED) {
+                                        emitter.complete(result);
+                                    }
+                                },
+                                failure -> {
+                                    vertx.cancelTimer(armed);
+                                    releaseOnce.run();
+                                    if (state.get() == STARTED || state.compareAndSet(WAITING, ABANDONED)) {
+                                        emitter.fail(failure);
+                                    }
+                                });
+            } catch (RuntimeException handOffFailed) {
+                // Nothing reached the pool, so nothing will free the slot later: free it now.
+                if (timer != -1) {
+                    vertx.cancelTimer(timer);
                 }
-            });
-            executor.<T>executeBlocking(() -> state.compareAndSet(WAITING, STARTED) ? work.call() : null, false)
-                    .subscribe().with(
-                            result -> {
-                                vertx.cancelTimer(timer);
-                                release(tenant);
-                                if (state.get() == STARTED) {
-                                    emitter.complete(result);
-                                }
-                            },
-                            failure -> {
-                                vertx.cancelTimer(timer);
-                                release(tenant);
-                                if (state.get() == STARTED) {
-                                    emitter.fail(failure);
-                                }
-                            });
+                releaseOnce.run();
+                state.set(ABANDONED);
+                emitter.fail(handOffFailed);
+            }
         });
     }
 
+    /** Admits one verification for {@code tenant} if both its share and the global cap allow it. */
     private boolean admit(UUID tenant) {
-        AtomicInteger forTenant = admittedByTenant.computeIfAbsent(tenant, t -> new AtomicInteger());
-        if (forTenant.incrementAndGet() > tenantCap) {
-            forTenant.decrementAndGet();
-            return false;
-        }
-        if (admitted.incrementAndGet() > cap) {
-            admitted.decrementAndGet();
-            forTenant.decrementAndGet();
-            return false;
-        }
-        return true;
+        boolean[] admittedNow = {false};
+        // The tenant's check-and-increment happens inside one compute(), atomic with release's
+        // decrement-and-remove, so no admission can count on an entry that is being removed.
+        admittedByTenant.compute(tenant, (t, count) -> {
+            int current = count == null ? 0 : count;
+            if (current >= tenantCap) {
+                return count;
+            }
+            if (admitted.incrementAndGet() > cap) {
+                admitted.decrementAndGet();
+                return count;
+            }
+            admittedNow[0] = true;
+            return current + 1;
+        });
+        return admittedNow[0];
     }
 
-    /** Frees the slot once the pool has dequeued the task, run or abandoned. */
+    /** Frees one slot of {@code tenant}; called exactly once per admission. */
     private void release(UUID tenant) {
-        admitted.decrementAndGet();
-        admittedByTenant.computeIfPresent(tenant, (t, count) -> count.decrementAndGet() == 0 ? null : count);
+        // The global count moves inside the same compute() as the tenant's, mirroring admit(), so
+        // the two never disagree for a tenant even for an instant.
+        admittedByTenant.compute(tenant, (t, count) -> {
+            admitted.decrementAndGet();
+            return count == null || count <= 1 ? null : count - 1;
+        });
+    }
+
+    /** Verifications admitted and not yet released, across tenants (for tests). */
+    int admittedCount() {
+        return admitted.get();
+    }
+
+    /** Tenants holding at least one admitted verification (for tests). */
+    int trackedTenants() {
+        return admittedByTenant.size();
     }
 
     private CredentialVerificationBusyException busy() {
