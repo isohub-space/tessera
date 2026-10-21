@@ -9,6 +9,7 @@ import dev.tessera.iam.application.port.out.ClientRepositoryPort;
 import dev.tessera.iam.application.port.out.ClientSecretVerifierPort;
 import dev.tessera.iam.domain.client.ClientId;
 import dev.tessera.iam.domain.client.ConfidentialClient;
+import dev.tessera.iam.domain.client.InvalidRedirectUriException;
 import dev.tessera.iam.domain.tenancy.BaselineId;
 import dev.tessera.iam.domain.tenancy.RealmKey;
 import dev.tessera.iam.domain.tenancy.TenantId;
@@ -19,8 +20,11 @@ import io.quarkus.test.vertx.UniAsserter;
 import io.smallrye.mutiny.Uni;
 import jakarta.inject.Inject;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 import java.util.function.Function;
+import org.assertj.core.api.Assertions;
 import org.hibernate.reactive.mutiny.Mutiny;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -145,5 +149,53 @@ class DbClientRepositoryIT {
         asserter.assertEquals(
                 () -> secretVerifier.verifySecret(realm(tenantA), new ClientId(clientId), "a-secret"),
                 Boolean.TRUE);
+    }
+
+    @Test
+    @RunOnVertxContext
+    @DisplayName("registering a client with a plain-http redirect URI is refused with invalid_redirect_uri")
+    void httpRedirectUriIsRefusedAtRegistration(UniAsserter asserter) {
+        UUID tenant = UUID.randomUUID();
+        OAuthClientEntity client = confidential(tenant, UUID.randomUUID(), "http-app", null);
+        client.redirectUris = "https://client.example/callback http://client.example/callback";
+
+        asserter.assertFailedWith(
+                () -> scoped(tenant, s -> s.persist(client).call(s::flush)),
+                DbClientRepositoryIT::assertInvalidRedirectUri);
+        asserter.assertThat(
+                () -> clientRepository.findByClientId(realm(tenant), "http-app"),
+                found -> Assertions.assertThat(found).isNull());
+    }
+
+    @Test
+    @RunOnVertxContext
+    @DisplayName("updating a registered client to a plain-http redirect URI is refused with invalid_redirect_uri")
+    void httpRedirectUriIsRefusedAtUpdate(UniAsserter asserter) {
+        UUID tenant = UUID.randomUUID();
+        UUID clientId = UUID.randomUUID();
+
+        asserter.execute(() -> scoped(tenant, s ->
+                s.persist(confidential(tenant, clientId, "updated-app", null)).call(s::flush)));
+        asserter.assertFailedWith(
+                () -> scoped(tenant, s -> s.find(OAuthClientEntity.class, clientId)
+                        .invoke(found -> found.redirectUris = "http://client.example/callback")
+                        .call(s::flush)),
+                DbClientRepositoryIT::assertInvalidRedirectUri);
+        asserter.assertThat(
+                () -> clientRepository.findByClientId(realm(tenant), "updated-app"),
+                found -> Assertions.assertThat(found.redirectUris())
+                        .containsExactly("https://client.example/callback"));
+    }
+
+    /** Hibernate may wrap a lifecycle-callback exception; the refusal must be in the chain. */
+    private static void assertInvalidRedirectUri(Throwable failure) {
+        List<Throwable> chain = new ArrayList<>();
+        for (Throwable t = failure; t != null && !chain.contains(t); t = t.getCause()) {
+            chain.add(t);
+        }
+        Assertions.assertThat(chain)
+                .anySatisfy(t -> Assertions.assertThat(t)
+                        .isInstanceOfSatisfying(InvalidRedirectUriException.class,
+                                e -> Assertions.assertThat(e.error()).isEqualTo("invalid_redirect_uri")));
     }
 }

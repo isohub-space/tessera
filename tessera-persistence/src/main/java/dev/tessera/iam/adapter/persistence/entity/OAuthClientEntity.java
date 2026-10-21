@@ -1,13 +1,17 @@
 package dev.tessera.iam.adapter.persistence.entity;
 
+import dev.tessera.iam.domain.client.RedirectUriPolicy;
 import io.quarkus.hibernate.reactive.panache.PanacheEntityBase;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
+import jakarta.persistence.PrePersist;
+import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -20,6 +24,9 @@ import java.util.UUID;
  * {@code null} for public clients (which cannot authenticate by definition).
  * {@link #allowedGrants} keeps the comma-separated {@code grant_type} values as text;
  * the application layer maps them to/from the domain grant set.
+ *
+ * <p>Every insert and update checks {@link #redirectUris} against {@link RedirectUriPolicy}, so
+ * no registration path can store a redirect URI that would carry a code over plain http.
  */
 @Entity
 @Table(name = "oauth_client")
@@ -73,4 +80,15 @@ public class OAuthClientEntity extends PanacheEntityBase {
     /** Creation instant (UTC). */
     @Column(name = "created_at", nullable = false, updatable = false)
     public Instant createdAt;
+
+    /** Refuses a redirect URI the policy does not allow (RFC 9700 §2.6), on insert and on update. */
+    @PrePersist
+    @PreUpdate
+    void checkRedirectUris() {
+        if (redirectUris == null || redirectUris.isBlank()) {
+            return;
+        }
+        RedirectUriPolicy.requireRegistrable(
+                List.of(redirectUris.trim().split("\\s+")), clientType == ClientType.PUBLIC);
+    }
 }
