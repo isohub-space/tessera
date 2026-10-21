@@ -21,7 +21,8 @@ public class FakeClientSecretVerifier implements ClientSecretVerifierPort {
 
     @Override
     public Uni<Boolean> verifySecret(RealmKey realm, ClientId clientId, String presentedSecret) {
-        boolean ok = FakeClientRepository.CONFIDENTIAL_IDENTITY.equals(clientId)
+        boolean ok = (FakeClientRepository.CONFIDENTIAL_IDENTITY.equals(clientId)
+                || FakeClientRepository.MACHINE_IDENTITY.equals(clientId))
                 && CORRECT_SECRET.equals(presentedSecret);
         return Uni.createFrom().item(ok);
     }

@@ -72,10 +72,24 @@ public record OidcCapabilities(
      * @return the enforced Starter-tier capability set
      */
     public static OidcCapabilities enforced() {
+        return enforced(false);
+    }
+
+    /**
+     * The enforced capability set, with the {@code client_credentials} grant (RFC 6749 §4.4)
+     * advertised exactly when the deployment serves it.
+     *
+     * @param clientCredentials whether the token endpoint serves {@code client_credentials}
+     * @return the enforced capability set
+     */
+    public static OidcCapabilities enforced(boolean clientCredentials) {
         List<String> asymmetricSigningAlgs = asymmetricSigningAlgValues();
+        List<String> grants = clientCredentials
+                ? List.of("authorization_code", "refresh_token", "client_credentials")
+                : List.of("authorization_code", "refresh_token");
         return new OidcCapabilities(
                 List.of("code"),
-                List.of("authorization_code", "refresh_token"),
+                grants,
                 List.of("S256"),
                 List.of("client_secret_basic", "private_key_jwt", "tls_client_auth"),
                 List.of("public"),

@@ -107,6 +107,7 @@ class DiscoveryEndpointTest {
                 .statusCode(200)
                 // Code-flow + PKCE S256 are enforced and advertised.
                 .body("grant_types_supported", hasItem("authorization_code"))
+                .body("grant_types_supported", hasItem("client_credentials"))
                 .body("code_challenge_methods_supported", contains("S256"))
                 .extract()
                 .asString();

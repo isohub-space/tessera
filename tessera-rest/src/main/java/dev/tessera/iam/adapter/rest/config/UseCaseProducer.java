@@ -2,14 +2,17 @@ package dev.tessera.iam.adapter.rest.config;
 
 import dev.tessera.iam.adapter.rest.login.LoginConfig;
 import dev.tessera.iam.application.AuthorizationService;
+import dev.tessera.iam.application.ClientCredentialsService;
 import dev.tessera.iam.application.ConsentService;
 import dev.tessera.iam.application.IntrospectService;
 import dev.tessera.iam.application.LoginService;
 import dev.tessera.iam.application.RefreshService;
+import dev.tessera.iam.application.RegisteredClientClaimSource;
 import dev.tessera.iam.application.RevokeService;
 import dev.tessera.iam.application.SessionService;
 import dev.tessera.iam.application.TokenService;
 import dev.tessera.iam.application.port.in.AuthorizeUseCase;
+import dev.tessera.iam.application.port.in.ClientCredentialsUseCase;
 import dev.tessera.iam.application.port.in.ConsentUseCase;
 import dev.tessera.iam.application.port.in.IntrospectUseCase;
 import dev.tessera.iam.application.port.in.LoginUseCase;
@@ -156,6 +159,29 @@ public class UseCaseProducer {
                     + " but iam.refresh.successor-key is missing or shorter than 32 bytes");
         }
         return key;
+    }
+
+    @Produces
+    @ApplicationScoped
+    ClientCredentialsUseCase clientCredentialsUseCase(
+            ClientRepositoryPort clients,
+            ClientSecretVerifierPort secretVerifier,
+            TokenSignerPort signer,
+            OpaqueIdentifierPort identifiers,
+            Clock clock,
+            OidcDiscoveryConfig oidc,
+            AuthFlowConfig authFlow,
+            ClientCredentialsConfig clientCredentials) {
+        return new ClientCredentialsService(
+                clients,
+                secretVerifier,
+                new RegisteredClientClaimSource(clients),
+                signer,
+                identifiers,
+                clock,
+                oidc.issuer(),
+                clientCredentials.accessTokenTtl(),
+                authFlow.requireSenderConstraint());
     }
 
     @Produces
