@@ -37,7 +37,8 @@ class RedirectUriPolicyTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @ValueSource(strings = {"http://client.example/callback", "http://127.0.0.2/cb", "http://localhost.example/cb"})
+    @ValueSource(strings = {"http://client.example/callback", "http://127.0.0.2/cb", "http://localhost.example/cb",
+        "http://localhost.evil.com/cb", "http://127.0.0.1.nip.io/cb", "http://127.0.0.1.nip.io:8080/cb"})
     @DisplayName("http to a non-loopback host is refused for either client type")
     void httpToANonLoopbackHostIsRefused(String uri) {
         assertRefused(uri, CONFIDENTIAL);
@@ -73,7 +74,7 @@ class RedirectUriPolicyTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @ValueSource(strings = {"myapp:/callback", "javascript:alert(1)", "data:text/html,x", "file:///etc/passwd",
+    @ValueSource(strings = {"myapp:/callback", "x.:/callback", "a..b:/callback", "javascript:alert(1)", "data:text/html,x", "file:///etc/passwd",
         "ftp://client.example/cb"})
     @DisplayName("any other scheme is refused, even for a public client")
     void otherSchemesAreRefused(String uri) {
@@ -97,5 +98,24 @@ class RedirectUriPolicyTest {
                 .isInstanceOf(InvalidRedirectUriException.class)
                 .hasMessageContaining("invalid_redirect_uri")
                 .hasMessageContaining("http://client.example/callback");
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"https://client.example/callback#", "https://client.example/callback#x",
+        "http://127.0.0.1/cb#x", "com.example.app:/callback#x"})
+    @DisplayName("a URI with a fragment is refused (RFC 6749 §3.1.2)")
+    void fragmentsAreRefused(String uri) {
+        assertRefused(uri, PUBLIC);
+        assertRefused(uri, CONFIDENTIAL);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"https://user@client.example/callback", "https://user:pw@client.example/callback",
+        "http://localhost@evil.example/cb", "http://evil.example@localhost/cb", "http://x@127.0.0.1:8080/cb",
+        "com.example.app://user@callback"})
+    @DisplayName("a URI with userinfo is refused, https included")
+    void userinfoIsRefused(String uri) {
+        assertRefused(uri, PUBLIC);
+        assertRefused(uri, CONFIDENTIAL);
     }
 }

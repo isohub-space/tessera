@@ -10,6 +10,7 @@ import dev.tessera.iam.application.port.out.ClientSecretVerifierPort;
 import dev.tessera.iam.domain.client.ClientId;
 import dev.tessera.iam.domain.client.ConfidentialClient;
 import dev.tessera.iam.domain.client.InvalidRedirectUriException;
+import dev.tessera.iam.domain.client.PublicClient;
 import dev.tessera.iam.domain.tenancy.BaselineId;
 import dev.tessera.iam.domain.tenancy.RealmKey;
 import dev.tessera.iam.domain.tenancy.TenantId;
@@ -78,6 +79,19 @@ class DbClientRepositoryIT {
         e.allowedGrants = "authorization_code";
         e.redirectUris = "https://client.example/callback";
         e.secretHash = secretHash;
+        e.createdAt = T0;
+        return e;
+    }
+
+    private static OAuthClientEntity publicClient(UUID tenantId, String key, String redirectUris) {
+        OAuthClientEntity e = new OAuthClientEntity();
+        e.id = UUID.randomUUID();
+        e.tenantId = tenantId;
+        e.baselineId = new UUID(0L, 0L);
+        e.clientKey = key;
+        e.clientType = ClientType.PUBLIC;
+        e.allowedGrants = "authorization_code";
+        e.redirectUris = redirectUris;
         e.createdAt = T0;
         return e;
     }
@@ -185,6 +199,28 @@ class DbClientRepositoryIT {
                 () -> clientRepository.findByClientId(realm(tenant), "updated-app"),
                 found -> Assertions.assertThat(found.redirectUris())
                         .containsExactly("https://client.example/callback"));
+    }
+
+    @Test
+    @RunOnVertxContext
+    @DisplayName("a public client registers loopback http and a private-use scheme, but not plain http to a remote host")
+    void publicClientRedirectUris(UniAsserter asserter) {
+        UUID tenant = UUID.randomUUID();
+        OAuthClientEntity nativeApp = publicClient(tenant, "native-app",
+                "http://127.0.0.1:8400/cb com.example.app:/oauth2redirect");
+        OAuthClientEntity remoteHttp = publicClient(tenant, "remote-http", "http://client.example/callback");
+
+        asserter.execute(() -> scoped(tenant, s -> s.persist(nativeApp).call(s::flush)));
+        asserter.assertThat(
+                () -> clientRepository.findByClientId(realm(tenant), "native-app"),
+                found -> {
+                    Assertions.assertThat(found).isInstanceOf(PublicClient.class);
+                    Assertions.assertThat(found.redirectUris())
+                            .containsExactly("http://127.0.0.1:8400/cb", "com.example.app:/oauth2redirect");
+                });
+        asserter.assertFailedWith(
+                () -> scoped(tenant, s -> s.persist(remoteHttp).call(s::flush)),
+                DbClientRepositoryIT::assertInvalidRedirectUri);
     }
 
     /** Hibernate may wrap a lifecycle-callback exception; the refusal must be in the chain. */

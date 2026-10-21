@@ -16,8 +16,11 @@ import java.util.Set;
  *       ({@code 127.0.0.1}, {@code [::1]}, {@code localhost}): the native-app loopback redirect
  *       of RFC 8252 §7.3, which never leaves the device.</li>
  *   <li>A private-use scheme is accepted only for a public client and only in the
- *       reverse-domain form RFC 8252 §7.1 requires ({@code com.example.app:/callback}).</li>
+ *       reverse-domain form RFC 8252 §7.1 requires ({@code com.example.app:/callback}): at least
+ *       two dot-separated labels, none empty.</li>
  *   <li>Anything else, including a relative, host-less or malformed URI, is refused.</li>
+ *   <li>Whatever the scheme, a URI with a fragment (RFC 6749 §3.1.2) or with userinfo
+ *       ({@code user@host}, which hides the real host from a reader) is refused.</li>
  * </ul>
  *
  * <p>A confidential client is a server-side application, so only {@code https} is open to it.
@@ -57,6 +60,12 @@ public final class RedirectUriPolicy {
         if (parsed.getScheme() == null) {
             return "not an absolute URI";
         }
+        if (parsed.getRawFragment() != null) {
+            return "a redirect URI must not have a fragment";
+        }
+        if (parsed.getRawUserInfo() != null || hasUserInfo(parsed.getRawAuthority())) {
+            return "a redirect URI must not have userinfo";
+        }
         String scheme = parsed.getScheme().toLowerCase(Locale.ROOT);
         String host = parsed.getHost() == null ? null : parsed.getHost().toLowerCase(Locale.ROOT);
         return switch (scheme) {
@@ -68,11 +77,30 @@ public final class RedirectUriPolicy {
                 yield publicClient ? null : "loopback http is allowed only for a public client";
             }
             default -> {
-                if (!scheme.contains(".")) {
+                if (!isReverseDomain(scheme)) {
                     yield "scheme " + scheme + " is neither https nor a reverse-domain private-use scheme";
                 }
                 yield publicClient ? null : "a private-use scheme is allowed only for a public client";
             }
         };
+    }
+
+    /** A registry-based authority (one {@link URI} could not parse as a server) still counts. */
+    private static boolean hasUserInfo(String rawAuthority) {
+        return rawAuthority != null && rawAuthority.indexOf('@') >= 0;
+    }
+
+    /** At least two dot-separated labels, none empty: {@code com.example.app}, not {@code x.}. */
+    private static boolean isReverseDomain(String scheme) {
+        String[] labels = scheme.split("\\.", -1);
+        if (labels.length < 2) {
+            return false;
+        }
+        for (String label : labels) {
+            if (label.isEmpty()) {
+                return false;
+            }
+        }
+        return true;
     }
 }
