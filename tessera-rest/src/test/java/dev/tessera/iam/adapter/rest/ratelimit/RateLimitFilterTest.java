@@ -85,7 +85,24 @@ class RateLimitFilterTest {
                 .header("Retry-After", Matchers.notNullValue());
     }
 
+    @Test
+    @DisplayName("/token client_credentials: the limit is per client, so a drained client leaves another fresh")
+    void clientCredentialsThrottledPerClient() {
+        String tenant = UUID.randomUUID().toString();
+        String drained = basic("machine-a");
+        for (int i = 0; i < 3; i++) {
+            postToken(tenant, drained, "client_credentials").then().statusCode(Matchers.not(429));
+        }
+        postToken(tenant, drained, "client_credentials").then().statusCode(429);
+        postToken(tenant, basic("machine-b"), "client_credentials").then().statusCode(Matchers.not(429));
+    }
+
     // ------------------------------------------------------------------- helpers
+
+    private static String basic(String clientId) {
+        return "Basic " + Base64.getEncoder()
+                .encodeToString((clientId + ":secret").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
 
     private static io.restassured.response.Response authorize(String tenant, String clientId) {
         // Deliberately minimal: the request need not be well-formed — the limiter runs before the
@@ -98,11 +115,15 @@ class RateLimitFilterTest {
     }
 
     private static io.restassured.response.Response postToken(String tenant, String basicAuth) {
+        return postToken(tenant, basicAuth, "authorization_code");
+    }
+
+    private static io.restassured.response.Response postToken(String tenant, String basicAuth, String grant) {
         return given().config(noFollow())
                 .header("X-Tenant-Id", tenant)
                 .header("Authorization", basicAuth)
                 .contentType("application/x-www-form-urlencoded")
-                .formParam("grant_type", "authorization_code")
+                .formParam("grant_type", grant)
                 .when().post("/token");
     }
 

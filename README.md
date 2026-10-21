@@ -17,13 +17,16 @@ whose whole job is issuing verifiable tokens of identity.
     >   issuing signed RFC 9068 JWT access tokens and OIDC ID tokens.
 > - **Refresh-token grant** (`grant_type=refresh_token`) — single-use rotation with
     >   family reuse-detection (RFC 9700 §4.14).
+> - **Client-credentials grant** (`grant_type=client_credentials`, RFC 6749 §4.4) — a
+>   tenant-bound confidential client gets a token for itself, with its registered scopes,
+>   audiences (narrowed by an RFC 8707 `resource` indicator) and roles.
 > - **Token introspection** (RFC 7662, `/introspect`) and **token revocation**
     >   (RFC 7009, `/revoke`).
 > - **Confidential + public client registry** — Argon2id client secrets, with an
     >   exact-match `redirect_uri` allow-list enforced before any code is issued.
 >
-> Remaining surfaces (a login/consent UI and interactive credential verification, the
-> `client_credentials` grant, dynamic client registration) are on the roadmap below. No
+> Remaining surfaces (a login/consent UI and interactive credential verification, dynamic
+> client registration) are on the roadmap below. No
 > known-open security gaps in the shipped vertical, but not yet recommended for production
 > until the KMS-backed signing-key protection and multi-node stores land.
 
@@ -36,7 +39,8 @@ precise about that boundary matters.
 **What it is**
 - A production-shaped implementation of the confidential-client token-issuance vertical:
   **Authorization Code + PKCE (S256)** (`/authorize` → `/token`), the **refresh-token grant**
-  with single-use rotation and family reuse-detection, **token introspection** (RFC 7662)
+  with single-use rotation and family reuse-detection, the **client-credentials grant**,
+  **token introspection** (RFC 7662)
   and **revocation** (RFC 7009) — issuing RFC 9068 JWT access tokens and OIDC ID tokens,
   with OIDC discovery + JWKS and EdDSA signing-key rotation.
 - A **confidential + public client registry** — Argon2id-hashed client secrets on a dedicated
@@ -121,6 +125,7 @@ called by the REST adapter:
 |------|-------------|
 | `AuthorizeUseCase` | `GET /authorize` — validates an authorization request against the client's registered `redirect_uri` allow-list, starts the auth flow, returns a sealed `AuthorizeResult.Issued` or `AuthorizeResult.Failed`. |
 | `TokenUseCase` | `POST /token` — redeems a single-use authorization code (PKCE verified), issues signed JWT access token + OIDC ID token + opaque refresh token. |
+| `ClientCredentialsUseCase` | `POST /token` (`grant_type=client_credentials`) — authenticates a confidential client and issues an access token for the client itself: its registered scopes and audiences, its roles through the claim pipeline, its tenant in `realm_tenant`/`realm_baseline`; no refresh token. |
 | `RefreshUseCase` | `POST /token` (`grant_type=refresh_token`) — rotates a single-use refresh token, detects family reuse (RFC 9700 §4.14) and revokes the family on replay, re-issues the token set. |
 | `IntrospectUseCase` | `POST /introspect` (RFC 7662) — grant-authenticated introspection of an access or refresh token. |
 | `RevokeUseCase` | `POST /revoke` (RFC 7009) — grant-authenticated revocation of a token. |
@@ -151,7 +156,6 @@ The domain already models these concepts; the adapters will follow in later wave
 |----------------|-------------|
 | `credential.*` (PasswordHash, TotpSecret, WebAuthnAuthenticator) | `CredentialVerifierPort` |
 | `authflow.*` (AuthExchange, ChallengeDescriptor, MfaKind) | `SubjectRepositoryPort` + interactive login flow |
-| `client.grant.ClientCredentials` | `ClientCredentialsUseCase` (inbound) |
 | `signingkey.KeyRotationPolicy` | `KeyRotationPort` (scheduled rotation) |
 | *(not yet modelled)* | `ClientRegistrationPort` (RFC 7591 dynamic registration) |
 
@@ -179,7 +183,7 @@ The server listens on `http://localhost:8090` by default. Key endpoints:
 | `GET /.well-known/openid-configuration` | OIDC discovery document |
 | `GET /.well-known/jwks.json` | JSON Web Key Set (public signing keys) |
 | `GET /authorize` | Authorization Code + PKCE endpoint |
-| `POST /token` | Token endpoint (authorization-code and `refresh_token` grants) |
+| `POST /token` | Token endpoint (authorization-code, `refresh_token` and `client_credentials` grants) |
 | `POST /introspect` | Token introspection (RFC 7662) |
 | `POST /revoke` | Token revocation (RFC 7009) |
 | `GET /q/health` · `/q/health/ready` · `/q/health/live` | Health probes |
@@ -200,6 +204,7 @@ rather than behind an application gateway, and what that costs, is recorded in
 | `TESSERA_OIDC_ISSUER` and `IAM_KEYS_ISSUER` | Both set to the public origin, e.g. `https://iam.example.com`. |
 | `IAM_KEYS_MASTER_KEY` | A real base64 256-bit master key from your secret manager; the development default is refused outside dev/test. |
 | `TESSERA_BOOTSTRAP_ENABLED=true` + `TESSERA_BOOTSTRAP_CLIENT_ID/_SECRET/_REDIRECT_URIS`, `TESSERA_BOOTSTRAP_USER_USERNAME/_PASSWORD` | First boot provisions what is missing: an `ACTIVE` signing key for the tenant, one confidential client (`client_secret_basic`, `authorization_code` + `refresh_token`, `https` redirect URIs only), one password user. Idempotent; existing rows are never overwritten. |
+| `TESSERA_CLIENT_CREDENTIALS_ENABLED=false`, `TESSERA_CLIENT_CREDENTIALS_ACCESS_TOKEN_TTL=PT5M` | Turn the `client_credentials` grant off (it then disappears from discovery too) or change its token lifetime. Which clients may use it, with which scopes, audiences (`aud` is never the issuer) and roles, is client registration data: the `allowed_grants`, `allowed_scopes`, `audiences` and `roles` columns of `oauth_client`. |
 | `TESSERA_REQUIRE_SENDER_CONSTRAINT=false` | Lets a secret-authenticated confidential client that can present no client certificate (a back-end-for-frontend behind a TLS-terminating edge) receive a plain Bearer token. Leave at the default `true` wherever clients can do mTLS or DPoP. |
 | `TESSERA_CORS_ORIGINS=https://app.example.com` | Allows the relying party's own login page to `POST /login` cross-origin with credentials. `/authorize` never answers cross-origin, whatever is listed (RFC 9700 §2.6). |
 | build with `-Dquarkus.profile=prod,singlenode` | For a deployment that runs exactly one instance: the in-process authorization-code store is used and no Infinispan server is needed. Run more than one instance and codes minted on one node cannot be redeemed on another — use the default profile and a shared cache instead. |
@@ -375,6 +380,7 @@ tagged when the wave's integration test suite passes an end-to-end OIDC flow.
 - [x] OAuth 2.0 Authorization Code flow with mandatory PKCE (S256)
 - [x] RFC 9068 JWT access tokens, OIDC ID tokens
 - [x] Refresh-token grant — single-use rotation with family reuse-detection (RFC 9700 §4.14)
+- [x] `client_credentials` grant (RFC 6749 §4.4) — tenant-bound confidential clients, registered scopes, audiences and roles
 - [x] Token introspection — RFC 7662 (`POST /introspect`)
 - [x] Token revocation — RFC 7009 (`POST /revoke`)
 - [x] Confidential (Argon2id) + public (PKCE) client registry with `redirect_uri` allow-list
@@ -389,7 +395,6 @@ tagged when the wave's integration test suite passes an end-to-end OIDC flow.
 ### Wave 2 — interactive login
 - [ ] Subject repository port + pluggable credential verifier (password, TOTP, WebAuthn)
 - [ ] Login and consent UI (server-side rendered; replaceable)
-- [ ] `client_credentials` grant (machine-to-machine; already modelled in the domain)
 
 ### Wave 3 — RFC completeness & operations
 - [ ] Dynamic client registration — RFC 7591

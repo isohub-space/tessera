@@ -14,6 +14,8 @@ import dev.tessera.iam.domain.client.grant.GrantType;
 import dev.tessera.iam.domain.client.grant.RefreshToken;
 import dev.tessera.iam.domain.tenancy.RealmKey;
 import jakarta.enterprise.context.ApplicationScoped;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
@@ -40,6 +42,19 @@ public class FakeClientRepository implements ClientRepositoryPort {
     public static final String NO_CODE_CLIENT_ID = "no-code-client";
     /** A public client additionally permitted the refresh-token grant (for the refresh flow). */
     public static final String REFRESH_CLIENT_ID = "refresh-spa";
+
+    /**
+     * A {@code client_credentials} service client, registered only in {@link #MACHINE_TENANT}: under
+     * any other tenant it does not exist, as under the real registry's row-level security.
+     */
+    public static final String MACHINE_CLIENT_ID = "machine-service";
+    public static final String MACHINE_TENANT = "6f1c2a64-5d1e-4f0a-9a43-0c2b8e7d4a11";
+    public static final ClientId MACHINE_IDENTITY =
+            new ClientId(UUID.fromString("00000000-0000-0000-0000-0000000000e0"));
+    public static final Set<String> MACHINE_SCOPES = new LinkedHashSet<>(List.of("orders.read", "orders.write"));
+    public static final Set<String> MACHINE_AUDIENCES =
+            new LinkedHashSet<>(List.of("https://orders.example", "https://billing.example"));
+    public static final List<String> MACHINE_ROLES = List.of("ops", "reader");
 
     /** Stable resolved identity for the confidential client (used by the secret verifier). */
     public static final ClientId CONFIDENTIAL_IDENTITY =
@@ -74,6 +89,10 @@ public class FakeClientRepository implements ClientRepositoryPort {
                     NO_CODE_IDENTITY, realm, ONLY_CLIENT_CREDENTIALS, ClientAuthMethod.CLIENT_SECRET, REDIRECTS);
             case REFRESH_CLIENT_ID -> new PublicClient(
                     REFRESH_IDENTITY, realm, CODE_AND_REFRESH, REDIRECTS);
+            case MACHINE_CLIENT_ID -> MACHINE_TENANT.equals(realm.tenant().value().toString())
+                    ? new ConfidentialClient(MACHINE_IDENTITY, realm, ONLY_CLIENT_CREDENTIALS,
+                            ClientAuthMethod.CLIENT_SECRET, Set.of(), MACHINE_SCOPES, MACHINE_AUDIENCES, MACHINE_ROLES)
+                    : null;
             default -> null;
         };
         return Uni.createFrom().item(client);

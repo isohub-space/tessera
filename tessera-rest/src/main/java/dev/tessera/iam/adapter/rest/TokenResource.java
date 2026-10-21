@@ -1,12 +1,15 @@
 package dev.tessera.iam.adapter.rest;
 
 import io.smallrye.mutiny.Uni;
+import dev.tessera.iam.adapter.rest.config.ClientCredentialsConfig;
 import dev.tessera.iam.adapter.rest.dto.OAuthErrorDto;
 import dev.tessera.iam.adapter.rest.dto.TokenResponseDto;
 import dev.tessera.iam.adapter.rest.ratelimit.RateLimited;
 import dev.tessera.iam.adapter.rest.tenancy.TenantContext;
 import dev.tessera.iam.adapter.rest.tenancy.TenantScoped;
 import dev.tessera.iam.adapter.rest.token.ClientCertificateThumbprint;
+import dev.tessera.iam.application.port.in.ClientCredentialsUseCase;
+import dev.tessera.iam.application.port.in.ClientCredentialsUseCase.ClientCredentialsCommand;
 import dev.tessera.iam.application.port.in.RefreshUseCase;
 import dev.tessera.iam.application.port.in.RefreshUseCase.RefreshCommand;
 import dev.tessera.iam.application.port.in.TokenUseCase;
@@ -23,12 +26,14 @@ import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
+import java.util.List;
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 
 /**
- * The token endpoint ({@code POST /token}) of the Authorization Code + PKCE flow
- * ({@code grant_type=authorization_code}, RFC 6749 §4.1.3).
+ * The token endpoint ({@code POST /token}): the Authorization Code + PKCE flow
+ * ({@code grant_type=authorization_code}, RFC 6749 §4.1.3), the refresh grant, and, when
+ * enabled, the {@code client_credentials} grant (RFC 6749 §4.4).
  *
  * <p>A thin shell over {@link TokenUseCase}: it parses the form-encoded request, supports
  * the client presenting its secret via the body ({@code client_secret}) or HTTP Basic, and
@@ -55,12 +60,19 @@ public class TokenResource {
 
     private static final String GRANT_AUTHORIZATION_CODE = "authorization_code";
     private static final String GRANT_REFRESH_TOKEN = "refresh_token";
+    private static final String GRANT_CLIENT_CREDENTIALS = "client_credentials";
 
     @Inject
     TokenUseCase token;
 
     @Inject
     RefreshUseCase refresh;
+
+    @Inject
+    ClientCredentialsUseCase clientCredentials;
+
+    @Inject
+    ClientCredentialsConfig clientCredentialsConfig;
 
     @Inject
     TenantContext tenantContext;
@@ -82,7 +94,8 @@ public class TokenResource {
             @FormParam("client_secret") String clientSecret,
             @FormParam("code_verifier") String codeVerifier,
             @FormParam("refresh_token") String refreshToken,
-            @FormParam("scope") String scope) {
+            @FormParam("scope") String scope,
+            @FormParam("resource") List<String> resources) {
 
         RealmKey realm = tenantContext.realm();
 
@@ -120,9 +133,20 @@ public class TokenResource {
             return refresh.redeem(command).map(TokenResource::render);
         }
 
+        if (GRANT_CLIENT_CREDENTIALS.equals(grantType) && clientCredentialsConfig.enabled()) {
+            if (isBlank(resolvedClientId)) {
+                return error(Response.Status.UNAUTHORIZED, AuthorizationError.INVALID_CLIENT,
+                        "client authentication is required");
+            }
+            ClientCredentialsCommand command = new ClientCredentialsCommand(
+                    realm, resolvedClientId, resolvedSecret, scope, resources,
+                    ClientCertificateThumbprint.fromHeader(clientCertificate).orElse(null));
+            return clientCredentials.issue(command).map(TokenResource::render);
+        }
+
         return error(Response.Status.BAD_REQUEST,
                 AuthorizationError.UNSUPPORTED_GRANT_TYPE,
-                "only grant_type=authorization_code and grant_type=refresh_token are supported");
+                "grant_type is not supported");
     }
 
     private static Response render(TokenResult result) {

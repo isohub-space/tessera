@@ -1,6 +1,7 @@
 package dev.tessera.iam.adapter.rest;
 
 import io.smallrye.mutiny.Uni;
+import dev.tessera.iam.adapter.rest.config.ClientCredentialsConfig;
 import dev.tessera.iam.adapter.rest.config.OidcDiscoveryConfig;
 import dev.tessera.iam.adapter.rest.dto.DiscoveryDto;
 import dev.tessera.iam.adapter.rest.tenancy.TenantContext;
@@ -49,6 +50,9 @@ public class DiscoveryResource {
     OidcDiscoveryConfig config;
 
     @Inject
+    ClientCredentialsConfig clientCredentials;
+
+    @Inject
     TenantContext tenantContext;
 
     @GET
@@ -65,7 +69,7 @@ public class DiscoveryResource {
         // issuer), never the Host header.
         RealmKey realm = tenantContext.realm();
         String issuer = issuerFor(realm);
-        DiscoveryDocument doc = DiscoveryDocument.forIssuer(issuer, OidcCapabilities.enforced());
+        DiscoveryDocument doc = DiscoveryDocument.forIssuer(issuer, OidcCapabilities.enforced(clientCredentials.enabled()));
         DiscoveryDto dto = DiscoveryDto.from(doc);
         return Uni.createFrom().item(
                 RestResponse.ResponseBuilder.ok(dto)

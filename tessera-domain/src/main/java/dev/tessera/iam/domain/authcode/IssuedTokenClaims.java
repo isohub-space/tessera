@@ -195,6 +195,28 @@ public final class IssuedTokenClaims {
         return new ClaimSet(claims);
     }
 
+    /**
+     * Stamps the realm a token was minted in onto its claims: {@code realm_tenant} and
+     * {@code realm_baseline} (ADR-IAM-003 D4b). Applied last, after every claim contributor, so a
+     * contributor can never set or change them.
+     *
+     * @param claims the assembled claims (never {@code null})
+     * @param realm  the realm the token is minted in (never {@code null})
+     * @return the claims with the realm claims set
+     */
+    public static ClaimSet withRealm(ClaimSet claims, RealmKey realm) {
+        if (claims == null) {
+            throw new IllegalArgumentException("claims must not be null");
+        }
+        if (realm == null) {
+            throw new IllegalArgumentException("realm must not be null");
+        }
+        Map<String, Object> merged = new LinkedHashMap<>(claims.claims());
+        merged.put("realm_tenant", realm.tenant().value().toString());
+        merged.put("realm_baseline", realm.baseline().value().toString());
+        return new ClaimSet(merged);
+    }
+
     private static void requireText(String value, String name) {
         if (value == null || value.isBlank()) {
             throw new IllegalArgumentException(name + " must not be null or blank");

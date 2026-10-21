@@ -38,6 +38,9 @@ public enum AuthorizationError {
     /** The requested scope is unknown or exceeds what the client may request. */
     INVALID_SCOPE("invalid_scope"),
 
+    /** A requested {@code resource} is not an audience the client may target (RFC 8707 §2). */
+    INVALID_TARGET("invalid_target"),
+
     /**
      * The DPoP proof (RFC 9449) was missing, malformed, unverifiable, replayed, or not
      * bound to this request — the sender-constraining proof a public client must present
