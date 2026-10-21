@@ -28,4 +28,9 @@ class NoOpRateLimitMetrics implements RateLimitMetrics {
     public void credentialThrottled(UUID tenant) {
         // Intentionally empty.
     }
+
+    @Override
+    public void credentialTableFull() {
+        // Intentionally empty.
+    }
 }

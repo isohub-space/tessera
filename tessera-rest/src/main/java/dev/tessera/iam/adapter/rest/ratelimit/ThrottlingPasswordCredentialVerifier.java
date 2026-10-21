@@ -10,9 +10,6 @@ import jakarta.inject.Inject;
 import jakarta.interceptor.Interceptor;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * A CDI {@link Decorator} that wraps whichever {@link PasswordCredentialVerifierPort} is active
@@ -33,9 +30,6 @@ import java.util.concurrent.atomic.AtomicLong;
 @Priority(Interceptor.Priority.APPLICATION)
 public class ThrottlingPasswordCredentialVerifier implements PasswordCredentialVerifierPort {
 
-    /** Run the idle-eviction sweep once per this many verify calls. */
-    private static final int SWEEP_INTERVAL = 1024;
-
     @Inject
     @Delegate
     PasswordCredentialVerifierPort delegate;
@@ -46,8 +40,7 @@ public class ThrottlingPasswordCredentialVerifier implements PasswordCredentialV
     @Inject
     RateLimitMetrics metrics;
 
-    private final ConcurrentMap<CredentialKey, TokenBucket> budgets = new ConcurrentHashMap<>();
-    private final AtomicLong callsSinceSweep = new AtomicLong();
+    private final CredentialBudgets<CredentialKey> budgets = new CredentialBudgets<>();
 
     @Override
     public Uni<Optional<String>> verify(RealmKey realm, String username, String password) {
@@ -56,7 +49,12 @@ public class ThrottlingPasswordCredentialVerifier implements PasswordCredentialV
         }
 
         CredentialKey key = new CredentialKey(realm.tenant().value(), username);
-        TokenBucket budget = budgetFor(key);
+        TokenBucket budget = budgets.budgetFor(key, config);
+        if (budget == null) {
+            // The budget table is full: verify without a budget, as for any new username at the cap.
+            metrics.credentialTableFull();
+            return delegate.verify(realm, username, password);
+        }
         if (!budget.hasToken()) {
             metrics.credentialThrottled(realm.tenant().value());
             return Uni.createFrom().item(Optional.empty());
@@ -68,21 +66,6 @@ public class ThrottlingPasswordCredentialVerifier implements PasswordCredentialV
                         budget.tryAcquire();
                     }
                 });
-    }
-
-    private TokenBucket budgetFor(CredentialKey key) {
-        maybeSweep();
-        return budgets.computeIfAbsent(key, k -> new TokenBucket(
-                config.credentialFailureBurst(),
-                config.credentialRefillPerMinute() / 60.0,
-                System::nanoTime));
-    }
-
-    private void maybeSweep() {
-        if (callsSinceSweep.incrementAndGet() >= SWEEP_INTERVAL) {
-            callsSinceSweep.set(0L);
-            budgets.values().removeIf(TokenBucket::isFull);
-        }
     }
 
     /** Composite key: a failure budget is scoped to one username within one tenant. */

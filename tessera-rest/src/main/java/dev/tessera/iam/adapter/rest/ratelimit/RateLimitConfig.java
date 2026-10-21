@@ -17,8 +17,11 @@ public interface RateLimitConfig {
     boolean enabled();
 
     /**
-     * Hard cap on the number of distinct rate-limit buckets held in memory. Bounds the blast
-     * radius of a key-rotation flood; once reached, an untracked key is treated as throttled.
+     * Hard cap on the number of distinct rate-limit buckets held in memory, per table. Bounds the
+     * blast radius of a key-rotation flood. Once the ingress table is full, an untracked key is
+     * treated as throttled. Once a credential throttle's failure-budget table is full, a new
+     * {@code client_id} or username is verified without a budget instead, the same whether it
+     * exists or not, so that a flood of made-up ids cannot shut out real ones.
      */
     @WithDefault("100000")
     int maxTrackedKeys();
