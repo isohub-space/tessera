@@ -26,6 +26,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.function.Function;
 import org.assertj.core.api.Assertions;
+import org.hibernate.PropertyValueException;
 import org.hibernate.reactive.mutiny.Mutiny;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -259,10 +260,14 @@ class DbClientRepositoryIT {
         unbound.allowedGrants = "client_credentials";
         unbound.audiences = "https://orders.example";
 
+        // The entity: Hibernate refuses the null tenant before any SQL is sent.
         asserter.assertFailedWith(
                 () -> scoped(tenant, s -> s.persist(unbound).call(s::flush)),
-                failure -> Assertions.assertThat(failure).hasMessageContaining("tenantId"));
-        // The schema refuses it too, for a row an operator writes directly.
+                failure -> Assertions.assertThat(causes(failure)).anySatisfy(t -> Assertions.assertThat(t)
+                        .isInstanceOfSatisfying(PropertyValueException.class,
+                                e -> Assertions.assertThat(e.getPropertyName()).isEqualTo("tenantId"))));
+        // A row written directly: the oauth_client row-level security policy refuses it (42501),
+        // since a null tenant_id never equals the bound tenant.
         asserter.assertFailedWith(
                 () -> scoped(tenant, s -> s.createNativeQuery(
                                 "insert into oauth_client (id, tenant_id, baseline_id, client_key, client_type,"
@@ -272,19 +277,33 @@ class DbClientRepositoryIT {
                         .setParameter("id", UUID.randomUUID())
                         .setParameter("baseline", new UUID(0L, 0L))
                         .executeUpdate()),
-                failure -> Assertions.assertThat(failure).hasMessageContaining("tenant_id"));
+                failure -> Assertions.assertThat(causes(failure)).anySatisfy(t -> Assertions.assertThat(t.getMessage())
+                        .contains("violates row-level security policy")
+                        .contains("42501")));
+        // And the column itself is NOT NULL, which the policy keeps the application role from reaching.
+        asserter.assertEquals(
+                () -> scoped(tenant, s -> s.createNativeQuery(
+                                "select is_nullable from information_schema.columns"
+                                        + " where table_name = 'oauth_client' and column_name = 'tenant_id'",
+                                String.class)
+                        .getSingleResult()),
+                "NO");
         asserter.assertThat(
                 () -> clientRepository.findByClientId(realm(tenant), "unbound-service"),
                 found -> Assertions.assertThat(found).isNull());
     }
 
-    /** Hibernate may wrap a lifecycle-callback exception; the refusal must be in the chain. */
-    private static void assertInvalidRedirectUri(Throwable failure) {
+    private static List<Throwable> causes(Throwable failure) {
         List<Throwable> chain = new ArrayList<>();
         for (Throwable t = failure; t != null && !chain.contains(t); t = t.getCause()) {
             chain.add(t);
         }
-        Assertions.assertThat(chain)
+        return chain;
+    }
+
+    /** Hibernate may wrap a lifecycle-callback exception; the refusal must be in the chain. */
+    private static void assertInvalidRedirectUri(Throwable failure) {
+        Assertions.assertThat(causes(failure))
                 .anySatisfy(t -> Assertions.assertThat(t)
                         .isInstanceOfSatisfying(InvalidRedirectUriException.class,
                                 e -> Assertions.assertThat(e.error()).isEqualTo("invalid_redirect_uri")));
