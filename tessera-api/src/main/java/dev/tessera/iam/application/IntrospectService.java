@@ -7,9 +7,6 @@ import dev.tessera.iam.application.port.out.ClientRepositoryPort;
 import dev.tessera.iam.application.port.out.ClientSecretVerifierPort;
 import dev.tessera.iam.application.port.out.RefreshTokenStorePort;
 import dev.tessera.iam.application.refresh.RefreshTokenCodec;
-import dev.tessera.iam.domain.client.Client;
-import dev.tessera.iam.domain.client.ConfidentialClient;
-import dev.tessera.iam.domain.client.PublicClient;
 import dev.tessera.iam.domain.refresh.RefreshTokenFamily;
 import dev.tessera.iam.domain.tenancy.RealmKey;
 import io.smallrye.mutiny.Uni;
@@ -67,16 +64,13 @@ public final class IntrospectService implements IntrospectUseCase {
         if (command == null) {
             throw new IllegalArgumentException("command must not be null");
         }
-        // Authenticate the caller within its own realm; unknown client or failed secret both
-        // collapse to invalid_client — the endpoint's only surfaced failure.
-        return clients.findByClientId(command.realm(), command.clientId()).flatMap(client -> {
-            if (client == null) {
-                return authFailed();
-            }
-            return authenticate(command.realm(), client, command.clientSecret()).flatMap(ok -> ok
-                    ? classify(command)
-                    : authFailed());
-        });
+        // Authenticate the caller within its own realm, at the same cost whatever the outcome;
+        // unknown client or failed secret both collapse to invalid_client, the endpoint's only
+        // surfaced failure.
+        return clients.findByClientId(command.realm(), command.clientId())
+                .flatMap(client -> ClientAuthentication.authenticate(secretVerifier, command.realm(),
+                                command.clientId(), client, command.clientSecret(), true)
+                        .flatMap(ok -> ok ? classify(command) : authFailed()));
     }
 
     private Uni<IntrospectionResult> classify(IntrospectCommand command) {
@@ -133,19 +127,6 @@ public final class IntrospectService implements IntrospectUseCase {
         return new ActiveToken(null, null, family.userId(), null, exp, iat, null);
     }
 
-    private Uni<Boolean> authenticate(RealmKey realm, Client client, String presentedSecret) {
-        return switch (client) {
-            case PublicClient ignored ->
-                    // A public client holds no secret; presenting its client_id is its identification.
-                    Uni.createFrom().item(Boolean.TRUE);
-            case ConfidentialClient confidential -> {
-                if (presentedSecret == null || presentedSecret.isBlank()) {
-                    yield Uni.createFrom().item(Boolean.FALSE);
-                }
-                yield secretVerifier.verifySecret(realm, confidential.id(), presentedSecret);
-            }
-        };
-    }
 
     private static IntrospectionResult active(ActiveToken token) {
         return new IntrospectionResult.Active(token);

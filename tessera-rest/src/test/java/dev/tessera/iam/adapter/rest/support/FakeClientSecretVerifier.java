@@ -20,14 +20,12 @@ public class FakeClientSecretVerifier implements ClientSecretVerifierPort {
 
     public static final String CORRECT_SECRET = "s3cr3t-correct-horse-battery-staple";
 
-    /** How many times the sentinel was verified: the no-client path must always reach a verifier. */
-    public static final AtomicInteger NO_CLIENT_CALLS = new AtomicInteger();
+    /** How many times any secret was verified, to pin the call pattern of a request sequence. */
+    public static final AtomicInteger CALLS = new AtomicInteger();
 
     @Override
     public Uni<Boolean> verifySecret(RealmKey realm, ClientId clientId, String presentedSecret) {
-        if (ClientSecretVerifierPort.NO_CLIENT.equals(clientId)) {
-            NO_CLIENT_CALLS.incrementAndGet();
-        }
+        CALLS.incrementAndGet();
         boolean ok = (FakeClientRepository.CONFIDENTIAL_IDENTITY.equals(clientId)
                 || FakeClientRepository.MACHINE_IDENTITY.equals(clientId))
                 && CORRECT_SECRET.equals(presentedSecret);

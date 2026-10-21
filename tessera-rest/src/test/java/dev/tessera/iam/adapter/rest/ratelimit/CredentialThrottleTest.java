@@ -93,24 +93,30 @@ class CredentialThrottleTest {
     }
 
     @Test
-    @DisplayName("unknown clients are never short-circuited: each one still runs the verifier")
-    void unknownClientsAlwaysReachTheVerifier() {
-        String tenant = UUID.randomUUID().toString();
-        int before = FakeClientSecretVerifier.NO_CLIENT_CALLS.get();
-        // Well past the failure burst of 3: a throttle on the shared no-client sentinel would answer
-        // these fast without the verifier, which would time unknown client_ids apart from real ones.
+    @DisplayName("a real client and an unknown client_id get the same verifier-call pattern past the burst")
+    void knownAndUnknownClientsThrottleAlike() {
+        // Past the failure burst of 3, both are answered without the verifier. If only the real
+        // client were budgeted, its fast answers would tell it apart from an unknown id.
+        assertThat(verifierCallsPerRequest(FakeClientRepository.MACHINE_CLIENT_ID)).containsExactly(1, 1, 1, 0, 0, 0);
+        assertThat(verifierCallsPerRequest("no-such-machine")).containsExactly(1, 1, 1, 0, 0, 0);
+    }
+
+    /** Six wrong-secret client_credentials requests; how many verifier calls each one made. */
+    private static java.util.List<Integer> verifierCallsPerRequest(String clientId) {
+        java.util.List<Integer> calls = new java.util.ArrayList<>();
         for (int i = 0; i < 6; i++) {
+            int before = FakeClientSecretVerifier.CALLS.get();
             given().config(noFollow())
-                    .header("X-Tenant-Id", tenant)
+                    .header("X-Tenant-Id", FakeClientRepository.MACHINE_TENANT)
                     .contentType("application/x-www-form-urlencoded")
                     .formParam("grant_type", "client_credentials")
-                    .formParam("client_id", "unknown-" + i)
-                    .formParam("client_secret", "whatever")
+                    .formParam("client_id", clientId)
+                    .formParam("client_secret", "wrong-" + i)
                     .when().post("/token")
                     .then().statusCode(401).body("error", Matchers.equalTo("invalid_client"));
+            calls.add(FakeClientSecretVerifier.CALLS.get() - before);
         }
-        assertThat(FakeClientSecretVerifier.NO_CLIENT_CALLS.get() - before)
-                .isEqualTo(6);
+        return calls;
     }
 
     // ------------------------------------------------------------------- flow helpers

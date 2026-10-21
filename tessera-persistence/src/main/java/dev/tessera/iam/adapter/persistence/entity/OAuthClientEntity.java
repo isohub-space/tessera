@@ -1,5 +1,6 @@
 package dev.tessera.iam.adapter.persistence.entity;
 
+import dev.tessera.iam.application.port.out.ClientSecretVerifierPort;
 import dev.tessera.iam.domain.client.RedirectUriPolicy;
 import io.quarkus.hibernate.reactive.panache.PanacheEntityBase;
 import jakarta.persistence.Column;
@@ -94,7 +95,11 @@ public class OAuthClientEntity extends PanacheEntityBase {
     public Instant createdAt;
 
     /**
-     * Refuses a redirect URI the policy does not allow (RFC 9700 §2.6), on insert and on update.
+     * Refuses, on insert and on update, a client id reserved for the sentinels unknown clients are
+     * verified against ({@link ClientSecretVerifierPort#isReserved}: the nil UUID and name-based
+     * ids), and a redirect URI the policy does not allow (RFC 9700 §2.6). A client registered
+     * under a sentinel id would share its failure budget with every unknown {@code client_id} that
+     * maps to it.
      *
      * <p>The update check runs on every update of the row, not only one that changes
      * {@link #redirectUris}. A row registered before this check that holds a non-compliant URI
@@ -103,7 +108,10 @@ public class OAuthClientEntity extends PanacheEntityBase {
      */
     @PrePersist
     @PreUpdate
-    void checkRedirectUris() {
+    void checkRegistration() {
+        if (id != null && ClientSecretVerifierPort.isReserved(id)) {
+            throw new IllegalArgumentException("client id " + id + " is reserved and cannot be registered");
+        }
         if (redirectUris == null || redirectUris.isBlank()) {
             return;
         }

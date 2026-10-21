@@ -6,8 +6,6 @@ import dev.tessera.iam.application.port.out.ClientSecretVerifierPort;
 import dev.tessera.iam.application.port.out.RefreshTokenStorePort;
 import dev.tessera.iam.application.refresh.RefreshTokenCodec;
 import dev.tessera.iam.domain.client.Client;
-import dev.tessera.iam.domain.client.ConfidentialClient;
-import dev.tessera.iam.domain.client.PublicClient;
 import dev.tessera.iam.domain.refresh.FamilyId;
 import dev.tessera.iam.domain.refresh.RefreshTokenFamily;
 import dev.tessera.iam.domain.tenancy.RealmKey;
@@ -59,20 +57,16 @@ public final class RevokeService implements RevokeUseCase {
         if (command == null) {
             throw new IllegalArgumentException("command must not be null");
         }
-        // Authenticate the client within the caller's own realm. Unknown client or failed secret
-        // both collapse to invalid_client — the endpoint's only surfaced failure.
-        return clients.findByClientId(command.realm(), command.clientId()).flatMap(client -> {
-            if (client == null) {
-                return authFailed();
-            }
-            return authenticate(command.realm(), client, command.clientSecret()).flatMap(ok -> {
-                if (!ok) {
-                    return authFailed();
-                }
-                return revokeIfOwnedRefreshToken(command.realm(), client, command.token())
-                        .replaceWith(done());
-            });
-        });
+        // Authenticate the client within the caller's own realm, at the same cost whatever the
+        // outcome. Unknown client or failed secret both collapse to invalid_client, the endpoint's
+        // only surfaced failure.
+        return clients.findByClientId(command.realm(), command.clientId())
+                .flatMap(client -> ClientAuthentication.authenticate(secretVerifier, command.realm(),
+                                command.clientId(), client, command.clientSecret(), true)
+                        .flatMap(ok -> ok
+                                ? revokeIfOwnedRefreshToken(command.realm(), client, command.token())
+                                        .replaceWith(done())
+                                : authFailed()));
     }
 
     /**
@@ -99,19 +93,6 @@ public final class RevokeService implements RevokeUseCase {
         });
     }
 
-    private Uni<Boolean> authenticate(RealmKey realm, Client client, String presentedSecret) {
-        return switch (client) {
-            case PublicClient ignored ->
-                    // A public client holds no secret; presenting its client_id is its identification.
-                    Uni.createFrom().item(Boolean.TRUE);
-            case ConfidentialClient confidential -> {
-                if (presentedSecret == null || presentedSecret.isBlank()) {
-                    yield Uni.createFrom().item(Boolean.FALSE);
-                }
-                yield secretVerifier.verifySecret(realm, confidential.id(), presentedSecret);
-            }
-        };
-    }
 
     private static boolean ownedBy(RefreshTokenFamily family, Client client) {
         return family.clientId().equals(client.id());
