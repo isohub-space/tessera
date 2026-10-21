@@ -13,7 +13,6 @@ import dev.tessera.iam.domain.authflow.ClaimContributor;
 import dev.tessera.iam.domain.authflow.Subject;
 import dev.tessera.iam.domain.client.Client;
 import dev.tessera.iam.domain.client.ClientAuthMethod;
-import dev.tessera.iam.domain.client.ClientId;
 import dev.tessera.iam.domain.client.ConfidentialClient;
 import dev.tessera.iam.domain.client.grant.ClientCredentials;
 import dev.tessera.iam.domain.token.ClaimSet;
@@ -110,19 +109,10 @@ public final class ClientCredentialsService implements ClientCredentialsUseCase 
                                 : failed(AuthorizationError.INVALID_CLIENT, "client authentication failed")));
     }
 
-    /**
-     * Only a confidential client with a valid secret authenticates. The verifier runs exactly once
-     * whatever the outcome: against {@link ClientSecretVerifierPort#NO_CLIENT} when the request
-     * names no confidential client of this realm, and with an empty secret when none was
-     * presented. Every refusal therefore costs one full comparison, so the response time does not
-     * tell whether a {@code client_id} exists.
-     */
+    /** Only a confidential client with a valid secret authenticates, at uniform cost. */
     private Uni<Boolean> authenticate(ClientCredentialsCommand command, Client client) {
-        boolean confidential = client instanceof ConfidentialClient;
-        ClientId identity = confidential ? client.id() : ClientSecretVerifierPort.NO_CLIENT;
-        String secret = command.clientSecret() == null ? "" : command.clientSecret();
-        return secretVerifier.verifySecret(command.realm(), identity, secret)
-                .map(verified -> confidential && Boolean.TRUE.equals(verified));
+        return ClientAuthentication.authenticate(
+                secretVerifier, command.realm(), command.clientId(), client, command.clientSecret(), false);
     }
 
     private Uni<TokenResult> authorize(ClientCredentialsCommand command, ConfidentialClient client) {

@@ -71,7 +71,7 @@ class ClientCredentialsServiceTest {
 
     private static ConfidentialClient confidential(
             String key, Set<GrantType> grants, Set<String> scopes, Set<String> audiences, ClientAuthMethod auth) {
-        return new ConfidentialClient(new ClientId(UUID.nameUUIDFromBytes(key.getBytes())), TENANT_A, grants,
+        return new ConfidentialClient(new ClientId(UUID.randomUUID()), TENANT_A, grants,
                 auth, Set.of(), scopes, audiences, List.of("ops", "reader"));
     }
 
@@ -89,7 +89,7 @@ class ClientCredentialsServiceTest {
         // Like the Argon2 verifier: true only for a known confidential client and its secret.
         ClientSecretVerifierPort secrets = (realm, id, secret) -> {
             verifierCalls.incrementAndGet();
-            return Uni.createFrom().item(!ClientSecretVerifierPort.NO_CLIENT.equals(id) && SECRET.equals(secret));
+            return Uni.createFrom().item(!ClientSecretVerifierPort.isReserved(id.value()) && SECRET.equals(secret));
         };
         TokenSignerPort signer = (realm, typ, claims) -> {
             signed.set(claims);

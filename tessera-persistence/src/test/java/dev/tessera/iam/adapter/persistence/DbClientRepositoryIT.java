@@ -293,6 +293,27 @@ class DbClientRepositoryIT {
                 found -> Assertions.assertThat(found).isNull());
     }
 
+    @Test
+    @RunOnVertxContext
+    @DisplayName("the ids reserved for unknown-client sentinels cannot be registered")
+    void sentinelIdsAreReserved(UniAsserter asserter) {
+        UUID tenant = UUID.randomUUID();
+        for (UUID reserved : List.of(new UUID(0L, 0L), ClientSecretVerifierPort.unknownClient("web-app").value())) {
+            asserter.assertFailedWith(
+                    () -> scoped(tenant, s -> s.persist(confidential(tenant, reserved, "sentinel-" + reserved, null))
+                            .call(s::flush)),
+                    failure -> Assertions.assertThat(causes(failure)).anySatisfy(t -> Assertions.assertThat(t)
+                            .isInstanceOf(IllegalArgumentException.class)
+                            .hasMessageContaining("is reserved")));
+        }
+        // Positive control: a random (version 4) id registers.
+        asserter.execute(() -> scoped(tenant, s -> s.persist(confidential(tenant, UUID.randomUUID(), "random-id", null))
+                .call(s::flush)));
+        asserter.assertThat(
+                () -> clientRepository.findByClientId(realm(tenant), "random-id"),
+                found -> Assertions.assertThat(found).isNotNull());
+    }
+
     private static List<Throwable> causes(Throwable failure) {
         List<Throwable> chain = new ArrayList<>();
         for (Throwable t = failure; t != null && !chain.contains(t); t = t.getCause()) {

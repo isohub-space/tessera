@@ -27,17 +27,27 @@ import java.util.concurrent.atomic.AtomicLong;
  * calling the delegate</em> — and because the delegate is the CPU/memory-hard Argon2 pass, that is
  * what caps the hashing rate for a client under an invalid-credential flood.
  *
+ * <p><strong>Unknown ids are budgeted like real ones.</strong> A request that names no
+ * confidential client is verified against {@link ClientSecretVerifierPort#unknownClient}, one
+ * sentinel per presented {@code client_id}, so it gets its own budget here exactly as a real client
+ * does. Known and unknown ids therefore run dry after the same number of failures and answer the
+ * same way afterwards: neither the timing nor the throttle tells whether a {@code client_id}
+ * exists.
+ *
  * <p><strong>Throttle, not lockout — deliberately.</strong> A fixed hard lockout keyed on the
  * public {@code client_id} would let anyone who can reach the credential path deny a legitimate
  * client (its correct secret included) for the whole lockout window — the account-lockout self-DoS
  * RFC 9700 warns against. A throttle instead: a correct secret never spends budget, and the budget
  * refills continuously, so denial of a valid credential is transient (bounded by the refill rate)
- * and self-heals rather than lasting a fixed window. <em>Residual risk:</em> because the key is a
- * public identifier and is not scoped to source, a caller who can repeatedly reach this path for a
- * given client (which requires an authenticated subject to mint each authorization code, and is
- * itself bounded by the ingress {@code /token} limiter) can keep that client's budget low and cause
- * transient throttling of it. This is inherent to any client-keyed credential control and is
- * accepted for the single-node tier.
+ * and self-heals rather than lasting a fixed window. <em>Residual risk:</em> the key is a public
+ * identifier and is not scoped to the caller, so anyone who knows a client's {@code client_id} can
+ * keep its budget empty with a steady trickle of wrong secrets. No authenticated subject is needed:
+ * the {@code client_credentials} grant, {@code /introspect} and {@code /revoke} take a client
+ * credential directly. While the budget is empty even the client's correct secret is refused, so a
+ * machine client can be kept out for as long as the attacker keeps sending. This is inherent to a
+ * shared secret checked by a client-keyed control; the durable answer for machine clients is
+ * keyless client authentication ({@code private_key_jwt} or {@code tls_client_auth}), where no
+ * guessable secret exists to spend the budget on.
  *
  * <p><strong>Not a 429.</strong> A {@code TokenService} collapses a {@code false} here to
  * {@code invalid_client} (401), and this decorator preserves that: it never emits 429. A 429 on the
@@ -70,11 +80,6 @@ public class ThrottlingClientSecretVerifier implements ClientSecretVerifierPort 
     @Override
     public Uni<Boolean> verifySecret(RealmKey realm, ClientId clientId, String presentedSecret) {
         if (!config.enabled() || realm == null || clientId == null) {
-            return delegate.verifySecret(realm, clientId, presentedSecret);
-        }
-        if (NO_CLIENT.equals(clientId)) {
-            // Never throttled: one budget shared by every unknown client_id would run dry and then
-            // answer faster than a real client's verification, telling the two apart.
             return delegate.verifySecret(realm, clientId, presentedSecret);
         }
 
