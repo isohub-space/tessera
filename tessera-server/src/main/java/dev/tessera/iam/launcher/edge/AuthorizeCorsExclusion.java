@@ -100,6 +100,11 @@ public class AuthorizeCorsExclusion {
      * The path Quarkus REST routes on, rebuilt with its own segment parsing: unchanged unless a
      * segment carries matrix parameters, then {@code /}-joined decoded segment names, keeping a
      * trailing slash.
+     *
+     * <p>This replays Quarkus REST implementation utilities ({@link PathSegmentImpl},
+     * {@link Encode}) and the steps of its {@code initPathSegments}, not a public SPI: on a Quarkus
+     * upgrade, {@code CorsAllowedOriginTest.routedEncodingsNeverOpenAuthorize} is the guard to
+     * re-check.
      */
     static String routedPath(String normalizedPath) {
         List<PathSegmentImpl> segments = new ArrayList<>();
