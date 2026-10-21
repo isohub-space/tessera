@@ -2,6 +2,7 @@ package dev.tessera.iam.launcher;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.nullValue;
 
 import io.quarkus.test.junit.QuarkusTest;
@@ -66,14 +67,16 @@ class CorsAllowedOriginTest {
                 .when()
                 .options(path)
                 .then()
+                .statusCode(200)
                 .header("Access-Control-Allow-Origin", equalTo(ALLOWED_ORIGIN));
     }
 
     @ParameterizedTest(name = "{0}")
-    @ValueSource(strings = {"/authorize", "/authorize/"})
+    @ValueSource(strings = {"/authorize", "/authorize/", "/authorize;x=1", "/authorize;x=1/"})
     @DisplayName("a listed-origin preflight to /authorize gets no allow-origin (RFC 9700 §2.6)")
     void corsPreflightNeverOpensAuthorize(String path) {
         given()
+                .urlEncodingEnabled(false)
                 .header("Origin", ALLOWED_ORIGIN)
                 .header("Access-Control-Request-Method", "GET")
                 .when()
@@ -84,14 +87,19 @@ class CorsAllowedOriginTest {
                 .header("Access-Control-Allow-Methods", nullValue());
     }
 
-    @Test
+    // A matrix parameter is stripped before routing, so /authorize;x=1 reaches the endpoint
+    // itself: the request is routed (not a 404) and still gets no allow-origin.
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"/authorize", "/authorize/", "/authorize;x=1", "/authorize;x=1/"})
     @DisplayName("a listed-origin request to /authorize gets no allow-origin (RFC 9700 §2.6)")
-    void corsRequestNeverOpensAuthorize() {
+    void corsRequestNeverOpensAuthorize(String path) {
         given()
+                .urlEncodingEnabled(false)
                 .header("Origin", ALLOWED_ORIGIN)
                 .when()
-                .get("/authorize")
+                .get(path)
                 .then()
+                .statusCode(not(404))
                 .header("Access-Control-Allow-Origin", nullValue())
                 .header("Access-Control-Allow-Credentials", nullValue());
     }
