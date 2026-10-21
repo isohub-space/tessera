@@ -3,6 +3,7 @@ package dev.tessera.iam.adapter.persistence.credential;
 import com.password4j.Argon2Function;
 import com.password4j.Password;
 import com.password4j.types.Argon2;
+import dev.tessera.iam.adapter.persistence.client.Argon2Admission;
 import dev.tessera.iam.adapter.persistence.entity.CredentialEntity;
 import dev.tessera.iam.adapter.persistence.entity.CredentialKind;
 import dev.tessera.iam.adapter.persistence.entity.UserEntity;
@@ -11,10 +12,8 @@ import dev.tessera.iam.adapter.persistence.repository.UserRepository;
 import dev.tessera.iam.application.port.out.PasswordCredentialVerifierPort;
 import dev.tessera.iam.domain.tenancy.RealmKey;
 import io.smallrye.mutiny.Uni;
-import io.vertx.mutiny.core.WorkerExecutor;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import jakarta.inject.Named;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
@@ -65,8 +64,7 @@ public class Argon2PasswordCredentialVerifier implements PasswordCredentialVerif
     CredentialRepository credentials;
 
     @Inject
-    @Named("argon2")
-    WorkerExecutor argon2Executor;
+    Argon2Admission argon2;
 
     @Override
     public Uni<Optional<String>> verify(RealmKey realm, String username, String password) {
@@ -77,8 +75,7 @@ public class Argon2PasswordCredentialVerifier implements PasswordCredentialVerif
         return users.findByUsername(tenantId, username)
                 .flatMap(user -> credentials.findByUser(tenantId, userId(user))
                         .map(Argon2PasswordCredentialVerifier::storedHash)
-                        .flatMap(storedHash -> argon2Executor.executeBlocking(
-                                () -> check(storedHash, password), false))
+                        .flatMap(storedHash -> argon2.run(tenantId, () -> check(storedHash, password)))
                         .map(matched -> matched && user != null
                                 ? Optional.of(user.subjectId)
                                 : Optional.<String>empty()));
