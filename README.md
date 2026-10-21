@@ -201,7 +201,7 @@ rather than behind an application gateway, and what that costs, is recorded in
 | `IAM_KEYS_MASTER_KEY` | A real base64 256-bit master key from your secret manager; the development default is refused outside dev/test. |
 | `TESSERA_BOOTSTRAP_ENABLED=true` + `TESSERA_BOOTSTRAP_CLIENT_ID/_SECRET/_REDIRECT_URIS`, `TESSERA_BOOTSTRAP_USER_USERNAME/_PASSWORD` | First boot provisions what is missing: an `ACTIVE` signing key for the tenant, one confidential client (`client_secret_basic`, `authorization_code` + `refresh_token`), one password user. Idempotent; existing rows are never overwritten. |
 | `TESSERA_REQUIRE_SENDER_CONSTRAINT=false` | Lets a secret-authenticated confidential client that can present no client certificate (a back-end-for-frontend behind a TLS-terminating edge) receive a plain Bearer token. Leave at the default `true` wherever clients can do mTLS or DPoP. |
-| `TESSERA_CORS_ORIGINS=https://app.example.com` | Allows the relying party's own login page to `POST /login` cross-origin with credentials. |
+| `TESSERA_CORS_ORIGINS=https://app.example.com` | Allows the relying party's own login page to `POST /login` cross-origin with credentials. `/authorize` never answers cross-origin, whatever is listed (RFC 9700 §2.6). |
 | build with `-Dquarkus.profile=prod,singlenode` | For a deployment that runs exactly one instance: the in-process authorization-code store is used and no Infinispan server is needed. Run more than one instance and codes minted on one node cannot be redeemed on another — use the default profile and a shared cache instead. |
 
 The ID token then carries `realm_tenant` and `realm_baseline` when the `profile` scope is
