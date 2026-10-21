@@ -77,6 +77,18 @@ public class OAuthClientEntity extends PanacheEntityBase {
     @Column(name = "redirect_uris")
     public String redirectUris;
 
+    /** Whitespace-separated scopes the client may be granted by {@code client_credentials}. */
+    @Column(name = "allowed_scopes")
+    public String allowedScopes;
+
+    /** Whitespace-separated audiences its {@code client_credentials} tokens may name. */
+    @Column(name = "audiences")
+    public String audiences;
+
+    /** Whitespace-separated roles its {@code client_credentials} tokens carry. */
+    @Column(name = "roles")
+    public String roles;
+
     /** Creation instant (UTC). */
     @Column(name = "created_at", nullable = false, updatable = false)
     public Instant createdAt;

@@ -14,13 +14,15 @@ import dev.tessera.iam.domain.tenancy.BaselineId;
 import dev.tessera.iam.domain.tenancy.RealmKey;
 import dev.tessera.iam.domain.tenancy.TenantId;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
 
 /**
  * Maps a persisted {@link OAuthClientEntity} to the framework-free domain {@link Client}.
  *
  * <p>The domain deliberately excludes secret material, so this mapper carries only identity,
- * realm, kind and the allowed-grant set; the client secret stays in persistence and is
+ * realm, kind, the allowed-grant set and the registration lists (redirect URIs, and for a
+ * confidential client its {@code client_credentials} scopes, audiences and roles); the client secret stays in persistence and is
  * verified separately by {@link Argon2ClientSecretVerifier}. Corrupt registry data (an
  * unknown grant token, a confidential client with no auth method) fails loudly rather than
  * degrading into a silently weaker client.
@@ -33,26 +35,28 @@ final class OAuthClientMapper {
     static Client toDomain(OAuthClientEntity entity) {
         RealmKey realm = new RealmKey(new TenantId(entity.tenantId), new BaselineId(entity.baselineId));
         Set<GrantType> grants = parseGrants(entity.allowedGrants);
-        Set<String> redirectUris = parseRedirectUris(entity.redirectUris);
+        Set<String> redirectUris = parseWhitespaceList(entity.redirectUris);
         ClientId id = new ClientId(entity.id);
         return switch (entity.clientType) {
-            case CONFIDENTIAL -> new ConfidentialClient(id, realm, grants, authMethod(entity), redirectUris);
+            case CONFIDENTIAL -> new ConfidentialClient(id, realm, grants, authMethod(entity), redirectUris,
+                    parseWhitespaceList(entity.allowedScopes), parseWhitespaceList(entity.audiences),
+                    List.copyOf(parseWhitespaceList(entity.roles)));
             case PUBLIC -> new PublicClient(id, realm, grants, redirectUris);
         };
     }
 
-    private static Set<String> parseRedirectUris(String value) {
+    private static Set<String> parseWhitespaceList(String value) {
         if (value == null || value.isBlank()) {
             return Set.of();
         }
-        Set<String> uris = new LinkedHashSet<>();
+        Set<String> values = new LinkedHashSet<>();
         for (String token : value.split("\\s+")) {
-            String uri = token.trim();
-            if (!uri.isEmpty()) {
-                uris.add(uri);
+            String trimmed = token.trim();
+            if (!trimmed.isEmpty()) {
+                values.add(trimmed);
             }
         }
-        return uris;
+        return values;
     }
 
     private static ClientAuthMethod authMethod(OAuthClientEntity entity) {
