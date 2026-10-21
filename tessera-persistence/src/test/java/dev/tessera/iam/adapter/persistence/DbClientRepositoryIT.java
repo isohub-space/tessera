@@ -250,6 +250,34 @@ class DbClientRepositoryIT {
                 found -> Assertions.assertThat(found).isNull());
     }
 
+    @Test
+    @RunOnVertxContext
+    @DisplayName("a client with no tenant binding cannot be registered, through the entity or in SQL")
+    void clientWithoutTenantIsRefused(UniAsserter asserter) {
+        UUID tenant = UUID.randomUUID();
+        OAuthClientEntity unbound = confidential(null, UUID.randomUUID(), "unbound-service", null);
+        unbound.allowedGrants = "client_credentials";
+        unbound.audiences = "https://orders.example";
+
+        asserter.assertFailedWith(
+                () -> scoped(tenant, s -> s.persist(unbound).call(s::flush)),
+                failure -> Assertions.assertThat(failure).hasMessageContaining("tenantId"));
+        // The schema refuses it too, for a row an operator writes directly.
+        asserter.assertFailedWith(
+                () -> scoped(tenant, s -> s.createNativeQuery(
+                                "insert into oauth_client (id, tenant_id, baseline_id, client_key, client_type,"
+                                        + " allowed_grants, audiences, created_at)"
+                                        + " values (:id, null, :baseline, 'unbound-sql', 'CONFIDENTIAL',"
+                                        + " 'client_credentials', 'https://orders.example', now())")
+                        .setParameter("id", UUID.randomUUID())
+                        .setParameter("baseline", new UUID(0L, 0L))
+                        .executeUpdate()),
+                failure -> Assertions.assertThat(failure).hasMessageContaining("tenant_id"));
+        asserter.assertThat(
+                () -> clientRepository.findByClientId(realm(tenant), "unbound-service"),
+                found -> Assertions.assertThat(found).isNull());
+    }
+
     /** Hibernate may wrap a lifecycle-callback exception; the refusal must be in the chain. */
     private static void assertInvalidRedirectUri(Throwable failure) {
         List<Throwable> chain = new ArrayList<>();
