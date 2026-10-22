@@ -11,6 +11,8 @@ import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -70,9 +72,11 @@ public class OAuthClientEntity extends PanacheEntityBase {
     /**
      * JWK Set JSON of the public keys a {@code PRIVATE_KEY_JWT} client signs its client assertions
      * with (RFC 7523); {@code null} for every other client. The database refuses keys on any other
-     * client, and a secret on a {@code PRIVATE_KEY_JWT} client.
+     * client, and a secret on a {@code PRIVATE_KEY_JWT} client, and accepts only a bounded set of
+     * public keys. Stored as {@code jsonb}, so it reads back normalized.
      */
     @Column(name = "jwks")
+    @JdbcTypeCode(SqlTypes.JSON)
     public String jwks;
 
     /** Comma-separated allowed {@code grant_type} values. */
