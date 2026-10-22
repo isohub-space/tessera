@@ -10,6 +10,7 @@ import com.nimbusds.jose.jwk.Curve;
 import com.nimbusds.jose.jwk.ECKey;
 import com.nimbusds.jose.jwk.JWK;
 import com.nimbusds.jose.jwk.JWKSet;
+import com.nimbusds.jose.jwk.KeyOperation;
 import com.nimbusds.jose.jwk.KeyUse;
 import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jose.jwk.gen.ECKeyGenerator;
@@ -32,9 +33,6 @@ import java.time.Instant;
 import java.util.Date;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
 /**
@@ -44,8 +42,10 @@ import java.util.stream.Collectors;
  * <p><strong>Checks, all fail-closed.</strong> The {@code alg} is one of
  * {@link OidcCapabilities#CLIENT_ASSERTION_SIGNING_ALGS} ({@code none} does not parse as a JWS and
  * an HMAC is not on the list); the key is the single trusted key matching the {@code kid}, the
- * algorithm's key type and curve, and at least 2048 bits for RSA; {@code iss} and {@code sub} are
- * the trusted ones; {@code aud} is exactly one value, this server's issuer or token endpoint;
+ * algorithm's key type and curve, between 2048 and 4096 bits for RSA, and, where the JWK says,
+ * meant for signature verification ({@code use}, {@code key_ops}, {@code alg}); {@code iss} and
+ * {@code sub} are the trusted ones; {@code aud} is exactly one value, this server's issuer
+ * identifier;
  * {@code exp} is required and not past, {@code iat} and {@code nbf} are not in the future, all
  * within {@link ClientAssertionConfig#clockSkew()}; the validity is at most
  * {@link ClientAssertionConfig#maxLifetime()}; and the {@code jti} is used once.
@@ -53,14 +53,25 @@ import java.util.stream.Collectors;
  * <p><strong>No oracle.</strong> Every assertion with an allowed {@code alg} costs one signature
  * verification. With no trust, or no matching key (an unknown {@code kid}), the signature is
  * checked against a sentinel key generated at start-up that no client holds, and fails. The
- * answer is a bare {@code false} whatever the reason.
+ * answer is a bare {@code false} whatever the reason. The sentinel RSA key is 2048 bits, so a client
+ * registered with a larger RSA key verifies slightly slower against its own key than against the
+ * sentinel; that tells only the key size the client chose.
+ *
+ * <p><strong>Issuer-only audience.</strong> The token endpoint URL is not accepted as {@code aud}.
+ * The 2025 disclosure on {@code private_key_jwt} audience injection showed that a client which
+ * builds {@code aud} from a token endpoint published in some other authorization server's
+ * metadata can be made to sign an assertion for this server; the update to RFC 7523 that followed
+ * restricts the audience to the authorization server's issuer identifier, which a client checks
+ * against where it fetched the metadata (RFC 8414 §3.3).
  *
  * <p><strong>Replay store, per instance.</strong> A {@code jti} is recorded only once every other
- * check has passed, keyed by realm and issuer, and kept until the assertion expires plus the skew.
- * The store is an in-process map, bounded by {@link ClientAssertionConfig#replayCacheMaxEntries()},
- * like the DPoP proof store and the credential throttles. With several instances, a captured
- * assertion could be replayed once on each other instance within its lifetime, which the maximum
- * lifetime bounds; a shared-cache store with the same contract closes that.
+ * check has passed, keyed by realm and issuer, and kept until the assertion expires plus the skew,
+ * in an {@link AssertionReplayStore} bounded per client
+ * ({@link ClientAssertionConfig#replayCacheMaxEntriesPerClient()}) and in total
+ * ({@link ClientAssertionConfig#replayCacheMaxEntries()}), like the DPoP proof store and the
+ * credential throttles. With several instances, a captured assertion could be replayed once on
+ * each other instance within its lifetime, which the maximum lifetime bounds; a shared-cache store
+ * with the same contract closes that.
  */
 @Singleton
 public class NimbusClientAssertionVerifier implements ClientAssertionVerifierPort {
@@ -68,34 +79,33 @@ public class NimbusClientAssertionVerifier implements ClientAssertionVerifierPor
     private static final Set<JWSAlgorithm> ALLOWED_ALGS = OidcCapabilities.CLIENT_ASSERTION_SIGNING_ALGS.stream()
             .map(JWSAlgorithm::parse).collect(Collectors.toUnmodifiableSet());
     private static final int MIN_RSA_BITS = 2048;
+    private static final int MAX_RSA_BITS = 4096;
     private static final int MAX_JTI_LENGTH = 256;
-    private static final int SWEEP_INTERVAL = 1024;
 
     private final Vertx vertx;
     private final Clock clock;
-    private final Set<String> audiences;
+    private final String audience;
     private final Duration maxLifetime;
     private final Duration skew;
-    private final int maxSpent;
-    private final ConcurrentMap<SpentJti, Instant> spent = new ConcurrentHashMap<>();
-    private final AtomicLong insertsSinceSweep = new AtomicLong();
+    private final AssertionReplayStore spent;
     private final ECKey ecSentinel;
     private final RSAKey rsaSentinel;
 
     @Inject
     public NimbusClientAssertionVerifier(Vertx vertx, Clock clock, OidcDiscoveryConfig oidc,
             ClientAssertionConfig config) {
-        this(vertx, clock, oidc.issuer(), config.maxLifetime(), config.clockSkew(), config.replayCacheMaxEntries());
+        this(vertx, clock, oidc.issuer(), config.maxLifetime(), config.clockSkew(),
+                new AssertionReplayStore(config.replayCacheMaxEntriesPerClient(), config.replayCacheMaxEntries()));
     }
 
     NimbusClientAssertionVerifier(Vertx vertx, Clock clock, String issuer, Duration maxLifetime, Duration skew,
-            int maxSpent) {
+            AssertionReplayStore spent) {
         this.vertx = vertx;
         this.clock = clock;
-        this.audiences = Set.of(issuer, issuer.replaceAll("/+$", "") + "/token");
+        this.audience = issuer;
         this.maxLifetime = maxLifetime;
         this.skew = skew;
-        this.maxSpent = maxSpent;
+        this.spent = spent;
         try {
             this.ecSentinel = new ECKeyGenerator(Curve.P_256).generate().toPublicJWK();
             this.rsaSentinel = new RSAKeyGenerator(MIN_RSA_BITS).generate().toPublicJWK();
@@ -127,7 +137,8 @@ public class NimbusClientAssertionVerifier implements ClientAssertionVerifierPor
         boolean signed = verifySignature(jwt, alg, key);
         return signed && key != null
                 && claimsHold(claims, trust, now)
-                && firstUse(new SpentJti(realm, trust.issuer(), claims.getJWTID()), claims.getExpirationTime(), now);
+                && spent.firstUse(realm, trust.issuer(), claims.getJWTID(),
+                        claims.getExpirationTime().toInstant().plus(skew), now);
     }
 
     private boolean verifySignature(SignedJWT jwt, JWSAlgorithm alg, JWK key) {
@@ -152,6 +163,7 @@ public class NimbusClientAssertionVerifier implements ClientAssertionVerifierPor
         List<JWK> candidates = keys.stream()
                 .filter(k -> kid == null || kid.equals(k.getKeyID()))
                 .filter(k -> k.getKeyUse() == null || KeyUse.SIGNATURE.equals(k.getKeyUse()))
+                .filter(k -> k.getKeyOperations() == null || k.getKeyOperations().contains(KeyOperation.VERIFY))
                 .filter(k -> k.getAlgorithm() == null || alg.equals(k.getAlgorithm()))
                 .filter(k -> fits(k, alg))
                 .toList();
@@ -162,7 +174,7 @@ public class NimbusClientAssertionVerifier implements ClientAssertionVerifierPor
         if (JWSAlgorithm.Family.EC.contains(alg)) {
             return key instanceof ECKey ec && Curve.forJWSAlgorithm(alg).contains(ec.getCurve());
         }
-        return key instanceof RSAKey rsa && rsa.size() >= MIN_RSA_BITS;
+        return key instanceof RSAKey rsa && rsa.size() >= MIN_RSA_BITS && rsa.size() <= MAX_RSA_BITS;
     }
 
     private boolean claimsHold(JWTClaimsSet claims, AssertionTrust trust, Instant now) {
@@ -172,7 +184,7 @@ public class NimbusClientAssertionVerifier implements ClientAssertionVerifierPor
         Date nbf = claims.getNotBeforeTime();
         String jti = claims.getJWTID();
         if (!trust.issuer().equals(claims.getIssuer()) || !trust.subject().equals(claims.getSubject())
-                || aud.size() != 1 || !audiences.contains(aud.get(0))
+                || aud.size() != 1 || !audience.equals(aud.get(0))
                 || exp == null || jti == null || jti.isBlank() || jti.length() > MAX_JTI_LENGTH) {
             return false;
         }
@@ -184,19 +196,5 @@ public class NimbusClientAssertionVerifier implements ClientAssertionVerifierPor
                 && !start.isAfter(latestStart)
                 && (nbf == null || !nbf.toInstant().isAfter(latestStart))
                 && Duration.between(start, expiry).compareTo(maxLifetime) <= 0;
-    }
-
-    private boolean firstUse(SpentJti jti, Date expiry, Instant now) {
-        if (insertsSinceSweep.incrementAndGet() >= SWEEP_INTERVAL || spent.size() >= maxSpent) {
-            insertsSinceSweep.set(0L);
-            spent.values().removeIf(until -> until.isBefore(now));
-        }
-        if (spent.size() >= maxSpent) {
-            return false;
-        }
-        return spent.putIfAbsent(jti, expiry.toInstant().plus(skew)) == null;
-    }
-
-    private record SpentJti(RealmKey realm, String issuer, String jti) {
     }
 }
