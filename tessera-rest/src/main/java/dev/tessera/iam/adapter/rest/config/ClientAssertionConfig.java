@@ -21,8 +21,17 @@ public interface ClientAssertionConfig {
     Duration clockSkew();
 
     /**
-     * How many spent {@code jti}s this instance remembers. When that many live ones are held, a
-     * new assertion is refused rather than accepted without replay protection.
+     * How many live spent {@code jti}s this instance remembers for one client. A client at the cap
+     * has its own new assertions refused, never another client's. The default allows a sustained
+     * three assertions a second for the default maximum lifetime.
+     */
+    @WithDefault("1000")
+    int replayCacheMaxEntriesPerClient();
+
+    /**
+     * How many live spent {@code jti}s this instance remembers in total: a backstop well above what
+     * the per-client caps add up to in practice. When it is reached, a new assertion is refused
+     * rather than accepted without replay protection.
      */
     @WithDefault("100000")
     int replayCacheMaxEntries();
