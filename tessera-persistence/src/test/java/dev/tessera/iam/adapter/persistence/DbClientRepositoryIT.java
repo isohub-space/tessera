@@ -62,6 +62,11 @@ class DbClientRepositoryIT {
     @Inject
     ClientKeySourcePort keySource;
 
+    private static final String PUBLIC_KEY =
+            "{\"kty\":\"EC\",\"crv\":\"P-256\",\"x\":\"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU\","
+                    + "\"y\":\"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0\"}";
+    private static final String JWKS = "{\"keys\":[" + PUBLIC_KEY + "]}";
+
     private static Uni<String> setScope(Mutiny.Session session, UUID tenantId) {
         return session
                 .createNativeQuery("select set_config('app.tenant_id', :tid, true)", String.class)
@@ -196,13 +201,13 @@ class DbClientRepositoryIT {
         UUID secretId = UUID.randomUUID();
         OAuthClientEntity keyed = confidential(tenant, keyedId, "keyed-app", null);
         keyed.authMethod = "PRIVATE_KEY_JWT";
-        keyed.jwks = "{\"keys\":[]}";
+        keyed.jwks = JWKS;
 
         asserter.execute(() -> scoped(tenant, s -> s.persist(keyed).call(s::flush)));
         asserter.execute(() -> scoped(tenant, s ->
                 s.persist(confidential(tenant, secretId, "secret-app", "hash")).call(s::flush)));
         asserter.assertEquals(() -> keySource.trustFor(realm(tenant), new ClientId(keyedId)),
-                new AssertionTrust("keyed-app", "keyed-app", "{\"keys\":[]}"));
+                new AssertionTrust("keyed-app", "keyed-app", JWKS));
         asserter.assertThat(() -> keySource.trustFor(realm(tenant), new ClientId(secretId)),
                 trust -> Assertions.assertThat(trust).isNull());
         asserter.assertThat(() -> keySource.trustFor(realm(UUID.randomUUID()), new ClientId(keyedId)),
@@ -216,14 +221,36 @@ class DbClientRepositoryIT {
         UUID tenant = UUID.randomUUID();
         OAuthClientEntity keyedWithSecret = confidential(tenant, UUID.randomUUID(), "keyed-with-secret", "hash");
         keyedWithSecret.authMethod = "PRIVATE_KEY_JWT";
-        keyedWithSecret.jwks = "{\"keys\":[]}";
+        keyedWithSecret.jwks = JWKS;
         OAuthClientEntity secretWithKeys = confidential(tenant, UUID.randomUUID(), "secret-with-keys", "hash");
-        secretWithKeys.jwks = "{\"keys\":[]}";
+        secretWithKeys.jwks = JWKS;
 
         asserter.assertFailedWith(() -> scoped(tenant, s -> s.persist(keyedWithSecret).call(s::flush)),
                 failure -> Assertions.assertThat(failure).hasStackTraceContaining("ck_oauth_client_key_auth_has_no_secret"));
         asserter.assertFailedWith(() -> scoped(tenant, s -> s.persist(secretWithKeys).call(s::flush)),
                 failure -> Assertions.assertThat(failure).hasStackTraceContaining("ck_oauth_client_jwks_only_for_key_auth"));
+    }
+
+    @Test
+    @RunOnVertxContext
+    @DisplayName("a JWKS with private material, too many keys, no keys or over 16 KiB is refused")
+    void onlyABoundedPublicKeySetIsRegistrable(UniAsserter asserter) {
+        UUID tenant = UUID.randomUUID();
+        String privateKey = PUBLIC_KEY.replace("}", ",\"d\":\"jpsQnnGQmL-YBIffH1136cspYG6-0iY7X1fCE9-E9LI\"}");
+        List<String> refused = List.of(
+                "{\"keys\":[" + privateKey + "]}",
+                "{\"keys\":[" + String.join(",", java.util.Collections.nCopies(11, PUBLIC_KEY)) + "]}",
+                "{\"keys\":[]}",
+                "[" + PUBLIC_KEY + "]",
+                "{\"keys\":[" + PUBLIC_KEY + "],\"padding\":\"" + "x".repeat(16384) + "\"}");
+        for (String jwks : refused) {
+            OAuthClientEntity keyed = confidential(tenant, UUID.randomUUID(), "keyed-" + refused.indexOf(jwks), null);
+            keyed.authMethod = "PRIVATE_KEY_JWT";
+            keyed.jwks = jwks;
+            asserter.assertFailedWith(() -> scoped(tenant, s -> s.persist(keyed).call(s::flush)),
+                    failure -> Assertions.assertThat(failure)
+                            .hasStackTraceContaining("ck_oauth_client_jwks_public_and_bounded"));
+        }
     }
 
     @Test
