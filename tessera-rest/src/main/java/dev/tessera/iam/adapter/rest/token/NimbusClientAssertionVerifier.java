@@ -23,6 +23,7 @@ import dev.tessera.iam.application.port.out.ClientAssertionVerifierPort;
 import dev.tessera.iam.application.port.out.ClientKeySourcePort.AssertionTrust;
 import dev.tessera.iam.domain.oidc.OidcCapabilities;
 import dev.tessera.iam.domain.tenancy.RealmKey;
+import io.quarkus.runtime.Startup;
 import io.smallrye.mutiny.Uni;
 import io.vertx.mutiny.core.Vertx;
 import jakarta.inject.Inject;
@@ -73,7 +74,11 @@ import java.util.stream.Collectors;
  * credential throttles. With several instances, a captured assertion could be replayed once on
  * each other instance within its lifetime, which the maximum lifetime bounds; a shared-cache store
  * with the same contract closes that.
+ *
+ * <p>The settings are checked at startup ({@link Startup}), so a deployment whose replay caps do
+ * not nest fails to boot instead of refusing its first assertion.
  */
+@Startup
 @Singleton
 public class NimbusClientAssertionVerifier implements ClientAssertionVerifierPort {
 

@@ -2,6 +2,7 @@
 package dev.tessera.iam.adapter.rest.token;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSHeader;
@@ -124,6 +125,25 @@ class NimbusClientAssertionVerifierTest {
 
     private String signedBy(String clientId) {
         return client.sign(AssertionTestClient.claims(clientId, ISSUER, NOW).build());
+    }
+
+    @Test
+    @DisplayName("replay caps that do not nest are refused when the verifier is built at startup")
+    void invalidReplayCapsFailAtStartup() {
+        assertThat(NimbusClientAssertionVerifier.class).hasAnnotation(io.quarkus.runtime.Startup.class);
+        int[][] invalid = {
+                {0, 10, 100},   // per-client cap of zero
+                {1, 0, 100},    // per-realm cap of zero
+                {20, 10, 100},  // per-client above per-realm
+                {1, 200, 100},  // per-realm above the total
+                {1, 10, 0},     // total of zero
+        };
+        for (int[] caps : invalid) {
+            assertThatThrownBy(() -> verifier(caps[0], caps[1], caps[2]))
+                    .as(java.util.Arrays.toString(caps))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("replay-cache-max-entries-per-realm");
+        }
     }
 
     @Test
