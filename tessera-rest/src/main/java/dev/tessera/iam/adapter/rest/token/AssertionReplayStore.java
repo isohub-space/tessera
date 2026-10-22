@@ -32,7 +32,10 @@ final class AssertionReplayStore {
 
     AssertionReplayStore(int maxPerClient, int maxPerRealm, int maxTotal) {
         if (maxPerClient < 1 || maxPerRealm < maxPerClient || maxTotal < maxPerRealm) {
-            throw new IllegalArgumentException("need 1 <= maxPerClient <= maxPerRealm <= maxTotal");
+            throw new IllegalArgumentException("iam.client-assertion replay caps must satisfy 1 <= "
+                    + "replay-cache-max-entries-per-client (" + maxPerClient + ") <= "
+                    + "replay-cache-max-entries-per-realm (" + maxPerRealm + ") <= "
+                    + "replay-cache-max-entries (" + maxTotal + ")");
         }
         this.maxPerClient = maxPerClient;
         this.maxPerRealm = maxPerRealm;
