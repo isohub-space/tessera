@@ -52,6 +52,12 @@ public record OidcCapabilities(
     }
 
     /**
+     * The JWS algorithms a {@code private_key_jwt} client assertion (RFC 7523) may be signed with:
+     * asymmetric only, so neither {@code none} nor an HMAC keyed with a public key can verify.
+     */
+    public static final List<String> CLIENT_ASSERTION_SIGNING_ALGS = List.of("ES256", "PS256", "RS256");
+
+    /**
      * The enforced capability set for the baseline ("Starter") tier. This is the exact,
      * deliberately narrow surface the server stands behind:
      *
