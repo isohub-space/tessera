@@ -8,9 +8,12 @@ import com.nimbusds.jose.jwk.Curve;
 import com.nimbusds.jose.jwk.ECKey;
 import com.nimbusds.jose.jwk.JWKSet;
 import com.nimbusds.jose.jwk.gen.ECKeyGenerator;
-import java.io.ByteArrayInputStream;
+import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
@@ -61,8 +64,7 @@ class TrustedIssuerJwksTest {
     }
 
     private static TrustedIssuerJwks.Transport.Response ok(String body) {
-        return new TrustedIssuerJwks.Transport.Response(200,
-                new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8)));
+        return new TrustedIssuerJwks.Transport.Response(200, body.getBytes(StandardCharsets.UTF_8));
     }
 
     private void advance(Duration by) {
@@ -120,7 +122,9 @@ class TrustedIssuerJwksTest {
     @DisplayName("private, loopback and link-local targets are refused without a request")
     void nonPublicTargetsAreRefused() {
         for (String target : new String[] {"127.0.0.1", "10.0.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1",
-                "::1", "fd00::1", "fe80::1", "0.0.0.0"}) {
+                "::1", "fd00::1", "fe80::1", "0.0.0.0", "0.0.0.1", "192.0.0.192", "198.18.0.1", "240.0.0.1",
+                "255.255.255.255", "64:ff9b::a9fe:a9fe", "64:ff9b::a00:1", "64:ff9b:1::1", "::127.0.0.1",
+                "::a9fe:a9fe", "2002:7f00:1::1"}) {
             addresses = new InetAddress[] {address("203.0.113.7"), address(target)};
             TrustedIssuerJwks fresh = new TrustedIssuerJwks(null, clock, Map.of(ISSUER, JWKS_URI), TTL,
                     MIN_REFRESH, uri -> {
@@ -130,13 +134,55 @@ class TrustedIssuerJwksTest {
             assertThat(fresh.jwksNow(ISSUER, false)).as(target).isNull();
         }
         assertThat(fetches).hasValue(0);
+        for (String target : new String[] {"203.0.113.7", "2606:4700::1111", "64:ff9b::cb00:7107", "2002:cb00:7107::1"}) {
+            assertThat(TrustedIssuerJwks.isPublic(address(target))).as(target).isTrue();
+        }
+    }
+
+    @Test
+    @DisplayName("one deadline covers the whole exchange: a server that trickles its body is cut off")
+    void slowDripIsCutOffAtTheDeadline() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
+        server.createContext("/drip", exchange -> {
+            exchange.sendResponseHeaders(200, 0);
+            try (OutputStream body = exchange.getResponseBody()) {
+                for (int i = 0; i < 40; i++) {
+                    body.write('{');
+                    body.flush();
+                    Thread.sleep(200);
+                }
+            } catch (IOException | InterruptedException clientGone) {
+                // The client gave up, as it should.
+            }
+        });
+        server.createContext("/large", exchange -> {
+            byte[] large = new byte[TrustedIssuerJwks.MAX_BYTES + 1];
+            exchange.sendResponseHeaders(200, large.length);
+            try (OutputStream body = exchange.getResponseBody()) {
+                body.write(large);
+            } catch (IOException clientGone) {
+                // The client stopped reading at the limit.
+            }
+        });
+        server.start();
+        try {
+            String base = "http://127.0.0.1:" + server.getAddress().getPort();
+            TrustedIssuerJwks.Transport transport = TrustedIssuerJwks.https(Duration.ofSeconds(1));
+            long started = System.nanoTime();
+            assertThatThrownBy(() -> transport.get(URI.create(base + "/drip")))
+                    .isInstanceOf(java.util.concurrent.TimeoutException.class);
+            assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(3));
+            assertThatThrownBy(() -> transport.get(URI.create(base + "/large"))).isNotNull();
+        } finally {
+            server.stop(0);
+        }
     }
 
     @Test
     @DisplayName("a non-200 answer, an oversized body, private or symmetric keys and malformed JSON are refused")
     void badKeySetsAreRefused() {
         Map<String, Supplier<TrustedIssuerJwks.Transport.Response>> bad = Map.of(
-                "redirect", () -> new TrustedIssuerJwks.Transport.Response(302, new ByteArrayInputStream(new byte[0])),
+                "redirect", () -> new TrustedIssuerJwks.Transport.Response(302, new byte[0]),
                 "oversized", () -> ok("{\"keys\":[],\"pad\":\"" + "x".repeat(TrustedIssuerJwks.MAX_BYTES) + "\"}"),
                 "private key", () -> ok(new JWKSet(key).toString(false)),
                 "symmetric key", () -> ok("{\"keys\":[{\"kty\":\"oct\",\"k\":\"c2VjcmV0c2VjcmV0c2VjcmV0c2VjcmV0\"}]}"),
@@ -162,6 +208,11 @@ class TrustedIssuerJwksTest {
                     .as(config.toString())
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("iam.client-assertion.trusted-issuers");
+        }
+        for (Duration refresh : new Duration[] {Duration.ZERO, Duration.ofSeconds(4), TTL}) {
+            assertThatThrownBy(() -> new TrustedIssuerJwks(null, clock, Map.of(), TTL, refresh, null, null))
+                    .as(refresh.toString())
+                    .hasMessageContaining("jwks-min-refresh-interval");
         }
     }
 }
