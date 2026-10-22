@@ -58,7 +58,8 @@ public interface ClientAssertionConfig {
 
     /**
      * The shortest interval between two fetches of one issuer's key set, so an assertion naming an
-     * unknown {@code kid}, or an unreachable issuer, cannot make tessera fetch on every request.
+     * unknown {@code kid}, or an unreachable issuer, cannot make tessera fetch on every request. At
+     * least {@code PT5S} and shorter than {@link #jwksCacheTtl()}, or the server refuses to start.
      */
     @WithDefault("PT30S")
     Duration jwksMinRefreshInterval();
