@@ -1,5 +1,6 @@
 package dev.tessera.iam.adapter.rest.dto;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import dev.tessera.iam.domain.oidc.DiscoveryDocument;
 import java.util.List;
@@ -25,6 +26,8 @@ import org.eclipse.microprofile.openapi.annotations.media.Schema;
  * @param codeChallengeMethodsSupported     offered PKCE code-challenge methods
  * @param tokenEndpointAuthMethodsSupported client authentication methods at the token
  *                                          endpoint
+ * @param tokenEndpointAuthSigningAlgValuesSupported algorithms accepted for a client assertion;
+ *                                          omitted when no assertion method is offered
  * @param scopesSupported                   offered OAuth2 scopes
  * @param dpopSigningAlgValuesSupported     algorithms accepted for DPoP proofs
  * @param tlsClientCertificateBoundAccessTokens whether access tokens are certificate-bound
@@ -43,6 +46,9 @@ public record DiscoveryDto(
         @JsonProperty("code_challenge_methods_supported") List<String> codeChallengeMethodsSupported,
         @JsonProperty("token_endpoint_auth_methods_supported")
                 List<String> tokenEndpointAuthMethodsSupported,
+        @JsonProperty("token_endpoint_auth_signing_alg_values_supported")
+        @JsonInclude(JsonInclude.Include.NON_EMPTY)
+                List<String> tokenEndpointAuthSigningAlgValuesSupported,
         @JsonProperty("scopes_supported") List<String> scopesSupported,
         @JsonProperty("dpop_signing_alg_values_supported") List<String> dpopSigningAlgValuesSupported,
         @JsonProperty("tls_client_certificate_bound_access_tokens")
@@ -61,6 +67,7 @@ public record DiscoveryDto(
                 doc.idTokenSigningAlgValuesSupported(),
                 doc.codeChallengeMethodsSupported(),
                 doc.tokenEndpointAuthMethodsSupported(),
+                doc.tokenEndpointAuthSigningAlgValuesSupported(),
                 doc.scopesSupported(),
                 doc.dpopSigningAlgValuesSupported(),
                 doc.tlsClientCertificateBoundAccessTokens());

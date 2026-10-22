@@ -5,6 +5,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import dev.tessera.iam.application.port.in.ClientCredentialsUseCase.ClientCredentialsCommand;
 import dev.tessera.iam.application.port.in.TokenUseCase.TokenResult;
 import dev.tessera.iam.application.port.out.ClaimSourcePort;
+import dev.tessera.iam.application.port.out.ClientAssertionVerifierPort;
+import dev.tessera.iam.application.port.out.ClientKeySourcePort;
+import dev.tessera.iam.application.port.out.ClientKeySourcePort.AssertionTrust;
 import dev.tessera.iam.application.port.out.ClientRepositoryPort;
 import dev.tessera.iam.application.port.out.ClientSecretVerifierPort;
 import dev.tessera.iam.application.port.out.OpaqueIdentifierPort;
@@ -29,6 +32,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -53,6 +57,11 @@ class ClientCredentialsServiceTest {
 
     private final AtomicReference<ClaimSet> signed = new AtomicReference<>();
     private final AtomicInteger verifierCalls = new AtomicInteger();
+    private static final ClientId KEYED = new ClientId(UUID.randomUUID());
+    private static final String GOOD_ASSERTION = "a-valid-assertion";
+    /** Each key-source lookup, and the trust each assertion verification ran with. */
+    private final List<ClientId> keyLookups = new ArrayList<>();
+    private final List<AssertionTrust> assertionChecks = new ArrayList<>();
 
     /** Every client lives in tenant A only: the registry is realm-scoped like the real one. */
     private Map<String, Client> clientsOfTenantA() {
@@ -66,7 +75,9 @@ class ClientCredentialsServiceTest {
                 "mtls-auth", confidential("mtls-auth", CC, Set.of("orders.read"), AUDIENCES, ClientAuthMethod.MTLS),
                 "spa", new PublicClient(new ClientId(UUID.randomUUID()), TENANT_A, CC, Set.of()),
                 "profile-service", confidential("profile-service", CC, Set.of("profile"), AUDIENCES,
-                        ClientAuthMethod.CLIENT_SECRET));
+                        ClientAuthMethod.CLIENT_SECRET),
+                "keyed", new ConfidentialClient(KEYED, TENANT_A, CC, ClientAuthMethod.PRIVATE_KEY_JWT, Set.of(),
+                        Set.of("orders.read"), AUDIENCES, List.of()));
     }
 
     private static ConfidentialClient confidential(
@@ -116,7 +127,17 @@ class ClientCredentialsServiceTest {
                 return UUID.randomUUID();
             }
         };
-        return new ClientCredentialsService(clients, secrets, claimSource, signer, ids,
+        // Like the key source and the JOSE verifier: only the keyed client has a trust, and only the
+        // valid assertion verifies against it.
+        ClientKeySourcePort keys = (realm, id) -> {
+            keyLookups.add(id);
+            return Uni.createFrom().item(KEYED.equals(id) ? new AssertionTrust("keyed", "keyed", "{\"keys\":[]}") : null);
+        };
+        ClientAssertionVerifierPort assertions = (realm, trust, assertion) -> {
+            assertionChecks.add(trust);
+            return Uni.createFrom().item(trust != null && GOOD_ASSERTION.equals(assertion));
+        };
+        return new ClientCredentialsService(clients, secrets, keys, assertions, claimSource, signer, ids,
                 Clock.fixed(NOW, ZoneOffset.UTC), ISSUER, TTL, requireSenderConstraint);
     }
 
@@ -245,6 +266,48 @@ class ClientCredentialsServiceTest {
             request.run();
             assertThat(verifierCalls.get()).as(path).isEqualTo(1);
         });
+    }
+
+    private TokenResult issueWithAssertion(String clientId, String assertion) {
+        return service(false)
+                .issue(new ClientCredentialsCommand(TENANT_A, clientId, null, assertion, null, List.of(), null))
+                .await().indefinitely();
+    }
+
+    @Test
+    @DisplayName("a private_key_jwt client authenticates with an assertion and gets a token for itself")
+    void assertionAuthenticatesAKeyedClient() {
+        assertThat(issueWithAssertion("keyed", GOOD_ASSERTION)).isInstanceOf(TokenResult.Issued.class);
+        assertThat(signed.get().claims()).containsEntry("sub", "keyed").containsEntry("client_id", "keyed");
+        assertThat(keyLookups).containsExactly(KEYED);
+        assertThat(verifierCalls).hasValue(0);
+    }
+
+    @Test
+    @DisplayName("method mismatch: a secret client's assertion and a keyed client's secret are invalid_client")
+    void eachClientAuthenticatesOnlyWithItsMethod() {
+        assertFailed(issueWithAssertion("service", GOOD_ASSERTION), AuthorizationError.INVALID_CLIENT);
+        assertFailed(issue("keyed", SECRET, null, List.of()), AuthorizationError.INVALID_CLIENT);
+        assertThat(signed.get()).isNull();
+    }
+
+    @Test
+    @DisplayName("the key source and the assertion verifier run once on every outcome, with no trust unless keyed")
+    void assertionPathRunsTheSameStepsOnEveryOutcome() {
+        Map<String, String> clientsAndAssertions = new java.util.LinkedHashMap<>();
+        clientsAndAssertions.put("nobody", GOOD_ASSERTION);
+        clientsAndAssertions.put("spa", GOOD_ASSERTION);
+        clientsAndAssertions.put("service", GOOD_ASSERTION);
+        clientsAndAssertions.put("keyed", "a-bad-assertion");
+        clientsAndAssertions.forEach((client, assertion) -> {
+            keyLookups.clear();
+            assertionChecks.clear();
+            assertFailed(issueWithAssertion(client, assertion), AuthorizationError.INVALID_CLIENT);
+            assertThat(keyLookups).as(client).hasSize(1);
+            assertThat(assertionChecks).as(client).hasSize(1);
+            assertThat(assertionChecks.get(0) == null).as(client).isEqualTo(!"keyed".equals(client));
+        });
+        assertThat(keyLookups.get(0)).isEqualTo(KEYED);
     }
 
     @Test

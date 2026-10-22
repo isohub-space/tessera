@@ -25,6 +25,8 @@ public interface ClientCredentialsUseCase {
      * @param realm          the realm the request runs within (never {@code null})
      * @param clientId       the wire {@code client_id} (never {@code null} or blank)
      * @param clientSecret   the presented client secret, or {@code null}
+     * @param clientAssertion the presented JWT client assertion (RFC 7523 §2.2), or {@code null};
+     *                       when present the client authenticates with it, never with a secret
      * @param scope          the requested {@code scope}, space-delimited, or {@code null} for the
      *                       client's registered scopes
      * @param resources      the RFC 8707 {@code resource} indicators, empty for the client's
@@ -36,9 +38,16 @@ public interface ClientCredentialsUseCase {
             RealmKey realm,
             String clientId,
             String clientSecret,
+            String clientAssertion,
             String scope,
             List<String> resources,
             String certThumbprint) {
+
+        /** A request authenticated by a client secret. */
+        public ClientCredentialsCommand(RealmKey realm, String clientId, String clientSecret, String scope,
+                List<String> resources, String certThumbprint) {
+            this(realm, clientId, clientSecret, null, scope, resources, certThumbprint);
+        }
 
         public ClientCredentialsCommand {
             if (realm == null) {
@@ -46,6 +55,9 @@ public interface ClientCredentialsUseCase {
             }
             if (clientId == null || clientId.isBlank()) {
                 throw new IllegalArgumentException("ClientCredentialsCommand clientId must not be blank");
+            }
+            if (clientSecret != null && clientAssertion != null) {
+                throw new IllegalArgumentException("ClientCredentialsCommand takes one client credential");
             }
             resources = resources == null ? List.of() : List.copyOf(resources);
         }

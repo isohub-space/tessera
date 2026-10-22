@@ -22,6 +22,8 @@ import dev.tessera.iam.application.port.in.SessionUseCase;
 import dev.tessera.iam.application.port.in.TokenUseCase;
 import dev.tessera.iam.application.port.out.AccessTokenIntrospectorPort;
 import dev.tessera.iam.application.port.out.AuthorizationCodeStorePort;
+import dev.tessera.iam.application.port.out.ClientAssertionVerifierPort;
+import dev.tessera.iam.application.port.out.ClientKeySourcePort;
 import dev.tessera.iam.application.port.out.ClientRepositoryPort;
 import dev.tessera.iam.application.port.out.ClientSecretVerifierPort;
 import dev.tessera.iam.application.port.out.ConsentStorePort;
@@ -166,6 +168,8 @@ public class UseCaseProducer {
     ClientCredentialsUseCase clientCredentialsUseCase(
             ClientRepositoryPort clients,
             ClientSecretVerifierPort secretVerifier,
+            ClientKeySourcePort keySource,
+            ClientAssertionVerifierPort assertionVerifier,
             TokenSignerPort signer,
             OpaqueIdentifierPort identifiers,
             Clock clock,
@@ -175,6 +179,8 @@ public class UseCaseProducer {
         return new ClientCredentialsService(
                 clients,
                 secretVerifier,
+                keySource,
+                assertionVerifier,
                 new RegisteredClientClaimSource(clients),
                 signer,
                 identifiers,
