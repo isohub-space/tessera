@@ -6,7 +6,6 @@ import com.password4j.types.Argon2;
 import dev.tessera.iam.adapter.persistence.entity.ClientType;
 import dev.tessera.iam.adapter.persistence.entity.OAuthClientEntity;
 import dev.tessera.iam.application.port.out.ClientKeySourcePort;
-import dev.tessera.iam.application.port.out.ClientKeySourcePort.AssertionTrust;
 import dev.tessera.iam.application.port.out.ClientRepositoryPort;
 import dev.tessera.iam.application.port.out.ClientSecretVerifierPort;
 import dev.tessera.iam.domain.client.ClientId;
@@ -206,8 +205,11 @@ class DbClientRepositoryIT {
         asserter.execute(() -> scoped(tenant, s -> s.persist(keyed).call(s::flush)));
         asserter.execute(() -> scoped(tenant, s ->
                 s.persist(confidential(tenant, secretId, "secret-app", "hash")).call(s::flush)));
-        asserter.assertEquals(() -> keySource.trustFor(realm(tenant), new ClientId(keyedId)),
-                new AssertionTrust("keyed-app", "keyed-app", JWKS));
+        asserter.assertThat(() -> keySource.trustFor(realm(tenant), new ClientId(keyedId)), trust -> {
+            Assertions.assertThat(trust.issuer()).isEqualTo("keyed-app");
+            Assertions.assertThat(trust.subject()).isEqualTo("keyed-app");
+            Assertions.assertThat(trust.jwks().replace(" ", "")).contains("\"x\":\"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU\"");
+        });
         asserter.assertThat(() -> keySource.trustFor(realm(tenant), new ClientId(secretId)),
                 trust -> Assertions.assertThat(trust).isNull());
         asserter.assertThat(() -> keySource.trustFor(realm(UUID.randomUUID()), new ClientId(keyedId)),
@@ -233,7 +235,7 @@ class DbClientRepositoryIT {
 
     @Test
     @RunOnVertxContext
-    @DisplayName("a JWKS with private material, too many keys, no keys or over 16 KiB is refused")
+    @DisplayName("a JWKS with private material, too many keys, no keys, a repeated keys member or over 16 KiB is refused")
     void onlyABoundedPublicKeySetIsRegistrable(UniAsserter asserter) {
         UUID tenant = UUID.randomUUID();
         String privateKey = PUBLIC_KEY.replace("}", ",\"d\":\"jpsQnnGQmL-YBIffH1136cspYG6-0iY7X1fCE9-E9LI\"}");
@@ -241,7 +243,7 @@ class DbClientRepositoryIT {
                 "{\"keys\":[" + privateKey + "]}",
                 "{\"keys\":[" + String.join(",", java.util.Collections.nCopies(11, PUBLIC_KEY)) + "]}",
                 "{\"keys\":[]}",
-                "[" + PUBLIC_KEY + "]",
+                "{\"keys\":[" + PUBLIC_KEY + "],\"keys\":[" + privateKey + "]}",
                 "{\"keys\":[" + PUBLIC_KEY + "],\"padding\":\"" + "x".repeat(16384) + "\"}");
         for (String jwks : refused) {
             OAuthClientEntity keyed = confidential(tenant, UUID.randomUUID(), "keyed-" + refused.indexOf(jwks), null);
@@ -251,6 +253,22 @@ class DbClientRepositoryIT {
                     failure -> Assertions.assertThat(failure)
                             .hasStackTraceContaining("ck_oauth_client_jwks_public_and_bounded"));
         }
+
+        // A bare array is not a JWK Set; the jsonb mapping refuses it before the database does.
+        OAuthClientEntity array = confidential(tenant, UUID.randomUUID(), "keyed-array", null);
+        array.authMethod = "PRIVATE_KEY_JWT";
+        array.jwks = "[" + PUBLIC_KEY + "]";
+        asserter.assertFailedWith(() -> scoped(tenant, s -> s.persist(array).call(s::flush)),
+                failure -> Assertions.assertThat(failure).isNotNull());
+
+        // A repeated keys member collapses to its last copy before the check, and only that is stored.
+        UUID collapsedId = UUID.randomUUID();
+        OAuthClientEntity collapsed = confidential(tenant, collapsedId, "keyed-collapsed", null);
+        collapsed.authMethod = "PRIVATE_KEY_JWT";
+        collapsed.jwks = "{\"keys\":[" + privateKey + "],\"keys\":[" + PUBLIC_KEY + "]}";
+        asserter.execute(() -> scoped(tenant, s -> s.persist(collapsed).call(s::flush)));
+        asserter.assertThat(() -> keySource.trustFor(realm(tenant), new ClientId(collapsedId)),
+                trust -> Assertions.assertThat(trust.jwks()).doesNotContain("\"d\""));
     }
 
     @Test
