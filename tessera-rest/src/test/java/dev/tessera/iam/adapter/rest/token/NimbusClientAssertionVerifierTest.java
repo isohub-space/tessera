@@ -39,11 +39,11 @@ class NimbusClientAssertionVerifierTest {
 
     private final AssertionTestClient client = new AssertionTestClient();
     private final AssertionTrust trust = new AssertionTrust(CLIENT, CLIENT, client.jwks());
-    private final NimbusClientAssertionVerifier verifier = verifier(1000, 1000);
+    private final NimbusClientAssertionVerifier verifier = verifier(1000, 1000, 1000);
 
-    private static NimbusClientAssertionVerifier verifier(int maxPerClient, int maxTotal) {
+    private static NimbusClientAssertionVerifier verifier(int maxPerClient, int maxPerRealm, int maxTotal) {
         return new NimbusClientAssertionVerifier(null, null, ISSUER, Duration.ofMinutes(5), Duration.ofSeconds(30),
-                new AssertionReplayStore(maxPerClient, maxTotal));
+                new AssertionReplayStore(maxPerClient, maxPerRealm, maxTotal));
     }
 
     private boolean verify(String assertion) {
@@ -91,7 +91,7 @@ class NimbusClientAssertionVerifierTest {
     @Test
     @DisplayName("a client at its jti cap refuses only itself, never another tenant's client")
     void replayCapIsPerClient() {
-        NimbusClientAssertionVerifier capped = verifier(2, 100);
+        NimbusClientAssertionVerifier capped = verifier(2, 100, 100);
         RealmKey otherTenant = new RealmKey(TenantId.generate(), BaselineId.generate());
         assertThat(capped.verifyNow(REALM, trust, signed(c -> c), NOW)).isTrue();
         assertThat(capped.verifyNow(REALM, trust, signed(c -> c), NOW)).isTrue();
@@ -101,6 +101,29 @@ class NimbusClientAssertionVerifierTest {
         assertThat(capped.verifyNow(REALM, trust,
                 client.sign(AssertionTestClient.claims(CLIENT, ISSUER, later).build()), later))
                 .as("after its entries expire").isTrue();
+    }
+
+    @Test
+    @DisplayName("a realm at its jti cap across many clients refuses only itself, never another realm's client")
+    void replayCapIsPerRealm() {
+        NimbusClientAssertionVerifier capped = verifier(2, 4, 100);
+        RealmKey otherRealm = new RealmKey(TenantId.generate(), BaselineId.generate());
+        for (int i = 0; i < 4; i++) {
+            String clientId = "client-" + (i / 2);
+            assertThat(capped.verifyNow(REALM, trustFor(clientId), signedBy(clientId), NOW)).as("fill " + i).isTrue();
+        }
+        assertThat(capped.verifyNow(REALM, trustFor("client-9"), signedBy("client-9"), NOW))
+                .as("a fresh client of the full realm").isFalse();
+        assertThat(capped.verifyNow(otherRealm, trustFor("client-9"), signedBy("client-9"), NOW))
+                .as("a client of another realm").isTrue();
+    }
+
+    private AssertionTrust trustFor(String clientId) {
+        return new AssertionTrust(clientId, clientId, client.jwks());
+    }
+
+    private String signedBy(String clientId) {
+        return client.sign(AssertionTestClient.claims(clientId, ISSUER, NOW).build());
     }
 
     @Test
