@@ -51,9 +51,22 @@ class OidcCapabilitiesTest {
         OidcCapabilities caps = OidcCapabilities.enforced();
 
         assertThat(caps.tokenEndpointAuthMethodsSupported())
-                .containsExactly("client_secret_basic", "private_key_jwt", "tls_client_auth");
+                .containsExactly("client_secret_basic", "client_secret_post");
+        assertThat(caps.tokenEndpointAuthSigningAlgValuesSupported()).isEmpty();
         assertThat(caps.subjectTypesSupported()).containsExactly("public");
         assertThat(caps.scopesSupported()).containsExactly("openid", "profile", "email");
         assertThat(caps.tlsClientCertificateBoundAccessTokens()).isTrue();
+    }
+
+    @Test
+    @DisplayName("private_key_jwt is offered with the grant that accepts it, never tls_client_auth")
+    void clientAuthMethodsAreExactlyTheImplementedOnes() {
+        OidcCapabilities caps = OidcCapabilities.enforced(true);
+
+        assertThat(caps.tokenEndpointAuthMethodsSupported())
+                .containsExactly("client_secret_basic", "client_secret_post", "private_key_jwt");
+        assertThat(caps.tokenEndpointAuthSigningAlgValuesSupported())
+                .containsExactly("ES256", "PS256", "RS256")
+                .noneMatch(alg -> alg.startsWith("HS") || alg.equals("none"));
     }
 }

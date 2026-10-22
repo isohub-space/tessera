@@ -22,6 +22,9 @@ import java.util.List;
  * @param codeChallengeMethodsSupported    the PKCE {@code code_challenge_method} values
  * @param tokenEndpointAuthMethodsSupported the client authentication methods offered at
  *                                          the token endpoint
+ * @param tokenEndpointAuthSigningAlgValuesSupported the JWS algorithms accepted for a client
+ *                                          assertion; empty when {@code private_key_jwt} is not
+ *                                          offered
  * @param subjectTypesSupported            the OIDC subject identifier types offered
  * @param idTokenSigningAlgValuesSupported the JWS algorithms used to sign ID Tokens
  * @param dpopSigningAlgValuesSupported    the JWS algorithms accepted for DPoP proofs
@@ -34,6 +37,7 @@ public record OidcCapabilities(
         List<String> grantTypesSupported,
         List<String> codeChallengeMethodsSupported,
         List<String> tokenEndpointAuthMethodsSupported,
+        List<String> tokenEndpointAuthSigningAlgValuesSupported,
         List<String> subjectTypesSupported,
         List<String> idTokenSigningAlgValuesSupported,
         List<String> dpopSigningAlgValuesSupported,
@@ -45,6 +49,7 @@ public record OidcCapabilities(
         grantTypesSupported = List.copyOf(grantTypesSupported);
         codeChallengeMethodsSupported = List.copyOf(codeChallengeMethodsSupported);
         tokenEndpointAuthMethodsSupported = List.copyOf(tokenEndpointAuthMethodsSupported);
+        tokenEndpointAuthSigningAlgValuesSupported = List.copyOf(tokenEndpointAuthSigningAlgValuesSupported);
         subjectTypesSupported = List.copyOf(subjectTypesSupported);
         idTokenSigningAlgValuesSupported = List.copyOf(idTokenSigningAlgValuesSupported);
         dpopSigningAlgValuesSupported = List.copyOf(dpopSigningAlgValuesSupported);
@@ -67,8 +72,9 @@ public record OidcCapabilities(
      *   <li>only {@code authorization_code} and {@code refresh_token} grants;</li>
      *   <li>PKCE is mandatory with {@code S256} only — the {@code plain} method is
      *       rejected;</li>
-     *   <li>client authentication via {@code client_secret_basic},
-     *       {@code private_key_jwt} or mutual-TLS ({@code tls_client_auth});</li>
+     *   <li>client authentication via {@code client_secret_basic} or {@code client_secret_post},
+     *       and {@code private_key_jwt} where the {@code client_credentials} grant is served (the
+     *       one grant that accepts a client assertion);</li>
      *   <li>token signing with asymmetric algorithms only (derived from the signing
      *       algorithm model — symmetric {@code HS*} MACs are unrepresentable and can
      *       never appear here);</li>
@@ -82,8 +88,9 @@ public record OidcCapabilities(
     }
 
     /**
-     * The enforced capability set, with the {@code client_credentials} grant (RFC 6749 §4.4)
-     * advertised exactly when the deployment serves it.
+     * The enforced capability set, with the {@code client_credentials} grant (RFC 6749 §4.4) and
+     * {@code private_key_jwt} client authentication advertised exactly when the deployment serves
+     * the grant.
      *
      * @param clientCredentials whether the token endpoint serves {@code client_credentials}
      * @return the enforced capability set
@@ -97,7 +104,10 @@ public record OidcCapabilities(
                 List.of("code"),
                 grants,
                 List.of("S256"),
-                List.of("client_secret_basic", "private_key_jwt", "tls_client_auth"),
+                clientCredentials
+                        ? List.of("client_secret_basic", "client_secret_post", "private_key_jwt")
+                        : List.of("client_secret_basic", "client_secret_post"),
+                clientCredentials ? CLIENT_ASSERTION_SIGNING_ALGS : List.of(),
                 List.of("public"),
                 asymmetricSigningAlgs,
                 // DPoP proof algorithms accepted at the token endpoint. Narrower than the token

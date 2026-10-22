@@ -23,7 +23,8 @@ import java.util.List;
  * @param codeChallengeMethodsSupported   offered PKCE code-challenge methods
  * @param tokenEndpointAuthMethodsSupported client authentication methods at the token
  *                                          endpoint
- * @param scopesSupported                 offered OAuth2 scopes
+ * @param tokenEndpointAuthSigningAlgValuesSupported algorithms accepted for a client assertion
+ * @param scopesSupported                offered OAuth2 scopes
  * @param dpopSigningAlgValuesSupported   algorithms accepted for DPoP proofs
  * @param tlsClientCertificateBoundAccessTokens whether access tokens are certificate-bound
  */
@@ -38,6 +39,7 @@ public record DiscoveryDocument(
         List<String> idTokenSigningAlgValuesSupported,
         List<String> codeChallengeMethodsSupported,
         List<String> tokenEndpointAuthMethodsSupported,
+        List<String> tokenEndpointAuthSigningAlgValuesSupported,
         List<String> scopesSupported,
         List<String> dpopSigningAlgValuesSupported,
         boolean tlsClientCertificateBoundAccessTokens) {
@@ -52,6 +54,7 @@ public record DiscoveryDocument(
         idTokenSigningAlgValuesSupported = List.copyOf(idTokenSigningAlgValuesSupported);
         codeChallengeMethodsSupported = List.copyOf(codeChallengeMethodsSupported);
         tokenEndpointAuthMethodsSupported = List.copyOf(tokenEndpointAuthMethodsSupported);
+        tokenEndpointAuthSigningAlgValuesSupported = List.copyOf(tokenEndpointAuthSigningAlgValuesSupported);
         scopesSupported = List.copyOf(scopesSupported);
         dpopSigningAlgValuesSupported = List.copyOf(dpopSigningAlgValuesSupported);
     }
@@ -89,6 +92,7 @@ public record DiscoveryDocument(
                 caps.idTokenSigningAlgValuesSupported(),
                 caps.codeChallengeMethodsSupported(),
                 caps.tokenEndpointAuthMethodsSupported(),
+                caps.tokenEndpointAuthSigningAlgValuesSupported(),
                 caps.scopesSupported(),
                 caps.dpopSigningAlgValuesSupported(),
                 caps.tlsClientCertificateBoundAccessTokens());

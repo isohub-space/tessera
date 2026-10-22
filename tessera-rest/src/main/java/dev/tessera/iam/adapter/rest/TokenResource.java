@@ -1,5 +1,6 @@
 package dev.tessera.iam.adapter.rest;
 
+import com.nimbusds.jwt.SignedJWT;
 import io.smallrye.mutiny.Uni;
 import dev.tessera.iam.adapter.rest.config.ClientCredentialsConfig;
 import dev.tessera.iam.adapter.rest.dto.OAuthErrorDto;
@@ -36,8 +37,9 @@ import org.eclipse.microprofile.openapi.annotations.tags.Tag;
  * enabled, the {@code client_credentials} grant (RFC 6749 §4.4).
  *
  * <p>A thin shell over {@link TokenUseCase}: it parses the form-encoded request, supports
- * the client presenting its secret via the body ({@code client_secret}) or HTTP Basic, and
- * renders the use case's outcome:
+ * the client presenting its secret via the body ({@code client_secret}) or HTTP Basic, or, for
+ * the {@code client_credentials} grant, a JWT client assertion (RFC 7523 §2.2), and renders the
+ * use case's outcome:
  * <ul>
  *   <li><strong>success</strong>: a {@code 200} {@link TokenResponseDto} with the signed
  *       RFC 9068 access token (and the ID token for an OIDC request), with the no-store
@@ -61,6 +63,7 @@ public class TokenResource {
     private static final String GRANT_AUTHORIZATION_CODE = "authorization_code";
     private static final String GRANT_REFRESH_TOKEN = "refresh_token";
     private static final String GRANT_CLIENT_CREDENTIALS = "client_credentials";
+    private static final String JWT_BEARER_ASSERTION = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
 
     @Inject
     TokenUseCase token;
@@ -92,6 +95,8 @@ public class TokenResource {
             @FormParam("redirect_uri") String redirectUri,
             @FormParam("client_id") String clientId,
             @FormParam("client_secret") String clientSecret,
+            @FormParam("client_assertion_type") String clientAssertionType,
+            @FormParam("client_assertion") String clientAssertion,
             @FormParam("code_verifier") String codeVerifier,
             @FormParam("refresh_token") String refreshToken,
             @FormParam("scope") String scope,
@@ -105,6 +110,11 @@ public class TokenResource {
         BasicCredentials basic = BasicCredentials.parse(authorization);
         String resolvedClientId = basic != null ? basic.clientId() : clientId;
         String resolvedSecret = basic != null ? basic.clientSecret() : clientSecret;
+        boolean assertionPresented = clientAssertionType != null || clientAssertion != null;
+        if (assertionPresented && !GRANT_CLIENT_CREDENTIALS.equals(grantType)) {
+            return error(Response.Status.UNAUTHORIZED, AuthorizationError.INVALID_CLIENT,
+                    "a client assertion is accepted only for the client_credentials grant");
+        }
 
         if (GRANT_AUTHORIZATION_CODE.equals(grantType)) {
             if (isBlank(resolvedClientId) || isBlank(code) || isBlank(redirectUri)
@@ -134,12 +144,28 @@ public class TokenResource {
         }
 
         if (GRANT_CLIENT_CREDENTIALS.equals(grantType) && clientCredentialsConfig.enabled()) {
+            if (assertionPresented) {
+                // RFC 6749 §2.3: one authentication method per request.
+                if (basic != null || clientSecret != null) {
+                    return error(Response.Status.BAD_REQUEST, AuthorizationError.INVALID_REQUEST,
+                            "use one client authentication method");
+                }
+                if (!JWT_BEARER_ASSERTION.equals(clientAssertionType) || isBlank(clientAssertion)) {
+                    return error(Response.Status.UNAUTHORIZED, AuthorizationError.INVALID_CLIENT,
+                            "client authentication failed");
+                }
+                // client_id is optional with an assertion (RFC 7521 §4.2); its subject names the client.
+                if (isBlank(resolvedClientId)) {
+                    resolvedClientId = unverifiedSubject(clientAssertion);
+                }
+            }
             if (isBlank(resolvedClientId)) {
                 return error(Response.Status.UNAUTHORIZED, AuthorizationError.INVALID_CLIENT,
                         "client authentication is required");
             }
             ClientCredentialsCommand command = new ClientCredentialsCommand(
-                    realm, resolvedClientId, resolvedSecret, scope, resources,
+                    realm, resolvedClientId, resolvedSecret, assertionPresented ? clientAssertion : null, scope,
+                    resources,
                     ClientCertificateThumbprint.fromHeader(clientCertificate).orElse(null));
             return clientCredentials.issue(command).map(TokenResource::render);
         }
@@ -194,6 +220,15 @@ public class TokenResource {
             builder.header("WWW-Authenticate", "DPoP algs=\"ES256\"");
         }
         return builder.build();
+    }
+
+    /** The assertion's {@code sub}, read before verification only to look the client up. */
+    private static String unverifiedSubject(String assertion) {
+        try {
+            return SignedJWT.parse(assertion).getJWTClaimsSet().getSubject();
+        } catch (Exception malformed) {
+            return null;
+        }
     }
 
     private static boolean isBlank(String value) {

@@ -3,6 +3,8 @@ package dev.tessera.iam.application;
 import dev.tessera.iam.application.port.in.ClientCredentialsUseCase;
 import dev.tessera.iam.application.port.in.TokenUseCase.TokenResult;
 import dev.tessera.iam.application.port.out.ClaimSourcePort;
+import dev.tessera.iam.application.port.out.ClientAssertionVerifierPort;
+import dev.tessera.iam.application.port.out.ClientKeySourcePort;
 import dev.tessera.iam.application.port.out.ClientRepositoryPort;
 import dev.tessera.iam.application.port.out.ClientSecretVerifierPort;
 import dev.tessera.iam.application.port.out.OpaqueIdentifierPort;
@@ -31,10 +33,11 @@ import java.util.Set;
  *
  * <p>The checks run in a fixed order, and each refusal is the RFC 6749 §5.2 error for it:
  * <ol>
- *   <li>the client exists in the request's realm, is confidential and authenticates
- *       ({@code invalid_client} otherwise: an unknown client, a public client and a wrong secret
- *       look the same, in the answer and in the time it takes, and a client of another tenant is
- *       invisible under row-level security);</li>
+ *   <li>the client exists in the request's realm, is confidential and authenticates with the
+ *       method it is registered for, a secret or a JWT assertion ({@code invalid_client}
+ *       otherwise: an unknown client, a public client, a wrong secret, a wrong key and a bad
+ *       assertion claim look the same, in the answer and in the time it takes, and a client of
+ *       another tenant is invisible under row-level security);</li>
  *   <li>the client is registered for the grant ({@code unauthorized_client});</li>
  *   <li>every requested scope is registered for it ({@code invalid_scope}); with none requested
  *       it is granted all its registered scopes;</li>
@@ -57,6 +60,8 @@ public final class ClientCredentialsService implements ClientCredentialsUseCase 
 
     private final ClientRepositoryPort clients;
     private final ClientSecretVerifierPort secretVerifier;
+    private final ClientKeySourcePort keySource;
+    private final ClientAssertionVerifierPort assertionVerifier;
     private final ClaimSourcePort claimSource;
     private final TokenSignerPort signer;
     private final OpaqueIdentifierPort identifiers;
@@ -74,6 +79,8 @@ public final class ClientCredentialsService implements ClientCredentialsUseCase 
     public ClientCredentialsService(
             ClientRepositoryPort clients,
             ClientSecretVerifierPort secretVerifier,
+            ClientKeySourcePort keySource,
+            ClientAssertionVerifierPort assertionVerifier,
             ClaimSourcePort claimSource,
             TokenSignerPort signer,
             OpaqueIdentifierPort identifiers,
@@ -83,6 +90,8 @@ public final class ClientCredentialsService implements ClientCredentialsUseCase 
             boolean requireSenderConstraint) {
         this.clients = requireNonNull(clients, "clients");
         this.secretVerifier = requireNonNull(secretVerifier, "secretVerifier");
+        this.keySource = requireNonNull(keySource, "keySource");
+        this.assertionVerifier = requireNonNull(assertionVerifier, "assertionVerifier");
         this.claimSource = requireNonNull(claimSource, "claimSource");
         this.signer = requireNonNull(signer, "signer");
         this.identifiers = requireNonNull(identifiers, "identifiers");
@@ -109,8 +118,12 @@ public final class ClientCredentialsService implements ClientCredentialsUseCase 
                                 : failed(AuthorizationError.INVALID_CLIENT, "client authentication failed")));
     }
 
-    /** Only a confidential client with a valid secret authenticates, at uniform cost. */
+    /** Only a confidential client with a valid credential for its method authenticates, at uniform cost. */
     private Uni<Boolean> authenticate(ClientCredentialsCommand command, Client client) {
+        if (command.clientAssertion() != null) {
+            return ClientAuthentication.authenticateAssertion(keySource, assertionVerifier, command.realm(),
+                    command.clientId(), client, command.clientAssertion());
+        }
         return ClientAuthentication.authenticate(
                 secretVerifier, command.realm(), command.clientId(), client, command.clientSecret(), false);
     }

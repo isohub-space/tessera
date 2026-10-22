@@ -67,6 +67,14 @@ public class OAuthClientEntity extends PanacheEntityBase {
     @Column(name = "secret_hash")
     public String secretHash;
 
+    /**
+     * JWK Set JSON of the public keys a {@code PRIVATE_KEY_JWT} client signs its client assertions
+     * with (RFC 7523); {@code null} for every other client. The database refuses keys on any other
+     * client, and a secret on a {@code PRIVATE_KEY_JWT} client.
+     */
+    @Column(name = "jwks")
+    public String jwks;
+
     /** Comma-separated allowed {@code grant_type} values. */
     @Column(name = "allowed_grants", nullable = false)
     public String allowedGrants;

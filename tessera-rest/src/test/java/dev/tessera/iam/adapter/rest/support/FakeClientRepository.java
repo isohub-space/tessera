@@ -56,6 +56,11 @@ public class FakeClientRepository implements ClientRepositoryPort {
             new LinkedHashSet<>(List.of("https://orders.example", "https://billing.example"));
     public static final List<String> MACHINE_ROLES = List.of("ops", "reader");
 
+    /** A {@code client_credentials} client of {@link #MACHINE_TENANT} that authenticates by {@code private_key_jwt}. */
+    public static final String KEYED_CLIENT_ID = "keyed-service";
+    public static final ClientId KEYED_IDENTITY =
+            new ClientId(UUID.fromString("00000000-0000-0000-0000-0000000000f0"));
+
     /** Stable resolved identity for the confidential client (used by the secret verifier). */
     public static final ClientId CONFIDENTIAL_IDENTITY =
             new ClientId(UUID.fromString("00000000-0000-0000-0000-0000000000c0"));
@@ -92,6 +97,10 @@ public class FakeClientRepository implements ClientRepositoryPort {
             case MACHINE_CLIENT_ID -> MACHINE_TENANT.equals(realm.tenant().value().toString())
                     ? new ConfidentialClient(MACHINE_IDENTITY, realm, ONLY_CLIENT_CREDENTIALS,
                             ClientAuthMethod.CLIENT_SECRET, Set.of(), MACHINE_SCOPES, MACHINE_AUDIENCES, MACHINE_ROLES)
+                    : null;
+            case KEYED_CLIENT_ID -> MACHINE_TENANT.equals(realm.tenant().value().toString())
+                    ? new ConfidentialClient(KEYED_IDENTITY, realm, ONLY_CLIENT_CREDENTIALS,
+                            ClientAuthMethod.PRIVATE_KEY_JWT, Set.of(), MACHINE_SCOPES, MACHINE_AUDIENCES, MACHINE_ROLES)
                     : null;
             default -> null;
         };

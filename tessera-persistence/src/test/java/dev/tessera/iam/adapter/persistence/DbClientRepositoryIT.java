@@ -5,6 +5,8 @@ import com.password4j.Password;
 import com.password4j.types.Argon2;
 import dev.tessera.iam.adapter.persistence.entity.ClientType;
 import dev.tessera.iam.adapter.persistence.entity.OAuthClientEntity;
+import dev.tessera.iam.application.port.out.ClientKeySourcePort;
+import dev.tessera.iam.application.port.out.ClientKeySourcePort.AssertionTrust;
 import dev.tessera.iam.application.port.out.ClientRepositoryPort;
 import dev.tessera.iam.application.port.out.ClientSecretVerifierPort;
 import dev.tessera.iam.domain.client.ClientId;
@@ -56,6 +58,9 @@ class DbClientRepositoryIT {
 
     @Inject
     ClientSecretVerifierPort secretVerifier;
+
+    @Inject
+    ClientKeySourcePort keySource;
 
     private static Uni<String> setScope(Mutiny.Session session, UUID tenantId) {
         return session
@@ -180,6 +185,45 @@ class DbClientRepositoryIT {
         asserter.assertThat(
                 () -> clientRepository.findByClientId(realm(tenant), "http-app"),
                 found -> Assertions.assertThat(found).isNull());
+    }
+
+    @Test
+    @RunOnVertxContext
+    @DisplayName("a private_key_jwt client's keys are its assertion trust; a secret client has none")
+    void keyedClientResolvesItsAssertionTrust(UniAsserter asserter) {
+        UUID tenant = UUID.randomUUID();
+        UUID keyedId = UUID.randomUUID();
+        UUID secretId = UUID.randomUUID();
+        OAuthClientEntity keyed = confidential(tenant, keyedId, "keyed-app", null);
+        keyed.authMethod = "PRIVATE_KEY_JWT";
+        keyed.jwks = "{\"keys\":[]}";
+
+        asserter.execute(() -> scoped(tenant, s -> s.persist(keyed).call(s::flush)));
+        asserter.execute(() -> scoped(tenant, s ->
+                s.persist(confidential(tenant, secretId, "secret-app", "hash")).call(s::flush)));
+        asserter.assertEquals(() -> keySource.trustFor(realm(tenant), new ClientId(keyedId)),
+                new AssertionTrust("keyed-app", "keyed-app", "{\"keys\":[]}"));
+        asserter.assertThat(() -> keySource.trustFor(realm(tenant), new ClientId(secretId)),
+                trust -> Assertions.assertThat(trust).isNull());
+        asserter.assertThat(() -> keySource.trustFor(realm(UUID.randomUUID()), new ClientId(keyedId)),
+                trust -> Assertions.assertThat(trust).isNull());
+    }
+
+    @Test
+    @RunOnVertxContext
+    @DisplayName("a private_key_jwt client with a secret, and keys on a secret client, are refused")
+    void oneAuthenticationMethodPerClient(UniAsserter asserter) {
+        UUID tenant = UUID.randomUUID();
+        OAuthClientEntity keyedWithSecret = confidential(tenant, UUID.randomUUID(), "keyed-with-secret", "hash");
+        keyedWithSecret.authMethod = "PRIVATE_KEY_JWT";
+        keyedWithSecret.jwks = "{\"keys\":[]}";
+        OAuthClientEntity secretWithKeys = confidential(tenant, UUID.randomUUID(), "secret-with-keys", "hash");
+        secretWithKeys.jwks = "{\"keys\":[]}";
+
+        asserter.assertFailedWith(() -> scoped(tenant, s -> s.persist(keyedWithSecret).call(s::flush)),
+                failure -> Assertions.assertThat(failure).hasStackTraceContaining("ck_oauth_client_key_auth_has_no_secret"));
+        asserter.assertFailedWith(() -> scoped(tenant, s -> s.persist(secretWithKeys).call(s::flush)),
+                failure -> Assertions.assertThat(failure).hasStackTraceContaining("ck_oauth_client_jwks_only_for_key_auth"));
     }
 
     @Test

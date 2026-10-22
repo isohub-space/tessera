@@ -59,6 +59,8 @@ class DiscoveryDocumentTest {
                 .isEqualTo(caps.codeChallengeMethodsSupported());
         assertThat(doc.tokenEndpointAuthMethodsSupported())
                 .isEqualTo(caps.tokenEndpointAuthMethodsSupported());
+        assertThat(doc.tokenEndpointAuthSigningAlgValuesSupported())
+                .isEqualTo(caps.tokenEndpointAuthSigningAlgValuesSupported());
         assertThat(doc.subjectTypesSupported()).isEqualTo(caps.subjectTypesSupported());
         assertThat(doc.idTokenSigningAlgValuesSupported())
                 .isEqualTo(caps.idTokenSigningAlgValuesSupported());
