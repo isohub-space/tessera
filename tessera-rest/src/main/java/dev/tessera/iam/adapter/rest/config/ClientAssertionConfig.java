@@ -29,9 +29,16 @@ public interface ClientAssertionConfig {
     int replayCacheMaxEntriesPerClient();
 
     /**
-     * How many live spent {@code jti}s this instance remembers in total: a backstop well above what
-     * the per-client caps add up to in practice. When it is reached, a new assertion is refused
-     * rather than accepted without replay protection.
+     * How many live spent {@code jti}s this instance remembers for one realm, across its clients. A
+     * realm at the cap has its own new assertions refused, never another realm's.
+     */
+    @WithDefault("10000")
+    int replayCacheMaxEntriesPerRealm();
+
+    /**
+     * How many live spent {@code jti}s this instance remembers in total, across realms: it bounds
+     * the memory the store can take. When it is reached, a new assertion is refused rather than
+     * accepted without replay protection.
      */
     @WithDefault("100000")
     int replayCacheMaxEntries();

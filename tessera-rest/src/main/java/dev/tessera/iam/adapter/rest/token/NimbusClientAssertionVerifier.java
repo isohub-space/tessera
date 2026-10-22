@@ -67,7 +67,8 @@ import java.util.stream.Collectors;
  * <p><strong>Replay store, per instance.</strong> A {@code jti} is recorded only once every other
  * check has passed, keyed by realm and issuer, and kept until the assertion expires plus the skew,
  * in an {@link AssertionReplayStore} bounded per client
- * ({@link ClientAssertionConfig#replayCacheMaxEntriesPerClient()}) and in total
+ * ({@link ClientAssertionConfig#replayCacheMaxEntriesPerClient()}), per realm
+ * ({@link ClientAssertionConfig#replayCacheMaxEntriesPerRealm()}) and in total
  * ({@link ClientAssertionConfig#replayCacheMaxEntries()}), like the DPoP proof store and the
  * credential throttles. With several instances, a captured assertion could be replayed once on
  * each other instance within its lifetime, which the maximum lifetime bounds; a shared-cache store
@@ -95,7 +96,8 @@ public class NimbusClientAssertionVerifier implements ClientAssertionVerifierPor
     public NimbusClientAssertionVerifier(Vertx vertx, Clock clock, OidcDiscoveryConfig oidc,
             ClientAssertionConfig config) {
         this(vertx, clock, oidc.issuer(), config.maxLifetime(), config.clockSkew(),
-                new AssertionReplayStore(config.replayCacheMaxEntriesPerClient(), config.replayCacheMaxEntries()));
+                new AssertionReplayStore(config.replayCacheMaxEntriesPerClient(),
+                        config.replayCacheMaxEntriesPerRealm(), config.replayCacheMaxEntries()));
     }
 
     NimbusClientAssertionVerifier(Vertx vertx, Clock clock, String issuer, Duration maxLifetime, Duration skew,
