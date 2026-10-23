@@ -222,14 +222,14 @@ class DbClientRepositoryIT {
     void workloadIdentityClient(UniAsserter asserter) {
         UUID tenant = UUID.randomUUID();
         UUID workloadId = UUID.randomUUID();
-        asserter.execute(() -> scoped(tenant, s -> s.persist(workload(tenant, workloadId, "wl-app")).call(s::flush)));
+        asserter.execute(() -> scoped(tenant, s -> s.persist(workload(tenant, workloadId, "wl-app", "sa-1")).call(s::flush)));
         asserter.assertThat(() -> keySource.trustFor(realm(tenant), new ClientId(workloadId)), trust ->
                 Assertions.assertThat(trust).isEqualTo(
                         ClientKeySourcePort.AssertionTrust.ofIssuer("https://platform.example", "sa-1")));
 
-        OAuthClientEntity withSecret = workload(tenant, UUID.randomUUID(), "wl-secret");
+        OAuthClientEntity withSecret = workload(tenant, UUID.randomUUID(), "wl-secret", "sa-2");
         withSecret.secretHash = "hash";
-        OAuthClientEntity noSubject = workload(tenant, UUID.randomUUID(), "wl-nosub");
+        OAuthClientEntity noSubject = workload(tenant, UUID.randomUUID(), "wl-nosub", "sa-3");
         noSubject.assertionSubject = null;
         OAuthClientEntity secretWithIssuer = confidential(tenant, UUID.randomUUID(), "secret-issuer", "hash");
         secretWithIssuer.assertionIssuer = "https://platform.example";
@@ -241,11 +241,27 @@ class DbClientRepositoryIT {
                 Assertions.assertThat(failure).hasStackTraceContaining("ck_oauth_client_issuer_only_for_workload_identity"));
     }
 
-    private static OAuthClientEntity workload(UUID tenant, UUID id, String key) {
+    @Test
+    @RunOnVertxContext
+    @DisplayName("one workload identity is one client: a second registration of the pair is refused, in any tenant")
+    void workloadIdentityIsUniqueAcrossTenants(UniAsserter asserter) {
+        UUID tenant = UUID.randomUUID();
+        UUID otherTenant = UUID.randomUUID();
+        String subject = "sa-" + UUID.randomUUID();
+        asserter.execute(() -> scoped(tenant, s ->
+                s.persist(workload(tenant, UUID.randomUUID(), "wl-first", subject)).call(s::flush)));
+        for (UUID where : List.of(tenant, otherTenant)) {
+            OAuthClientEntity second = workload(where, UUID.randomUUID(), "wl-second", subject);
+            asserter.assertFailedWith(() -> scoped(where, s -> s.persist(second).call(s::flush)), failure ->
+                    Assertions.assertThat(failure).hasStackTraceContaining("uq_oauth_client_workload_identity"));
+        }
+    }
+
+    private static OAuthClientEntity workload(UUID tenant, UUID id, String key, String subject) {
         OAuthClientEntity e = confidential(tenant, id, key, null);
         e.authMethod = "WORKLOAD_IDENTITY";
         e.assertionIssuer = "https://platform.example";
-        e.assertionSubject = "sa-1";
+        e.assertionSubject = subject;
         return e;
     }
 

@@ -34,7 +34,9 @@ import java.time.Instant;
 import java.util.Date;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
+import org.jboss.logging.Logger;
 
 /**
  * {@link ClientAssertionVerifierPort} with Nimbus JOSE: verifies a JWT client assertion
@@ -77,8 +79,9 @@ import java.util.stream.Collectors;
  * against where it fetched the metadata (RFC 8414 §3.3).
  *
  * <p><strong>Replay store, per instance.</strong> A {@code jti} is recorded only once every other
- * check has passed, keyed by realm, issuer and subject, and kept until the assertion expires plus
- * the skew, in an {@link AssertionReplayStore} bounded per realm, issuer and subject
+ * check has passed, keyed by realm, issuer and subject (by issuer and subject alone for an external
+ * issuer, whose workload is one identity wherever its token is presented), and kept until the
+ * assertion expires plus the skew, in an {@link AssertionReplayStore} bounded per realm, issuer and subject
  * ({@link ClientAssertionConfig#replayCacheMaxEntriesPerClient()}), per realm
  * ({@link ClientAssertionConfig#replayCacheMaxEntriesPerRealm()}) and in total
  * ({@link ClientAssertionConfig#replayCacheMaxEntries()}), like the DPoP proof store and the
@@ -98,6 +101,7 @@ public class NimbusClientAssertionVerifier implements ClientAssertionVerifierPor
     private static final int MIN_RSA_BITS = 2048;
     private static final int MAX_RSA_BITS = 4096;
     private static final int MAX_JTI_LENGTH = 256;
+    private static final Logger LOG = Logger.getLogger(NimbusClientAssertionVerifier.class);
 
     private final Vertx vertx;
     private final Clock clock;
@@ -106,6 +110,7 @@ public class NimbusClientAssertionVerifier implements ClientAssertionVerifierPor
     private final Duration skew;
     private final AssertionReplayStore spent;
     private final TrustedIssuerJwks issuers;
+    private final Set<String> unlistedIssuers = ConcurrentHashMap.newKeySet();
     private final ECKey ecSentinel;
     private final RSAKey rsaSentinel;
 
@@ -155,6 +160,11 @@ public class NimbusClientAssertionVerifier implements ClientAssertionVerifierPor
         }
         String kid = jwt.getHeader().getKeyID();
         TrustedIssuerJwks.Policy external = trust == null || trust.jwks() != null ? null : issuers.policy(trust.issuer());
+        if (trust != null && trust.jwks() == null && external == null && unlistedIssuers.add(trust.issuer())) {
+            // A registration naming an issuer the operator did not list can never authenticate: say so once.
+            LOG.warnf("a workload-identity client is registered with issuer %s, which is not a configured "
+                    + "trusted issuer (iam.client-assertion.trusted-issuers); its assertions are refused", trust.issuer());
+        }
         JWK key = null;
         if (trust != null && trust.jwks() != null) {
             key = trustedKey(trust.jwks(), kid, alg);
@@ -162,7 +172,7 @@ public class NimbusClientAssertionVerifier implements ClientAssertionVerifierPor
             // An issuer rotates its keys: a kid the cached set lacks asks for one rate-limited refresh.
             String jwks = issuers.jwksNow(trust.issuer(), false);
             key = jwks == null ? null : trustedKey(jwks, kid, alg);
-            if (key == null && jwks != null) {
+            if (key == null && jwks != null && kid != null) {
                 String refreshed = issuers.jwksNow(trust.issuer(), true);
                 key = refreshed == null ? null : trustedKey(refreshed, kid, alg);
             }
@@ -178,7 +188,7 @@ public class NimbusClientAssertionVerifier implements ClientAssertionVerifierPor
         String jti = claims.getJWTID();
         return claimsHold(claims, trust, now, lifetime)
                 && (jti == null ? !jtiRequired : !jti.isBlank() && jti.length() <= MAX_JTI_LENGTH
-                        && spent.firstUse(realm, trust.issuer(), trust.subject(), jti,
+                        && spent.firstUse(realm, trust.issuer(), trust.subject(), jti, external != null,
                                 claims.getExpirationTime().toInstant().plus(skew), now));
     }
 
