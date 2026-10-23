@@ -44,20 +44,25 @@ final class AssertionReplayStore {
     }
 
     /**
-     * Records a {@code jti} until {@code until}.
+     * Records a {@code jti} until {@code until}. Only distinct {@code jti}s count against the caps, so
+     * a reusable one takes one slot however often it is presented.
      *
+     * @param singleUse whether a {@code jti} that is already live is refused ({@code true}) or
+     *                  accepted again until it expires
      * @param global whether the {@code jti} is spent across realms: a trusted external issuer and
      *               subject name one workload wherever it is presented, while a {@code private_key_jwt}
      *               client's id names a client within its realm only
      * @return {@code true} when it was not live, and neither its client, its realm nor the store is full
      */
-    synchronized boolean firstUse(RealmKey realm, String issuer, String subject, String jti, boolean global,
-            Instant until, Instant now) {
+    synchronized boolean firstUse(RealmKey realm, String issuer, String subject, String jti, boolean singleUse,
+            boolean global, Instant until, Instant now) {
         evictExpired(now);
         Owner owner = new Owner(realm, issuer, subject);
         Spent spent = new Spent(global ? null : realm, issuer, subject, jti);
-        if (live.containsKey(spent)
-                || perClient.getOrDefault(owner, 0) >= maxPerClient
+        if (live.containsKey(spent)) {
+            return !singleUse;
+        }
+        if (perClient.getOrDefault(owner, 0) >= maxPerClient
                 || perRealm.getOrDefault(realm, 0) >= maxPerRealm
                 || live.size() >= maxTotal) {
             return false;

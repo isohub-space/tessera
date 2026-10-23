@@ -64,7 +64,7 @@ class TrustedIssuerJwksTest {
     }
 
     private static TrustedIssuerJwks.Issuer issuer(String jwksUri) {
-        return new TrustedIssuerJwks.Issuer(jwksUri, new TrustedIssuerJwks.Policy(Duration.ofMinutes(5), false));
+        return new TrustedIssuerJwks.Issuer(jwksUri, new TrustedIssuerJwks.Policy(Duration.ofMinutes(5), false, false));
     }
 
     private static TrustedIssuerJwks.Transport.Response ok(String body) {
@@ -220,12 +220,12 @@ class TrustedIssuerJwksTest {
         }
         for (Duration lifetime : new Duration[] {Duration.ZERO, Duration.ofMinutes(61)}) {
             Map<String, TrustedIssuerJwks.Issuer> config = Map.of(ISSUER,
-                    new TrustedIssuerJwks.Issuer(JWKS_URI, new TrustedIssuerJwks.Policy(lifetime, false)));
+                    new TrustedIssuerJwks.Issuer(JWKS_URI, new TrustedIssuerJwks.Policy(lifetime, false, false)));
             assertThatThrownBy(() -> new TrustedIssuerJwks(null, clock, config, TTL, MIN_REFRESH, null, null))
                     .as(lifetime.toString())
                     .hasMessageContaining("max-lifetime");
         }
-        assertThat(jwks.policy(ISSUER)).isEqualTo(new TrustedIssuerJwks.Policy(Duration.ofMinutes(5), false));
+        assertThat(jwks.policy(ISSUER)).isEqualTo(new TrustedIssuerJwks.Policy(Duration.ofMinutes(5), false, false));
         assertThat(jwks.policy("https://other.example")).isNull();
     }
 }
