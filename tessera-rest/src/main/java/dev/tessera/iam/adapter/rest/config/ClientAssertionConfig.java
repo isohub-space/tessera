@@ -82,9 +82,18 @@ public interface ClientAssertionConfig {
 
         /**
          * Whether its tokens must carry a {@code jti}. Off by default: platform tokens often carry
-         * none and are reused until they expire. A {@code jti} that is present is used once either way.
+         * none.
          */
         @WithDefault("false")
         boolean requireJti();
+
+        /**
+         * Whether a {@code jti} may be presented only once. Off by default: a platform token is
+         * typically exchanged again and again until the platform rotates it, so its {@code jti} is
+         * recorded and reuse is allowed until {@code exp}. Turn it on for an issuer that mints a
+         * fresh token for every request.
+         */
+        @WithDefault("false")
+        boolean enforceSingleUse();
     }
 }

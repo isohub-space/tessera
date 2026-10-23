@@ -83,8 +83,11 @@ public class TrustedIssuerJwks {
         InetAddress[] resolve(String host) throws Exception;
     }
 
-    /** What applies to one issuer's tokens: their maximum lifetime and whether they must carry a {@code jti}. */
-    public record Policy(Duration maxLifetime, boolean requireJti) {
+    /**
+     * What applies to one issuer's tokens: their maximum lifetime, whether they must carry a
+     * {@code jti}, and whether a {@code jti} may be presented only once.
+     */
+    public record Policy(Duration maxLifetime, boolean requireJti, boolean enforceSingleUse) {
     }
 
     /** One configured issuer: where its key set is, and its policy. */
@@ -109,7 +112,7 @@ public class TrustedIssuerJwks {
         this(vertx, clock::instant,
                 config.trustedIssuers().values().stream().collect(Collectors.toMap(
                         ClientAssertionConfig.TrustedIssuer::issuer, issuer -> new Issuer(issuer.jwksUri(),
-                                new Policy(issuer.maxLifetime(), issuer.requireJti())))),
+                                new Policy(issuer.maxLifetime(), issuer.requireJti(), issuer.enforceSingleUse())))),
                 config.jwksCacheTtl(), config.jwksMinRefreshInterval(), https(DEADLINE), InetAddress::getAllByName);
     }
 

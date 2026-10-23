@@ -47,9 +47,11 @@ import org.jboss.logging.Logger;
  * {@link ClientAssertionConfig#maxLifetime()}. A client of a trusted external issuer (a platform's
  * workload identity) carries no keys: they come from {@link TrustedIssuerJwks}, refreshed once,
  * rate-limited, when the token names a {@code kid} the cached set lacks, and the issuer's own
- * maximum lifetime and {@code jti} switch apply. Its {@code jti} is tracked when present; without
- * one, the same token is accepted again until its own {@code exp}, as such tokens are reused for
- * their lifetime. An issuer that is not configured has no keys.
+ * maximum lifetime and {@code jti} switches apply. Such tokens are exchanged again and again until
+ * the platform rotates them, so the same token is accepted until its own {@code exp}: a
+ * {@code jti} that is present is recorded but may be reused, unless the issuer is configured to
+ * enforce single use (for issuers that mint a token per request). A {@code private_key_jwt}
+ * assertion's {@code jti} is always used once. An issuer that is not configured has no keys.
  *
  * <p><strong>Checks, all fail-closed.</strong> The {@code alg} is one of
  * {@link OidcCapabilities#CLIENT_ASSERTION_SIGNING_ALGS} ({@code none} does not parse as a JWS and
@@ -181,14 +183,16 @@ public class NimbusClientAssertionVerifier implements ClientAssertionVerifierPor
         if (!signed || key == null) {
             return false;
         }
-        // private_key_jwt: OIDC Core §9 requires a jti. An external issuer's token may lack one (RFC 7523
-        // §3); without it, replay is bounded by its own exp within the issuer's maximum lifetime.
+        // private_key_jwt: OIDC Core §9 requires a jti, used once. An external issuer's token may lack one
+        // (RFC 7523 §3) and is reused until exp: replay is bounded by exp, the issuer's maximum lifetime
+        // and the issuer-only audience, unless the issuer enforces single use.
         Duration lifetime = external == null ? maxLifetime : external.maxLifetime();
         boolean jtiRequired = external == null || external.requireJti();
         String jti = claims.getJWTID();
         return claimsHold(claims, trust, now, lifetime)
                 && (jti == null ? !jtiRequired : !jti.isBlank() && jti.length() <= MAX_JTI_LENGTH
-                        && spent.firstUse(realm, trust.issuer(), trust.subject(), jti, external != null,
+                        && spent.firstUse(realm, trust.issuer(), trust.subject(), jti,
+                                external == null || external.enforceSingleUse(), external != null,
                                 claims.getExpirationTime().toInstant().plus(skew), now));
     }
 

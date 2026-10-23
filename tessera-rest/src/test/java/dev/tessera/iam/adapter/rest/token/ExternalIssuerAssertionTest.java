@@ -39,9 +39,14 @@ class ExternalIssuerAssertionTest {
     private final AssertionTrust trust = AssertionTrust.ofIssuer(CLUSTER, SA);
 
     private NimbusClientAssertionVerifier verifier(Duration maxLifetime, boolean requireJti, int maxPerOwner) {
+        return verifier(maxLifetime, requireJti, false, maxPerOwner);
+    }
+
+    private NimbusClientAssertionVerifier verifier(Duration maxLifetime, boolean requireJti, boolean singleUse,
+            int maxPerOwner) {
         TrustedIssuerJwks issuers = new TrustedIssuerJwks(null, now::get,
                 Map.of(CLUSTER, new TrustedIssuerJwks.Issuer("https://cluster.example/openid/v1/jwks",
-                        new TrustedIssuerJwks.Policy(maxLifetime, requireJti))),
+                        new TrustedIssuerJwks.Policy(maxLifetime, requireJti, singleUse))),
                 Duration.ofMinutes(10), Duration.ofSeconds(30), uri -> {
                     fetches.incrementAndGet();
                     return new TrustedIssuerJwks.Transport.Response(200,
@@ -83,12 +88,19 @@ class ExternalIssuerAssertionTest {
     }
 
     @Test
-    @DisplayName("a jti is used once when present, and required when the issuer is configured so")
+    @DisplayName("a token with a jti is reused until exp, used once when the issuer enforces it, and the jti required when configured")
     void jtiRule() {
         NimbusClientAssertionVerifier lenient = verifier(Duration.ofHours(1), false, 10);
-        String withJti = token(c -> c.jwtID("once"));
+        String withJti = token(c -> c.jwtID("reused"));
         assertThat(verify(lenient, trust, withJti)).isTrue();
-        assertThat(verify(lenient, trust, withJti)).isFalse();
+        assertThat(verify(lenient, trust, withJti)).as("reused within its lifetime").isTrue();
+        now.set(now.get().plus(Duration.ofMinutes(61)));
+        assertThat(verify(lenient, trust, withJti)).as("after exp").isFalse();
+
+        NimbusClientAssertionVerifier singleUse = verifier(Duration.ofHours(1), false, true, 10);
+        String once = token(c -> c.jwtID("once"));
+        assertThat(verify(singleUse, trust, once)).isTrue();
+        assertThat(verify(singleUse, trust, once)).as("single use enforced").isFalse();
 
         NimbusClientAssertionVerifier strict = verifier(Duration.ofHours(1), true, 10);
         assertThat(verify(strict, trust, token(c -> c))).isFalse();
@@ -121,9 +133,9 @@ class ExternalIssuerAssertionTest {
     }
 
     @Test
-    @DisplayName("a workload's jti is spent once across realms, not once per realm")
+    @DisplayName("with single use enforced, a workload's jti is spent once across realms, not once per realm")
     void jtiIsSpentAcrossRealms() {
-        NimbusClientAssertionVerifier verifier = verifier(Duration.ofHours(1), false, 10);
+        NimbusClientAssertionVerifier verifier = verifier(Duration.ofHours(1), false, true, 10);
         String token = token(c -> c.jwtID("global"));
         RealmKey otherRealm = new RealmKey(TenantId.generate(), BaselineId.generate());
         assertThat(verifier.verifyNow(REALM, trust, token, now.get())).isTrue();
@@ -136,6 +148,7 @@ class ExternalIssuerAssertionTest {
         NimbusClientAssertionVerifier verifier = verifier(Duration.ofHours(1), false, 1);
         assertThat(verify(verifier, trust, token(c -> c.jwtID("a")))).isTrue();
         assertThat(verify(verifier, trust, token(c -> c.jwtID("b")))).as("same subject, over its cap").isFalse();
+        assertThat(verify(verifier, trust, token(c -> c.jwtID("a")))).as("a reused jti takes no new slot").isTrue();
         String other = "system:serviceaccount:orders:shipping";
         assertThat(verify(verifier, AssertionTrust.ofIssuer(CLUSTER, other),
                 token(c -> c.subject(other).jwtID("c")))).as("another subject of the same issuer").isTrue();
