@@ -72,5 +72,19 @@ public interface ClientAssertionConfig {
 
         /** The {@code https} URL of its JWK Set. */
         String jwksUri();
+
+        /**
+         * The longest validity its tokens may claim, from {@code iat} (or now) to {@code exp}; at
+         * most {@code PT1H}. A cloud platform's workload identity token typically lives one hour.
+         */
+        @WithDefault("PT5M")
+        Duration maxLifetime();
+
+        /**
+         * Whether its tokens must carry a {@code jti}. Off by default: platform tokens often carry
+         * none and are reused until they expire. A {@code jti} that is present is used once either way.
+         */
+        @WithDefault("false")
+        boolean requireJti();
     }
 }

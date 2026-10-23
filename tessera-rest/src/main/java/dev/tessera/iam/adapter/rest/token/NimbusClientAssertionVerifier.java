@@ -40,6 +40,15 @@ import java.util.stream.Collectors;
  * {@link ClientAssertionVerifierPort} with Nimbus JOSE: verifies a JWT client assertion
  * (RFC 7523 §3, OIDC Core §9) against the key source's {@link AssertionTrust}.
  *
+ * <p><strong>Two kinds of trust, one path.</strong> A {@code private_key_jwt} client's trust carries
+ * its registered keys; it must send a {@code jti} (OIDC Core §9) and its assertion may live at most
+ * {@link ClientAssertionConfig#maxLifetime()}. A client of a trusted external issuer (a platform's
+ * workload identity) carries no keys: they come from {@link TrustedIssuerJwks}, refreshed once,
+ * rate-limited, when the token names a {@code kid} the cached set lacks, and the issuer's own
+ * maximum lifetime and {@code jti} switch apply. Its {@code jti} is tracked when present; without
+ * one, the same token is accepted again until its own {@code exp}, as such tokens are reused for
+ * their lifetime. An issuer that is not configured has no keys.
+ *
  * <p><strong>Checks, all fail-closed.</strong> The {@code alg} is one of
  * {@link OidcCapabilities#CLIENT_ASSERTION_SIGNING_ALGS} ({@code none} does not parse as a JWS and
  * an HMAC is not on the list); the key is the single trusted key matching the {@code kid}, the
@@ -48,13 +57,15 @@ import java.util.stream.Collectors;
  * {@code sub} are the trusted ones; {@code aud} is exactly one value, this server's issuer
  * identifier;
  * {@code exp} is required and not past, {@code iat} and {@code nbf} are not in the future, all
- * within {@link ClientAssertionConfig#clockSkew()}; the validity is at most
- * {@link ClientAssertionConfig#maxLifetime()}; and the {@code jti} is used once.
+ * within {@link ClientAssertionConfig#clockSkew()}; the validity is at most the maximum lifetime
+ * that applies; and a {@code jti} is used once.
  *
  * <p><strong>No oracle.</strong> Every assertion with an allowed {@code alg} costs one signature
  * verification. With no trust, or no matching key (an unknown {@code kid}), the signature is
  * checked against a sentinel key generated at start-up that no client holds, and fails. The
- * answer is a bare {@code false} whatever the reason. The sentinel RSA key is 2048 bits, so a client
+ * answer is a bare {@code false} whatever the reason. A client of an external issuer may cause a
+ * key-set fetch, at most once per refresh interval per issuer, which an unknown client never does.
+ * The sentinel RSA key is 2048 bits, so a client
  * registered with a larger RSA key verifies slightly slower against its own key than against the
  * sentinel; that tells only the key size the client chose.
  *
@@ -66,8 +77,8 @@ import java.util.stream.Collectors;
  * against where it fetched the metadata (RFC 8414 §3.3).
  *
  * <p><strong>Replay store, per instance.</strong> A {@code jti} is recorded only once every other
- * check has passed, keyed by realm and issuer, and kept until the assertion expires plus the skew,
- * in an {@link AssertionReplayStore} bounded per client
+ * check has passed, keyed by realm, issuer and subject, and kept until the assertion expires plus
+ * the skew, in an {@link AssertionReplayStore} bounded per realm, issuer and subject
  * ({@link ClientAssertionConfig#replayCacheMaxEntriesPerClient()}), per realm
  * ({@link ClientAssertionConfig#replayCacheMaxEntriesPerRealm()}) and in total
  * ({@link ClientAssertionConfig#replayCacheMaxEntries()}), like the DPoP proof store and the
@@ -94,25 +105,27 @@ public class NimbusClientAssertionVerifier implements ClientAssertionVerifierPor
     private final Duration maxLifetime;
     private final Duration skew;
     private final AssertionReplayStore spent;
+    private final TrustedIssuerJwks issuers;
     private final ECKey ecSentinel;
     private final RSAKey rsaSentinel;
 
     @Inject
     public NimbusClientAssertionVerifier(Vertx vertx, Clock clock, OidcDiscoveryConfig oidc,
-            ClientAssertionConfig config) {
+            ClientAssertionConfig config, TrustedIssuerJwks issuers) {
         this(vertx, clock, oidc.issuer(), config.maxLifetime(), config.clockSkew(),
                 new AssertionReplayStore(config.replayCacheMaxEntriesPerClient(),
-                        config.replayCacheMaxEntriesPerRealm(), config.replayCacheMaxEntries()));
+                        config.replayCacheMaxEntriesPerRealm(), config.replayCacheMaxEntries()), issuers);
     }
 
     NimbusClientAssertionVerifier(Vertx vertx, Clock clock, String issuer, Duration maxLifetime, Duration skew,
-            AssertionReplayStore spent) {
+            AssertionReplayStore spent, TrustedIssuerJwks issuers) {
         this.vertx = vertx;
         this.clock = clock;
         this.audience = issuer;
         this.maxLifetime = maxLifetime;
         this.skew = skew;
         this.spent = spent;
+        this.issuers = issuers;
         try {
             this.ecSentinel = new ECKeyGenerator(Curve.P_256).generate().toPublicJWK();
             this.rsaSentinel = new RSAKeyGenerator(MIN_RSA_BITS).generate().toPublicJWK();
@@ -140,12 +153,33 @@ public class NimbusClientAssertionVerifier implements ClientAssertionVerifierPor
         if (!ALLOWED_ALGS.contains(alg)) {
             return false;
         }
-        JWK key = trust == null ? null : trustedKey(trust.jwks(), jwt.getHeader().getKeyID(), alg);
+        String kid = jwt.getHeader().getKeyID();
+        TrustedIssuerJwks.Policy external = trust == null || trust.jwks() != null ? null : issuers.policy(trust.issuer());
+        JWK key = null;
+        if (trust != null && trust.jwks() != null) {
+            key = trustedKey(trust.jwks(), kid, alg);
+        } else if (external != null) {
+            // An issuer rotates its keys: a kid the cached set lacks asks for one rate-limited refresh.
+            String jwks = issuers.jwksNow(trust.issuer(), false);
+            key = jwks == null ? null : trustedKey(jwks, kid, alg);
+            if (key == null && jwks != null) {
+                String refreshed = issuers.jwksNow(trust.issuer(), true);
+                key = refreshed == null ? null : trustedKey(refreshed, kid, alg);
+            }
+        }
         boolean signed = verifySignature(jwt, alg, key);
-        return signed && key != null
-                && claimsHold(claims, trust, now)
-                && spent.firstUse(realm, trust.issuer(), claims.getJWTID(),
-                        claims.getExpirationTime().toInstant().plus(skew), now);
+        if (!signed || key == null) {
+            return false;
+        }
+        // private_key_jwt: OIDC Core §9 requires a jti. An external issuer's token may lack one (RFC 7523
+        // §3); without it, replay is bounded by its own exp within the issuer's maximum lifetime.
+        Duration lifetime = external == null ? maxLifetime : external.maxLifetime();
+        boolean jtiRequired = external == null || external.requireJti();
+        String jti = claims.getJWTID();
+        return claimsHold(claims, trust, now, lifetime)
+                && (jti == null ? !jtiRequired : !jti.isBlank() && jti.length() <= MAX_JTI_LENGTH
+                        && spent.firstUse(realm, trust.issuer(), trust.subject(), jti,
+                                claims.getExpirationTime().toInstant().plus(skew), now));
     }
 
     private boolean verifySignature(SignedJWT jwt, JWSAlgorithm alg, JWK key) {
@@ -184,15 +218,13 @@ public class NimbusClientAssertionVerifier implements ClientAssertionVerifierPor
         return key instanceof RSAKey rsa && rsa.size() >= MIN_RSA_BITS && rsa.size() <= MAX_RSA_BITS;
     }
 
-    private boolean claimsHold(JWTClaimsSet claims, AssertionTrust trust, Instant now) {
+    private boolean claimsHold(JWTClaimsSet claims, AssertionTrust trust, Instant now, Duration maxLifetime) {
         List<String> aud = claims.getAudience();
         Date exp = claims.getExpirationTime();
         Date iat = claims.getIssueTime();
         Date nbf = claims.getNotBeforeTime();
-        String jti = claims.getJWTID();
         if (!trust.issuer().equals(claims.getIssuer()) || !trust.subject().equals(claims.getSubject())
-                || aud.size() != 1 || !audience.equals(aud.get(0))
-                || exp == null || jti == null || jti.isBlank() || jti.length() > MAX_JTI_LENGTH) {
+                || aud.size() != 1 || !audience.equals(aud.get(0)) || exp == null) {
             return false;
         }
         // iat is at most the skew ahead, so exp - iat <= maxLifetime keeps exp within now + skew + maxLifetime.

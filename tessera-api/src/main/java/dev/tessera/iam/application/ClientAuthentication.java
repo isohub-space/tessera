@@ -22,10 +22,10 @@ import io.smallrye.mutiny.Uni;
  * {@code client_id} exists.
  *
  * <p>A client authenticates with the one method it is registered for. A {@code private_key_jwt}
- * client has no secret, so its secret is verified against the sentinel and fails; a client
- * presenting a JWT assertion ({@link #authenticateAssertion}) is accepted only when it is
- * registered for {@code private_key_jwt}, and the assertion path runs the same steps for every
- * other client too.
+ * or workload-identity client has no secret, so its secret is verified against the sentinel and
+ * fails; a client presenting a JWT assertion ({@link #authenticateAssertion}) is accepted only when
+ * it is registered for one of those two assertion methods, and the assertion path runs the same
+ * steps for every other client too.
  */
 final class ClientAuthentication {
 
@@ -41,8 +41,7 @@ final class ClientAuthentication {
     static Uni<Boolean> authenticate(
             ClientSecretVerifierPort verifier, RealmKey realm, String presentedClientId, Client client,
             String presentedSecret, boolean publicClientsAllowed) {
-        boolean confidential = client instanceof ConfidentialClient c
-                && c.authMethod() != ClientAuthMethod.PRIVATE_KEY_JWT;
+        boolean confidential = client instanceof ConfidentialClient c && !byAssertion(c);
         String secret = presentedSecret == null ? "" : presentedSecret;
         return verifier.verifySecret(realm,
                         confidential ? client.id() : ClientSecretVerifierPort.unknownClient(presentedClientId), secret)
@@ -54,7 +53,7 @@ final class ClientAuthentication {
     /**
      * Authenticates a client by a JWT assertion (RFC 7523 §2.2). The key source and the verifier
      * each run exactly once on every request: for a client registered for {@code private_key_jwt}
-     * against its own id, otherwise against the sentinel for the presented id, whose missing trust
+     * or a workload identity against its own id, otherwise against the sentinel for the presented id, whose missing trust
      * the verifier answers with a failing signature check. An unknown client, a secret client, a
      * wrong key and a bad claim are therefore refused alike.
      *
@@ -63,10 +62,16 @@ final class ClientAuthentication {
     static Uni<Boolean> authenticateAssertion(
             ClientKeySourcePort keys, ClientAssertionVerifierPort assertions, RealmKey realm,
             String presentedClientId, Client client, String assertion) {
-        boolean keyed = client instanceof ConfidentialClient c && c.authMethod() == ClientAuthMethod.PRIVATE_KEY_JWT;
+        boolean keyed = client instanceof ConfidentialClient c && byAssertion(c);
         ClientId id = keyed ? client.id() : ClientSecretVerifierPort.unknownClient(presentedClientId);
         return keys.trustFor(realm, id)
                 .flatMap(trust -> assertions.verify(realm, keyed ? trust : null, assertion))
                 .map(verified -> keyed && Boolean.TRUE.equals(verified));
+    }
+
+    /** Whether the client authenticates by a JWT assertion rather than a secret. */
+    private static boolean byAssertion(ConfidentialClient client) {
+        return client.authMethod() == ClientAuthMethod.PRIVATE_KEY_JWT
+                || client.authMethod() == ClientAuthMethod.WORKLOAD_IDENTITY;
     }
 }

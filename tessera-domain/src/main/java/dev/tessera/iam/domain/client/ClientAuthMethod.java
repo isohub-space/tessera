@@ -18,6 +18,12 @@ public enum ClientAuthMethod {
     /** {@code private_key_jwt} client assertion (RFC 7523) — asymmetric, no shared secret. */
     PRIVATE_KEY_JWT,
 
+    /**
+     * Keyless: a JWT client assertion (RFC 7523) that a trusted external issuer, such as a cloud
+     * platform's workload identity, issues to the running workload. The client stores no credential.
+     */
+    WORKLOAD_IDENTITY,
+
     /** Shared {@code client_secret} (basic/post) — the weakest accepted method. */
     CLIENT_SECRET
 }

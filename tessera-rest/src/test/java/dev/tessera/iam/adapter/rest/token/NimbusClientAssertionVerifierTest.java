@@ -44,7 +44,7 @@ class NimbusClientAssertionVerifierTest {
 
     private static NimbusClientAssertionVerifier verifier(int maxPerClient, int maxPerRealm, int maxTotal) {
         return new NimbusClientAssertionVerifier(null, null, ISSUER, Duration.ofMinutes(5), Duration.ofSeconds(30),
-                new AssertionReplayStore(maxPerClient, maxPerRealm, maxTotal));
+                new AssertionReplayStore(maxPerClient, maxPerRealm, maxTotal), null);
     }
 
     private boolean verify(String assertion) {

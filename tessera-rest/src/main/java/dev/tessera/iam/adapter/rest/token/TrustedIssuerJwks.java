@@ -66,6 +66,7 @@ public class TrustedIssuerJwks {
     static final int MAX_BYTES = 64 * 1024;
     static final int MAX_KEYS = 20;
     static final Duration MIN_REFRESH_FLOOR = Duration.ofSeconds(5);
+    static final Duration MAX_LIFETIME_CEILING = Duration.ofHours(1);
     private static final Duration DEADLINE = Duration.ofSeconds(5);
     private static final Logger LOG = Logger.getLogger(TrustedIssuerJwks.class);
 
@@ -82,9 +83,20 @@ public class TrustedIssuerJwks {
         InetAddress[] resolve(String host) throws Exception;
     }
 
+    /** What applies to one issuer's tokens: their maximum lifetime and whether they must carry a {@code jti}. */
+    public record Policy(Duration maxLifetime, boolean requireJti) {
+    }
+
+    /** One configured issuer: where its key set is, and its policy. */
+    record Issuer(String jwksUri, Policy policy) {
+    }
+
+    private record Trusted(URI jwksUri, Policy policy) {
+    }
+
     private final Supplier<Instant> clock;
     private final Vertx vertx;
-    private final Map<String, URI> jwksUriByIssuer;
+    private final Map<String, Trusted> trusted;
     private final Duration ttl;
     private final Duration minRefreshInterval;
     private final Transport transport;
@@ -96,23 +108,31 @@ public class TrustedIssuerJwks {
     public TrustedIssuerJwks(Vertx vertx, Clock clock, ClientAssertionConfig config) {
         this(vertx, clock::instant,
                 config.trustedIssuers().values().stream().collect(Collectors.toMap(
-                        ClientAssertionConfig.TrustedIssuer::issuer, ClientAssertionConfig.TrustedIssuer::jwksUri)),
+                        ClientAssertionConfig.TrustedIssuer::issuer, issuer -> new Issuer(issuer.jwksUri(),
+                                new Policy(issuer.maxLifetime(), issuer.requireJti())))),
                 config.jwksCacheTtl(), config.jwksMinRefreshInterval(), https(DEADLINE), InetAddress::getAllByName);
     }
 
-    TrustedIssuerJwks(Vertx vertx, Supplier<Instant> clock, Map<String, String> jwksUriByIssuer, Duration ttl,
+    TrustedIssuerJwks(Vertx vertx, Supplier<Instant> clock, Map<String, Issuer> issuers, Duration ttl,
             Duration minRefreshInterval, Transport transport, Resolver resolver) {
         if (ttl == null || minRefreshInterval == null || minRefreshInterval.compareTo(MIN_REFRESH_FLOOR) < 0
                 || minRefreshInterval.compareTo(ttl) >= 0) {
             throw new IllegalArgumentException("iam.client-assertion.jwks-min-refresh-interval must be at least "
                     + MIN_REFRESH_FLOOR + " and shorter than jwks-cache-ttl, were " + minRefreshInterval + " and " + ttl);
         }
-        Map<String, URI> uris = new HashMap<>();
-        jwksUriByIssuer.forEach((issuer, jwksUri) -> uris.put(requireHttps("issuer", issuer),
-                URI.create(requireHttps("jwks-uri", jwksUri))));
+        Map<String, Trusted> byIssuer = new HashMap<>();
+        issuers.forEach((issuer, config) -> {
+            Duration lifetime = config.policy().maxLifetime();
+            if (lifetime == null || !lifetime.isPositive() || lifetime.compareTo(MAX_LIFETIME_CEILING) > 0) {
+                throw new IllegalArgumentException("iam.client-assertion.trusted-issuers.*.max-lifetime must be "
+                        + "positive and at most " + MAX_LIFETIME_CEILING + ", was " + lifetime);
+            }
+            byIssuer.put(requireHttps("issuer", issuer),
+                    new Trusted(URI.create(requireHttps("jwks-uri", config.jwksUri())), config.policy()));
+        });
         this.vertx = vertx;
         this.clock = clock;
-        this.jwksUriByIssuer = Map.copyOf(uris);
+        this.trusted = Map.copyOf(byIssuer);
         this.ttl = ttl;
         this.minRefreshInterval = minRefreshInterval;
         this.transport = transport;
@@ -130,11 +150,18 @@ public class TrustedIssuerJwks {
         return vertx.executeBlocking(() -> jwksNow(issuer, refresh), false);
     }
 
+    /** The policy of a trusted issuer, or {@code null} when the issuer is not trusted. */
+    public Policy policy(String issuer) {
+        Trusted entry = issuer == null ? null : trusted.get(issuer);
+        return entry == null ? null : entry.policy();
+    }
+
     String jwksNow(String issuer, boolean refresh) {
-        URI uri = issuer == null ? null : jwksUriByIssuer.get(issuer);
-        if (uri == null) {
+        Trusted entry = issuer == null ? null : trusted.get(issuer);
+        if (entry == null) {
             return null;
         }
+        URI uri = entry.jwksUri();
         Instant now = clock.get();
         Cached cached = cache.get(uri);
         boolean fresh = cached != null && now.isBefore(cached.fetchedAt().plus(ttl));
@@ -143,7 +170,8 @@ public class TrustedIssuerJwks {
         }
         String fetched = fetch(issuer, uri);
         if (fetched == null) {
-            return fresh ? cached.jwks() : null;
+            // The failed fetch took time: the cached set is used only if it is still within its TTL.
+            return cached != null && clock.get().isBefore(cached.fetchedAt().plus(ttl)) ? cached.jwks() : null;
         }
         cache.put(uri, new Cached(fetched, now));
         return fetched;
@@ -166,8 +194,11 @@ public class TrustedIssuerJwks {
                 }
             }
             Transport.Response response = transport.get(uri);
-            if (response.status() != 200 || response.body() == null || response.body().length > MAX_BYTES) {
+            if (response.status() != 200) {
                 return failed(issuer, "HTTP status " + response.status());
+            }
+            if (response.body() == null || response.body().length > MAX_BYTES) {
+                return failed(issuer, "an empty or oversized body");
             }
             JWKSet set = JWKSet.parse(new String(response.body(), StandardCharsets.UTF_8));
             if (set.getKeys().isEmpty() || set.getKeys().size() > MAX_KEYS
@@ -176,6 +207,9 @@ public class TrustedIssuerJwks {
             }
             return set.toString();
         } catch (Exception unreachableOrMalformed) {
+            if (unreachableOrMalformed instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             Throwable cause = unreachableOrMalformed instanceof ExecutionException && unreachableOrMalformed.getCause() != null
                     ? unreachableOrMalformed.getCause() : unreachableOrMalformed;
             return failed(issuer, cause.getClass().getSimpleName());
@@ -257,6 +291,9 @@ public class TrustedIssuerJwks {
                 return new Transport.Response(response.statusCode(), response.body());
             } catch (TimeoutException | InterruptedException stopped) {
                 exchange.cancel(true);
+                if (stopped instanceof InterruptedException) {
+                    Thread.currentThread().interrupt();
+                }
                 throw stopped;
             }
         };

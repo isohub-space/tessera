@@ -11,9 +11,10 @@ import java.util.PriorityQueue;
 /**
  * The spent {@code jti}s of accepted client assertions, each kept until its assertion expires.
  *
- * <p>Three nested bounds, so that exhaustion stays with whoever causes it: each client, a realm and
- * an issuer, holds at most {@code maxPerClient} live entries, and a client at its cap refuses only
- * its own new assertions; each realm holds at most {@code maxPerRealm}, so a tenant with many busy
+ * <p>Three nested bounds, so that exhaustion stays with whoever causes it: each client, a realm, an
+ * issuer and a subject (so the clients of one shared external issuer do not share one cap), holds
+ * at most {@code maxPerClient} live entries, and a client at its cap refuses only its own new
+ * assertions; each realm holds at most {@code maxPerRealm}, so a tenant with many busy
  * clients refuses only its own; and the whole store holds at most {@code maxTotal}, which bounds
  * the memory all realms together can take. Expired entries leave in expiry order from a priority
  * queue, so no request scans the store.
@@ -47,9 +48,10 @@ final class AssertionReplayStore {
      *
      * @return {@code true} when it was not live, and neither its client, its realm nor the store is full
      */
-    synchronized boolean firstUse(RealmKey realm, String issuer, String jti, Instant until, Instant now) {
+    synchronized boolean firstUse(RealmKey realm, String issuer, String subject, String jti, Instant until,
+            Instant now) {
         evictExpired(now);
-        Spent spent = new Spent(new Owner(realm, issuer), jti);
+        Spent spent = new Spent(new Owner(realm, issuer, subject), jti);
         if (live.containsKey(spent)
                 || perClient.getOrDefault(spent.owner(), 0) >= maxPerClient
                 || perRealm.getOrDefault(realm, 0) >= maxPerRealm
@@ -72,7 +74,7 @@ final class AssertionReplayStore {
         }
     }
 
-    private record Owner(RealmKey realm, String issuer) {
+    private record Owner(RealmKey realm, String issuer, String subject) {
     }
 
     private record Spent(Owner owner, String jti) {
