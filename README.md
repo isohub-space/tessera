@@ -140,7 +140,7 @@ replacing the bundled adapters:
 | `AuthorizationCodeStorePort` | Store and consume authorization codes with **exactly-once** semantics — `store(code, grant)` / `consume(realm, code)`. Two adapters ship: a shared Infinispan cache with a per-entry TTL (the multi-node default) and an in-process concurrent map (the `@DefaultBean` fallback, used under the `test` profile and for single-node development). |
 | `ClientRepositoryPort` | Load a registered client by realm and client ID — `findByClientId(realm, clientId)`. The bundled adapter is the reactive-Postgres `OAuthClientRepository`. |
 | `ClientSecretVerifierPort` | Verify a presented client secret without exposing the stored hash — `verifySecret(realm, clientId, presentedSecret)`. The bundled adapter verifies Argon2id hashes on a dedicated worker pool. |
-| `ClientKeySourcePort` | Resolve what a client's JWT assertions (RFC 7523) must match: the public keys and the expected `iss` and `sub` — `trustFor(realm, clientId)`. The bundled adapter reads a `private_key_jwt` client's registered JWK Set. |
+| `ClientKeySourcePort` | Resolve what a client's JWT assertions (RFC 7523) must match: the public keys and the expected `iss` and `sub` — `trustFor(realm, clientId)`. The bundled adapter reads a `private_key_jwt` client's registered JWK Set, or a workload-identity client's registered issuer and subject. |
 | `ClientAssertionVerifierPort` | Verify a JWT client assertion against that trust: signature with an allowed asymmetric algorithm, `iss`, `sub`, `aud`, validity window and single-use `jti` — `verify(realm, trust, assertion)`. The bundled adapter uses Nimbus JOSE with a per-instance replay store. |
 | `RefreshTokenStorePort` | Persist and rotate refresh-token families with reuse-detection. The bundled adapter is durable (reactive Postgres, per-tenant RLS). |
 | `RefreshTokenTenantResolverPort` | Resolve the owning tenant for a presented refresh token so the request can bind its tenant context before touching tenant-scoped tables. |
@@ -384,6 +384,7 @@ tagged when the wave's integration test suite passes an end-to-end OIDC flow.
 - [x] RFC 9068 JWT access tokens, OIDC ID tokens
 - [x] Refresh-token grant — single-use rotation with family reuse-detection (RFC 9700 §4.14)
 - [x] `client_credentials` grant (RFC 6749 §4.4) — tenant-bound confidential clients, registered scopes, audiences and roles
+- [x] JWT client assertions (RFC 7523) on `client_credentials`: `private_key_jwt` with a registered JWK Set, and keyless workload identity — a token from a trusted external issuer (a cloud platform, Kubernetes, SPIFFE) whose key set is fetched over https, with a per-issuer maximum lifetime and `jti` rule (`iam.client-assertion.trusted-issuers.*`)
 - [x] Token introspection — RFC 7662 (`POST /introspect`)
 - [x] Token revocation — RFC 7009 (`POST /revoke`)
 - [x] Confidential (Argon2id) + public (PKCE) client registry with `redirect_uri` allow-list

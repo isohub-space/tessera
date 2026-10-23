@@ -10,9 +10,10 @@ import io.smallrye.mutiny.Uni;
  * public keys and the {@code iss} and {@code sub} the assertion must carry.
  *
  * <p>This is the one place a key source plugs in. For {@code private_key_jwt} the keys are the
- * client's registered JWKS and both {@code iss} and {@code sub} are its {@code client_id}; a key
- * source for a trusted external issuer answers with that issuer, the registered subject and the
- * issuer's keys, and the verification path stays the same.
+ * client's registered JWKS and both {@code iss} and {@code sub} are its {@code client_id}. For a
+ * client of a trusted external issuer (a platform's workload identity) the trust names the
+ * registered issuer and subject and carries no keys: the verifier takes them from the issuer, so
+ * the verification path stays the same.
  *
  * <p>Like {@link ClientSecretVerifierPort}, it is called on every assertion request, for an
  * unknown client with the {@link ClientSecretVerifierPort#unknownClient sentinel} id, so the
@@ -33,15 +34,21 @@ public interface ClientKeySourcePort {
      *
      * @param issuer  the {@code iss} the assertion must carry
      * @param subject the {@code sub} the assertion must carry
-     * @param jwks    the JWK Set (RFC 7517) JSON holding the public keys it may be signed with
+     * @param jwks    the JWK Set (RFC 7517) JSON holding the public keys it may be signed with, or
+     *                {@code null} for a client of a trusted external issuer, whose keys are the issuer's
      */
     record AssertionTrust(String issuer, String subject, String jwks) {
 
         public AssertionTrust {
             if (issuer == null || issuer.isBlank() || subject == null || subject.isBlank()
-                    || jwks == null || jwks.isBlank()) {
-                throw new IllegalArgumentException("AssertionTrust issuer, subject and jwks must not be blank");
+                    || (jwks != null && jwks.isBlank())) {
+                throw new IllegalArgumentException("AssertionTrust issuer and subject, and jwks if given, must not be blank");
             }
+        }
+
+        /** The trust of a client of a trusted external issuer: the issuer's keys apply. */
+        public static AssertionTrust ofIssuer(String issuer, String subject) {
+            return new AssertionTrust(issuer, subject, null);
         }
     }
 }

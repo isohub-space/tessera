@@ -40,7 +40,7 @@ class TrustedIssuerJwksTest {
 
     private final Supplier<Instant> clock = now::get;
 
-    private final TrustedIssuerJwks jwks = new TrustedIssuerJwks(null, clock, Map.of(ISSUER, JWKS_URI), TTL,
+    private final TrustedIssuerJwks jwks = new TrustedIssuerJwks(null, clock, Map.of(ISSUER, issuer(JWKS_URI)), TTL,
             MIN_REFRESH, uri -> {
                 fetches.incrementAndGet();
                 assertThat(uri.toString()).isEqualTo(JWKS_URI);
@@ -61,6 +61,10 @@ class TrustedIssuerJwksTest {
         } catch (IOException e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    private static TrustedIssuerJwks.Issuer issuer(String jwksUri) {
+        return new TrustedIssuerJwks.Issuer(jwksUri, new TrustedIssuerJwks.Policy(Duration.ofMinutes(5), false));
     }
 
     private static TrustedIssuerJwks.Transport.Response ok(String body) {
@@ -126,7 +130,7 @@ class TrustedIssuerJwksTest {
                 "255.255.255.255", "64:ff9b::a9fe:a9fe", "64:ff9b::a00:1", "64:ff9b:1::1", "::127.0.0.1",
                 "::a9fe:a9fe", "2002:7f00:1::1"}) {
             addresses = new InetAddress[] {address("203.0.113.7"), address(target)};
-            TrustedIssuerJwks fresh = new TrustedIssuerJwks(null, clock, Map.of(ISSUER, JWKS_URI), TTL,
+            TrustedIssuerJwks fresh = new TrustedIssuerJwks(null, clock, Map.of(ISSUER, issuer(JWKS_URI)), TTL,
                     MIN_REFRESH, uri -> {
                         fetches.incrementAndGet();
                         return response.get();
@@ -199,11 +203,11 @@ class TrustedIssuerJwksTest {
     @DisplayName("a trusted issuer or key-set URL that is not https is refused at startup")
     void configurationIsCheckedAtStartup() {
         assertThat(TrustedIssuerJwks.class).hasAnnotation(io.quarkus.runtime.Startup.class);
-        for (Map<String, String> config : java.util.List.of(
-                Map.of(ISSUER, "http://keys.example/jwks"),
-                Map.of("http://issuer.example", JWKS_URI),
-                Map.of(ISSUER, "https://user@keys.example/jwks"),
-                Map.of(ISSUER, "not a url"))) {
+        for (Map<String, TrustedIssuerJwks.Issuer> config : java.util.List.of(
+                Map.of(ISSUER, issuer("http://keys.example/jwks")),
+                Map.of("http://issuer.example", issuer(JWKS_URI)),
+                Map.of(ISSUER, issuer("https://user@keys.example/jwks")),
+                Map.of(ISSUER, issuer("not a url")))) {
             assertThatThrownBy(() -> new TrustedIssuerJwks(null, clock, config, TTL, MIN_REFRESH, null, null))
                     .as(config.toString())
                     .isInstanceOf(IllegalArgumentException.class)
@@ -214,5 +218,14 @@ class TrustedIssuerJwksTest {
                     .as(refresh.toString())
                     .hasMessageContaining("jwks-min-refresh-interval");
         }
+        for (Duration lifetime : new Duration[] {Duration.ZERO, Duration.ofMinutes(61)}) {
+            Map<String, TrustedIssuerJwks.Issuer> config = Map.of(ISSUER,
+                    new TrustedIssuerJwks.Issuer(JWKS_URI, new TrustedIssuerJwks.Policy(lifetime, false)));
+            assertThatThrownBy(() -> new TrustedIssuerJwks(null, clock, config, TTL, MIN_REFRESH, null, null))
+                    .as(lifetime.toString())
+                    .hasMessageContaining("max-lifetime");
+        }
+        assertThat(jwks.policy(ISSUER)).isEqualTo(new TrustedIssuerJwks.Policy(Duration.ofMinutes(5), false));
+        assertThat(jwks.policy("https://other.example")).isNull();
     }
 }

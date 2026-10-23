@@ -27,8 +27,13 @@ public final class AssertionTestClient {
     private final ECKey key;
 
     public AssertionTestClient() {
+        this(KID);
+    }
+
+    /** A client whose key carries {@code kid}, as after a key rotation. */
+    public AssertionTestClient(String kid) {
         try {
-            this.key = new ECKeyGenerator(Curve.P_256).keyID(KID).generate();
+            this.key = new ECKeyGenerator(Curve.P_256).keyID(kid).generate();
         } catch (Exception e) {
             throw new IllegalStateException("failed to generate test EC key", e);
         }
@@ -58,7 +63,7 @@ public final class AssertionTestClient {
     /** An assertion signed ES256, with the header adjusted by {@code header}. */
     public String sign(JWTClaimsSet claims, UnaryOperator<JWSHeader.Builder> header) {
         try {
-            SignedJWT jwt = new SignedJWT(header.apply(new JWSHeader.Builder(JWSAlgorithm.ES256).keyID(KID)).build(),
+            SignedJWT jwt = new SignedJWT(header.apply(new JWSHeader.Builder(JWSAlgorithm.ES256).keyID(key.getKeyID())).build(),
                     claims);
             jwt.sign(new ECDSASigner(key));
             return jwt.serialize();

@@ -12,9 +12,10 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
 /**
- * Persistence-backed {@link ClientKeySourcePort} for {@code private_key_jwt}: the client's
+ * Persistence-backed {@link ClientKeySourcePort}. For {@code private_key_jwt}: the client's
  * registered JWK Set, with its {@code client_id} as the assertion's expected {@code iss} and
- * {@code sub} (RFC 7523 §3).
+ * {@code sub} (RFC 7523 §3). For a workload identity: the registered issuer and subject, with no
+ * keys, since the issuer's apply.
  *
  * <p>The lookup is tenant-scoped through {@link OAuthClientRepository} (RLS fail-closed) and runs
  * for a sentinel id exactly as for a real one. Like {@link Argon2ClientSecretVerifier}, this plain
@@ -32,16 +33,25 @@ public class DbClientKeySource implements ClientKeySourcePort {
         if (realm == null || clientId == null) {
             throw new IllegalArgumentException("realm and clientId must not be null");
         }
-        return clients.findById(realm.tenant().value(), clientId.value())
-                .map(entity -> registeredForKeys(entity, realm)
-                        ? new AssertionTrust(entity.clientKey, entity.clientKey, entity.jwks)
-                        : null);
+        return clients.findById(realm.tenant().value(), clientId.value()).map(entity -> trust(entity, realm));
     }
 
-    private static boolean registeredForKeys(OAuthClientEntity entity, RealmKey realm) {
-        return entity != null
-                && realm.baseline().value().equals(entity.baselineId)
-                && ClientAuthMethod.PRIVATE_KEY_JWT.name().equals(entity.authMethod)
-                && entity.jwks != null && !entity.jwks.isBlank();
+    private static AssertionTrust trust(OAuthClientEntity entity, RealmKey realm) {
+        if (entity == null || !realm.baseline().value().equals(entity.baselineId)) {
+            return null;
+        }
+        if (ClientAuthMethod.PRIVATE_KEY_JWT.name().equals(entity.authMethod)
+                && entity.jwks != null && !entity.jwks.isBlank()) {
+            return new AssertionTrust(entity.clientKey, entity.clientKey, entity.jwks);
+        }
+        if (ClientAuthMethod.WORKLOAD_IDENTITY.name().equals(entity.authMethod)
+                && present(entity.assertionIssuer) && present(entity.assertionSubject)) {
+            return AssertionTrust.ofIssuer(entity.assertionIssuer, entity.assertionSubject);
+        }
+        return null;
+    }
+
+    private static boolean present(String value) {
+        return value != null && !value.isBlank();
     }
 }

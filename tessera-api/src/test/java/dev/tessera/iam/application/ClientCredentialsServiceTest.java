@@ -58,6 +58,7 @@ class ClientCredentialsServiceTest {
     private final AtomicReference<ClaimSet> signed = new AtomicReference<>();
     private final AtomicInteger verifierCalls = new AtomicInteger();
     private static final ClientId KEYED = new ClientId(UUID.randomUUID());
+    private static final ClientId WORKLOAD = new ClientId(UUID.randomUUID());
     private static final String GOOD_ASSERTION = "a-valid-assertion";
     /** Each key-source lookup, and the trust each assertion verification ran with. */
     private final List<ClientId> keyLookups = new ArrayList<>();
@@ -76,6 +77,8 @@ class ClientCredentialsServiceTest {
                 "spa", new PublicClient(new ClientId(UUID.randomUUID()), TENANT_A, CC, Set.of()),
                 "profile-service", confidential("profile-service", CC, Set.of("profile"), AUDIENCES,
                         ClientAuthMethod.CLIENT_SECRET),
+                "workload", new ConfidentialClient(WORKLOAD, TENANT_A, CC, ClientAuthMethod.WORKLOAD_IDENTITY, Set.of(),
+                        Set.of("orders.read"), AUDIENCES, List.of()),
                 "keyed", new ConfidentialClient(KEYED, TENANT_A, CC, ClientAuthMethod.PRIVATE_KEY_JWT, Set.of(),
                         Set.of("orders.read"), AUDIENCES, List.of()));
     }
@@ -131,7 +134,8 @@ class ClientCredentialsServiceTest {
         // valid assertion verifies against it.
         ClientKeySourcePort keys = (realm, id) -> {
             keyLookups.add(id);
-            return Uni.createFrom().item(KEYED.equals(id) ? new AssertionTrust("keyed", "keyed", "{\"keys\":[]}") : null);
+            return Uni.createFrom().item(KEYED.equals(id) ? new AssertionTrust("keyed", "keyed", "{\"keys\":[]}")
+                    : WORKLOAD.equals(id) ? AssertionTrust.ofIssuer("https://platform.example", "sa-1") : null);
         };
         ClientAssertionVerifierPort assertions = (realm, trust, assertion) -> {
             assertionChecks.add(trust);
@@ -281,6 +285,15 @@ class ClientCredentialsServiceTest {
         assertThat(signed.get().claims()).containsEntry("sub", "keyed").containsEntry("client_id", "keyed");
         assertThat(keyLookups).containsExactly(KEYED);
         assertThat(verifierCalls).hasValue(0);
+    }
+
+    @Test
+    @DisplayName("a workload-identity client authenticates with its issuer's token, never with a secret")
+    void workloadIdentityClientUsesTheAssertionPath() {
+        assertThat(issueWithAssertion("workload", GOOD_ASSERTION)).isInstanceOf(TokenResult.Issued.class);
+        assertThat(keyLookups).containsExactly(WORKLOAD);
+        assertThat(assertionChecks).containsExactly(AssertionTrust.ofIssuer("https://platform.example", "sa-1"));
+        assertFailed(issue("workload", SECRET, null, List.of()), AuthorizationError.INVALID_CLIENT);
     }
 
     @Test

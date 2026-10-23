@@ -79,6 +79,14 @@ public class OAuthClientEntity extends PanacheEntityBase {
     @JdbcTypeCode(SqlTypes.JSON)
     public String jwks;
 
+    /** The {@code iss} a {@code WORKLOAD_IDENTITY} client's token must carry; {@code null} otherwise. */
+    @Column(name = "assertion_issuer", length = 512)
+    public String assertionIssuer;
+
+    /** The {@code sub} a {@code WORKLOAD_IDENTITY} client's token must carry; {@code null} otherwise. */
+    @Column(name = "assertion_subject", length = 512)
+    public String assertionSubject;
+
     /** Comma-separated allowed {@code grant_type} values. */
     @Column(name = "allowed_grants", nullable = false)
     public String allowedGrants;

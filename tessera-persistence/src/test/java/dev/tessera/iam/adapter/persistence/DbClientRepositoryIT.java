@@ -218,6 +218,39 @@ class DbClientRepositoryIT {
 
     @Test
     @RunOnVertxContext
+    @DisplayName("a workload-identity client's trust is its issuer and subject; one with a secret or keys, or an issuer on another client, is refused")
+    void workloadIdentityClient(UniAsserter asserter) {
+        UUID tenant = UUID.randomUUID();
+        UUID workloadId = UUID.randomUUID();
+        asserter.execute(() -> scoped(tenant, s -> s.persist(workload(tenant, workloadId, "wl-app")).call(s::flush)));
+        asserter.assertThat(() -> keySource.trustFor(realm(tenant), new ClientId(workloadId)), trust ->
+                Assertions.assertThat(trust).isEqualTo(
+                        ClientKeySourcePort.AssertionTrust.ofIssuer("https://platform.example", "sa-1")));
+
+        OAuthClientEntity withSecret = workload(tenant, UUID.randomUUID(), "wl-secret");
+        withSecret.secretHash = "hash";
+        OAuthClientEntity noSubject = workload(tenant, UUID.randomUUID(), "wl-nosub");
+        noSubject.assertionSubject = null;
+        OAuthClientEntity secretWithIssuer = confidential(tenant, UUID.randomUUID(), "secret-issuer", "hash");
+        secretWithIssuer.assertionIssuer = "https://platform.example";
+        for (OAuthClientEntity refused : List.of(withSecret, noSubject)) {
+            asserter.assertFailedWith(() -> scoped(tenant, s -> s.persist(refused).call(s::flush)), failure ->
+                    Assertions.assertThat(failure).hasStackTraceContaining("ck_oauth_client_workload_identity_shape"));
+        }
+        asserter.assertFailedWith(() -> scoped(tenant, s -> s.persist(secretWithIssuer).call(s::flush)), failure ->
+                Assertions.assertThat(failure).hasStackTraceContaining("ck_oauth_client_issuer_only_for_workload_identity"));
+    }
+
+    private static OAuthClientEntity workload(UUID tenant, UUID id, String key) {
+        OAuthClientEntity e = confidential(tenant, id, key, null);
+        e.authMethod = "WORKLOAD_IDENTITY";
+        e.assertionIssuer = "https://platform.example";
+        e.assertionSubject = "sa-1";
+        return e;
+    }
+
+    @Test
+    @RunOnVertxContext
     @DisplayName("a private_key_jwt client with a secret, and keys on a secret client, are refused")
     void oneAuthenticationMethodPerClient(UniAsserter asserter) {
         UUID tenant = UUID.randomUUID();
