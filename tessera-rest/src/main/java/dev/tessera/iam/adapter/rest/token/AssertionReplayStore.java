@@ -46,22 +46,26 @@ final class AssertionReplayStore {
     /**
      * Records a {@code jti} until {@code until}.
      *
+     * @param global whether the {@code jti} is spent across realms: a trusted external issuer and
+     *               subject name one workload wherever it is presented, while a {@code private_key_jwt}
+     *               client's id names a client within its realm only
      * @return {@code true} when it was not live, and neither its client, its realm nor the store is full
      */
-    synchronized boolean firstUse(RealmKey realm, String issuer, String subject, String jti, Instant until,
-            Instant now) {
+    synchronized boolean firstUse(RealmKey realm, String issuer, String subject, String jti, boolean global,
+            Instant until, Instant now) {
         evictExpired(now);
-        Spent spent = new Spent(new Owner(realm, issuer, subject), jti);
+        Owner owner = new Owner(realm, issuer, subject);
+        Spent spent = new Spent(global ? null : realm, issuer, subject, jti);
         if (live.containsKey(spent)
-                || perClient.getOrDefault(spent.owner(), 0) >= maxPerClient
+                || perClient.getOrDefault(owner, 0) >= maxPerClient
                 || perRealm.getOrDefault(realm, 0) >= maxPerRealm
                 || live.size() >= maxTotal) {
             return false;
         }
         live.put(spent, until);
-        perClient.merge(spent.owner(), 1, Integer::sum);
+        perClient.merge(owner, 1, Integer::sum);
         perRealm.merge(realm, 1, Integer::sum);
-        expiries.add(new Expiry(until, spent));
+        expiries.add(new Expiry(until, spent, owner));
         return true;
     }
 
@@ -69,17 +73,19 @@ final class AssertionReplayStore {
         for (Expiry head = expiries.peek(); head != null && head.until().isBefore(now); head = expiries.peek()) {
             expiries.poll();
             live.remove(head.spent());
-            perClient.computeIfPresent(head.spent().owner(), (owner, count) -> count == 1 ? null : count - 1);
-            perRealm.computeIfPresent(head.spent().owner().realm(), (realm, count) -> count == 1 ? null : count - 1);
+            perClient.computeIfPresent(head.owner(), (owner, count) -> count == 1 ? null : count - 1);
+            perRealm.computeIfPresent(head.owner().realm(), (realm, count) -> count == 1 ? null : count - 1);
         }
     }
 
     private record Owner(RealmKey realm, String issuer, String subject) {
     }
 
-    private record Spent(Owner owner, String jti) {
+    /** The replay identity: {@code scope} is the realm, or {@code null} when it is spent across realms. */
+    private record Spent(RealmKey scope, String issuer, String subject, String jti) {
     }
 
-    private record Expiry(Instant until, Spent spent) {
+    /** One live entry, and the owner whose caps it counts against. */
+    private record Expiry(Instant until, Spent spent, Owner owner) {
     }
 }

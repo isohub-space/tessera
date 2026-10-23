@@ -121,6 +121,16 @@ class ExternalIssuerAssertionTest {
     }
 
     @Test
+    @DisplayName("a workload's jti is spent once across realms, not once per realm")
+    void jtiIsSpentAcrossRealms() {
+        NimbusClientAssertionVerifier verifier = verifier(Duration.ofHours(1), false, 10);
+        String token = token(c -> c.jwtID("global"));
+        RealmKey otherRealm = new RealmKey(TenantId.generate(), BaselineId.generate());
+        assertThat(verifier.verifyNow(REALM, trust, token, now.get())).isTrue();
+        assertThat(verifier.verifyNow(otherRealm, trust, token, now.get())).isFalse();
+    }
+
+    @Test
     @DisplayName("the replay cap belongs to realm, issuer and subject: one subject's cap leaves another's free")
     void replayCapOwnerIsTheSubject() {
         NimbusClientAssertionVerifier verifier = verifier(Duration.ofHours(1), false, 1);
