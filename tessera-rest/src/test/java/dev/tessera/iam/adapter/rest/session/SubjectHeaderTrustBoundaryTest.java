@@ -61,9 +61,10 @@ class SubjectHeaderTrustBoundaryTest {
                 .queryParam("code_challenge_method", "S256")
                 .when().get("/authorize")
                 .then()
-                // access_denied (no subject), NOT a 302 with an issued code for the forged subject.
-                .statusCode(400)
-                .body("error", Matchers.equalTo("access_denied"));
+                // No subject: the browser is sent to sign in, NOT given a code for the forged subject.
+                .statusCode(303)
+                .header("Location", Matchers.containsString("/signin?txn="))
+                .header("Location", Matchers.not(Matchers.containsString("code=")));
     }
 
     @Test

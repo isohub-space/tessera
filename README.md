@@ -54,9 +54,11 @@ precise about that boundary matters.
   tamper-evident per-tenant audit log.
 
 **What it is _not_ (yet)**
-- **Not a login _UI_.** Tessera serves the login, consent and logout endpoints and owns the
-  session they establish, but ships no HTML for them — you bring the front-end that collects
-  the credentials and posts them. The `X-Subject-Id` header that an upstream authenticator
+- **Not a full login _product_.** Tessera hosts one page of its own, the sign-in page at
+  `/signin`: `/authorize` sends a browser that has no session there, so every client signs in
+  on tessera's origin, whatever site it runs on. It takes a username and password and nothing
+  more: no consent screen, second factor, sign-up or per-deployment theming yet. The
+  `X-Subject-Id` header that an upstream authenticator
   once supplied instead is default-closed (`iam.subject.trust-header=false`): any inbound
   value is stripped, and a verified session cookie is the only way to establish a subject.
 - **Not yet self-sufficient for production key protection.** Signing keys are wrapped with a
@@ -168,8 +170,8 @@ The domain already models these concepts; the adapters will follow in later wave
 Tessera is a standard Quarkus application. The fastest path:
 
 ```bash
-git clone https://github.com/isohub-space/tessera.git
-cd tessera
+git clone https://github.com/meta-agentic/meta-iam.git
+cd meta-iam
 
 # Build (unit tests only; integration tests need Docker — see below).
 mvn -DskipITs verify
@@ -185,6 +187,7 @@ The server listens on `http://localhost:8090` by default. Key endpoints:
 | `GET /.well-known/openid-configuration` | OIDC discovery document |
 | `GET /.well-known/jwks.json` | JSON Web Key Set (public signing keys) |
 | `GET /authorize` | Authorization Code + PKCE endpoint |
+| `GET` · `POST /signin` | Hosted sign-in page, reached from `/authorize` when the browser has no session |
 | `POST /token` | Token endpoint (authorization-code, `refresh_token` and `client_credentials` grants) |
 | `POST /introspect` | Token introspection (RFC 7662) |
 | `POST /revoke` | Token revocation (RFC 7009) |
@@ -210,16 +213,25 @@ rather than behind an application gateway, and what that costs, is recorded in
 | `iam.client-assertion.trusted-issuers.<name>.issuer`, `.jwks-uri`, `.max-lifetime`, `.require-jti`, `.enforce-single-use` | Trust an external issuer for keyless (workload-identity) clients. A client is registered with `auth_method = 'WORKLOAD_IDENTITY'` and the `assertion_issuer` and `assertion_subject` its token must carry, unique across tenants. It calls `/token` with `client_credentials`, `client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer`, its platform token as `client_assertion`, and its `client_id`, which is required (the token's `sub` names the workload, not the client); the token's audience must be tessera's issuer. The default `max-lifetime` of `PT5M` refuses common platform tokens, so set the issuer's own: for example `…trusted-issuers.google.issuer=https://accounts.google.com`, `…google.jwks-uri=https://www.googleapis.com/oauth2/v3/certs`, `…google.max-lifetime=PT1H`; and for a Kubernetes cluster (projected tokens live at least 10 minutes) `…trusted-issuers.cluster.issuer=<the cluster's service-account issuer>`, `…cluster.jwks-uri=<its public JWKS URL>`, `…cluster.max-lifetime=PT1H`. A platform token is exchanged again and again until the platform rotates it, so by default its `jti` (if any) is recorded and reuse is allowed until `exp`; `require-jti=true` refuses a token without one, and `enforce-single-use=true` (for an issuer that mints a token per request) accepts each `jti` once. `private_key_jwt` assertions always carry a `jti` and are used once. |
 | `TESSERA_ARGON2_POOL_SIZE=4`, `TESSERA_ARGON2_MAX_WAITING=16`, `TESSERA_ARGON2_TENANT_SHARE=0.5`, `TESSERA_ARGON2_WAIT_DEADLINE=PT1S` | Bound the cost of credential verification. Every client authentication costs one Argon2id pass, also for an unknown `client_id`. At most `pool-size + max-waiting` verifications are admitted at once, one tenant may hold `tenant-share` of them (so `ceil(1 / tenant-share)` tenants flooding at once fill the cap), and one still waiting after `wait-deadline` is dropped. A refused request gets `503` with `Retry-After`. With a gateway-asserted `X-Tenant-Id`, the per-tenant share is only as strong as the edge's stripping of a client-supplied header. The defaults are provisional until a perf run measures them. |
 | `TESSERA_REQUIRE_SENDER_CONSTRAINT=false` | Lets a secret-authenticated confidential client that can present no client certificate (a back-end-for-frontend behind a TLS-terminating edge) receive a plain Bearer token. Leave at the default `true` wherever clients can do mTLS or DPoP. |
-| `TESSERA_CORS_ORIGINS=https://app.example.com` | Allows the relying party's own login page to `POST /login` cross-origin with credentials. `/authorize` never answers cross-origin, whatever is listed (RFC 9700 §2.6). |
-| build with `-Dquarkus.profile=prod,singlenode` | For a deployment that runs exactly one instance: the in-process authorization-code store is used and no Infinispan server is needed. Run more than one instance and codes minted on one node cannot be redeemed on another — use the default profile and a shared cache instead. |
+| `TESSERA_CORS_ORIGINS=https://app.example.com` | Allows a relying party that collects the credential on its own page to `POST /login` cross-origin with credentials. The hosted sign-in page posts to its own origin and needs nothing listed. `/authorize` never answers cross-origin, whatever is listed (RFC 9700 §2.6). |
+| `TESSERA_SIGN_IN_TTL=PT10M` (`iam.authflow.sign-in-ttl`) | How long an authorization request may wait on the sign-in page. |
+| build with `-Dquarkus.profile=prod,singlenode` | For a deployment that runs exactly one instance: the in-process authorization-code and sign-in stores are used and no Infinispan server is needed. Run more than one instance and codes minted on one node cannot be redeemed on another, nor a sign-in started on one finished on another — use the default profile and a shared cache instead. |
 
 The ID token then carries `realm_tenant` and `realm_baseline` when the `profile` scope is
 granted, which is how a relying party that scopes its own data by tenant learns which tenant
 a signed-in user belongs to without guessing.
 
-Tessera serves no login page (see "What Tessera is — and is not"): the relying party's own
-page posts `username`/`password` to `/login`, receives the `tessera_session` cookie, and only
-then sends the browser through `/authorize`.
+A relying party sends the browser to `/authorize` and needs no login page of its own. When the
+browser has no `tessera_session`, the client and redirect URI are validated and the request is
+parked: `303` to `/signin?txn=…`, with a `tessera_authz` cookie (`HttpOnly`, `Secure`,
+`SameSite=Lax`, path `/signin`) that binds it to that browser. The page posts to its own origin
+with a synchronizer token; on success it sets the session cookie and answers the parked request
+with `303` to the registered redirect URI carrying `code`, `state` and `iss`. A post from
+another site (`Sec-Fetch-Site`), without the binding cookie or token, or after the request was
+answered, is refused before the password is checked. The page carries its own
+Content-Security-Policy, which lets its form post to tessera and end at the client's origin; the
+server-wide one skips that path. `POST /login` stays for a relying party that collects the
+credential itself.
 
 ### As a library dependency
 
@@ -229,7 +241,7 @@ core logic into your own Quarkus application:
 
 ```xml
 <dependency>
-  <groupId>space.isohub</groupId>
+  <groupId>ai.meta-agentic</groupId>
   <artifactId>tessera-api</artifactId>
   <version>0.1.0-SNAPSHOT</version>
 </dependency>
@@ -239,12 +251,12 @@ The full artifact list published to Maven Central:
 
 | Artifact | Use |
 |----------|-----|
-| `space.isohub:tessera-domain` | Domain types only (no Quarkus dependency) |
-| `space.isohub:tessera-api` | Port interfaces + application service |
-| `space.isohub:tessera-persistence` | Bundled Hibernate Reactive / Postgres adapter |
-| `space.isohub:tessera-rest` | Bundled JAX-RS adapter |
-| `space.isohub:tessera-statemachine` | Auth-flow state-machine library |
-| `space.isohub:tessera-observability` | Metrics / tracing / health module |
+| `ai.meta-agentic:tessera-domain` | Domain types only (no Quarkus dependency) |
+| `ai.meta-agentic:tessera-api` | Port interfaces + application service |
+| `ai.meta-agentic:tessera-persistence` | Bundled Hibernate Reactive / Postgres adapter |
+| `ai.meta-agentic:tessera-rest` | Bundled JAX-RS adapter |
+| `ai.meta-agentic:tessera-statemachine` | Auth-flow state-machine library |
+| `ai.meta-agentic:tessera-observability` | Metrics / tracing / health module |
 
 > Snapshots are not yet published. The first tagged release, `26.1.0 "Andromeda"`, is
 > gated on the `tessera-e2e` integration suite passing an end-to-end OIDC flow against a
@@ -399,7 +411,8 @@ tagged when the wave's integration test suite passes an end-to-end OIDC flow.
 
 ### Wave 2 — interactive login
 - [ ] Subject repository port + pluggable credential verifier (password, TOTP, WebAuthn)
-- [ ] Login and consent UI (server-side rendered; replaceable)
+- [x] Hosted sign-in page (server-side rendered, password only) — `/authorize` → `/signin` → code, bound to the browser, shared across nodes
+- [ ] Consent UI, and per-deployment theming of the sign-in page
 
 ### Wave 3 — RFC completeness & operations
 - [ ] Dynamic client registration — RFC 7591

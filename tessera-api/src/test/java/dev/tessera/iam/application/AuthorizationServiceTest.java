@@ -81,6 +81,11 @@ class AuthorizationServiceTest {
             public java.util.UUID newFamilyId() {
                 return java.util.UUID.fromString("00000000-0000-7000-8000-000000000001");
             }
+
+            @Override
+            public String newSignInSecret() {
+                return "fixed-sign-in-secret";
+            }
         };
         return new AuthorizationService(clients, codeStore, ids,
                 Clock.fixed(Instant.parse("2026-01-01T00:00:00Z"), ZoneOffset.UTC),

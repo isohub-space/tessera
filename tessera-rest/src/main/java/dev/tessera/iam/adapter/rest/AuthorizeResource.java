@@ -4,11 +4,14 @@ import io.smallrye.mutiny.Uni;
 import dev.tessera.iam.adapter.rest.config.OidcDiscoveryConfig;
 import dev.tessera.iam.adapter.rest.dto.OAuthErrorDto;
 import dev.tessera.iam.adapter.rest.ratelimit.RateLimited;
+import dev.tessera.iam.adapter.rest.signin.SignInCookies;
 import dev.tessera.iam.adapter.rest.tenancy.SubjectHeaders;
 import dev.tessera.iam.adapter.rest.tenancy.TenantContext;
 import dev.tessera.iam.adapter.rest.tenancy.TenantScoped;
 import dev.tessera.iam.application.port.in.AuthorizeUseCase;
 import dev.tessera.iam.application.port.in.AuthorizeUseCase.AuthorizeResult;
+import dev.tessera.iam.application.port.in.SignInUseCase;
+import dev.tessera.iam.application.port.in.SignInUseCase.BeginResult;
 import dev.tessera.iam.domain.authcode.AuthorizationError;
 import dev.tessera.iam.domain.authcode.AuthorizationRequest;
 import dev.tessera.iam.domain.authcode.CodeChallenge;
@@ -19,10 +22,11 @@ import jakarta.ws.rs.HeaderParam;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.QueryParam;
+import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.core.UriInfo;
 import java.net.URI;
-import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.Set;
@@ -50,11 +54,13 @@ import org.eclipse.microprofile.openapi.annotations.tags.Tag;
  * </ul>
  *
  * <h2>End-user authentication seam</h2>
- * In a complete server the {@code sub} comes from an authenticated session established by a
- * login/consent step. That UI is not part of this flow; the authenticated subject is taken
- * from the {@code X-Subject-Id} header, which is where the login/consent front-end (or an
- * upstream authenticating proxy) injects the established identity. A request with no subject
- * is refused ({@code login_required} is out of scope here — it is an {@code access_denied}).
+ * The authenticated subject is taken from the {@code X-Subject-Id} header, which
+ * {@code SessionCookieFilter} fills from a session cookie (or a trusted upstream proxy
+ * asserts). A request with no subject is handed to the hosted sign-in page: the client and
+ * redirect URI are validated first, and only a request that could be answered is parked and
+ * answered with {@code 303} to {@code /signin?txn=…} plus the cookie that binds it to this
+ * browser ({@link SignInCookies}). A request that fails validation is a {@code 400} here, as
+ * it would be for a signed-in user.
  *
  * <p><strong>See {@link SubjectHeaders} for this header's trust boundary</strong> — it must
  * never be trusted unless the deployment's edge strips any client-supplied value, exactly
@@ -77,6 +83,9 @@ public class AuthorizeResource {
     AuthorizeUseCase authorize;
 
     @Inject
+    SignInUseCase signIn;
+
+    @Inject
     OidcDiscoveryConfig config;
 
     @Inject
@@ -88,6 +97,7 @@ public class AuthorizeResource {
             operationId = "authorize",
             summary = "Authorize a request and issue a single-use code (Authorization Code + PKCE)")
     public Uni<Response> authorize(
+            @Context UriInfo uriInfo,
             @HeaderParam(SubjectHeaders.SUBJECT) String subjectId,
             @QueryParam("response_type") String responseType,
             @QueryParam("client_id") String clientId,
@@ -130,11 +140,6 @@ public class AuthorizeResource {
             return badRequest(AuthorizationError.INVALID_REQUEST,
                     "code_challenge_method must be S256");
         }
-        if (isBlank(subjectId)) {
-            // No authenticated end-user — in a full flow this is where login/consent runs.
-            return badRequest(AuthorizationError.ACCESS_DENIED, "no authenticated subject");
-        }
-
         AuthorizationRequest request;
         try {
             request = new AuthorizationRequest(
@@ -167,16 +172,31 @@ public class AuthorizeResource {
             return badRequest(AuthorizationError.INVALID_REQUEST, ex.getMessage());
         }
 
+        if (isBlank(subjectId)) {
+            return signIn.begin(request).map(result -> switch (result) {
+                case BeginResult.Started started -> Response.seeOther(uriInfo.getBaseUriBuilder()
+                                .path("signin")
+                                .queryParam("txn", started.transactionId())
+                                .build())
+                        .cookie(SignInCookies.issue(
+                                uriInfo, started.binding(), started.lifetime().toSeconds()))
+                        .header("Cache-Control", "no-store")
+                        .build();
+                case BeginResult.Refused refused -> errorBody(refused.error(), refused.description());
+            });
+        }
+
         return authorize.authorize(request, subjectId)
                 .map(result -> render(result, redirectUri, state));
     }
 
     private Response render(AuthorizeResult result, String redirectUri, String state) {
         return switch (result) {
-            case AuthorizeResult.Issued issued -> redirect(
-                    successRedirect(redirectUri, issued.code(), issued.state()));
+            case AuthorizeResult.Issued issued -> redirect(AuthorizationResponses.success(
+                    redirectUri, issued.code(), issued.state(), config.issuer()));
             case AuthorizeResult.Failed failed -> failed.redirectable()
-                    ? redirect(errorRedirect(redirectUri, failed.error(), failed.description(), state))
+                    ? redirect(AuthorizationResponses.error(
+                            redirectUri, failed.error(), failed.description(), state, config.issuer()))
                     : errorBody(failed.error(), failed.description());
         };
     }
@@ -184,30 +204,6 @@ public class AuthorizeResource {
     /** A 302 redirect (RFC 6749 uses 302; the authorization response is delivered in the URI). */
     private static Response redirect(URI location) {
         return Response.status(Response.Status.FOUND).location(location).build();
-    }
-
-    // ------------------------------------------------------------- redirect builders
-
-    /** Success redirect: {@code code}, {@code state} and the RFC 9207 {@code iss}. */
-    private URI successRedirect(String redirectUri, String code, String state) {
-        StringBuilder query = new StringBuilder()
-                .append("code=").append(encode(code))
-                .append("&state=").append(encode(state))
-                .append("&iss=").append(encode(config.issuer()));
-        return appendQuery(redirectUri, query.toString());
-    }
-
-    /** Error redirect: {@code error}, {@code error_description}, {@code state}, {@code iss}. */
-    private URI errorRedirect(
-            String redirectUri, AuthorizationError error, String description, String state) {
-        StringBuilder query = new StringBuilder()
-                .append("error=").append(encode(error.code()))
-                .append("&error_description=").append(encode(description))
-                .append("&iss=").append(encode(config.issuer()));
-        if (!isBlank(state)) {
-            query.append("&state=").append(encode(state));
-        }
-        return appendQuery(redirectUri, query.toString());
     }
 
     private static Uni<Response> badRequest(AuthorizationError error, String description) {
@@ -221,21 +217,11 @@ public class AuthorizeResource {
                 .build();
     }
 
-    /** Appends a query string to a redirect URI, preserving any query it already carries. */
-    private static URI appendQuery(String redirectUri, String query) {
-        String separator = redirectUri.indexOf('?') >= 0 ? "&" : "?";
-        return URI.create(redirectUri + separator + query);
-    }
-
     private static Set<String> parseScopes(String scope) {
         if (scope == null || scope.isBlank()) {
             return Set.of();
         }
         return new LinkedHashSet<>(Arrays.asList(scope.trim().split("\\s+")));
-    }
-
-    private static String encode(String value) {
-        return java.net.URLEncoder.encode(value, StandardCharsets.UTF_8);
     }
 
     private static boolean isBlank(String value) {

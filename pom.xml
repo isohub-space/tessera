@@ -4,7 +4,7 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
 
-  <groupId>space.isohub</groupId>
+  <groupId>ai.meta-agentic</groupId>
   <artifactId>tessera-parent</artifactId>
   <version>0.1.0-SNAPSHOT</version>
   <packaging>pom</packaging>
@@ -16,7 +16,7 @@
     architecture: framework-free domain and api, REST and persistence adapters, and a
     thin Quarkus composition root.
   </description>
-  <url>https://github.com/isohub-space/tessera</url>
+  <url>https://github.com/meta-agentic/meta-iam</url>
 
   <licenses>
     <license>
@@ -39,15 +39,15 @@
   </developers>
 
   <scm>
-    <connection>scm:git:https://github.com/isohub-space/tessera.git</connection>
-    <developerConnection>scm:git:https://github.com/isohub-space/tessera.git</developerConnection>
-    <url>https://github.com/isohub-space/tessera</url>
+    <connection>scm:git:https://github.com/meta-agentic/meta-iam.git</connection>
+    <developerConnection>scm:git:https://github.com/meta-agentic/meta-iam.git</developerConnection>
+    <url>https://github.com/meta-agentic/meta-iam</url>
     <tag>HEAD</tag>
   </scm>
 
   <issueManagement>
     <system>GitHub Issues</system>
-    <url>https://github.com/isohub-space/tessera/issues</url>
+    <url>https://github.com/meta-agentic/meta-iam/issues</url>
   </issueManagement>
 
   <properties>
@@ -66,7 +66,7 @@
     <jandex-maven-plugin.version>3.6.0</jandex-maven-plugin.version>
     <maven-compiler-plugin.version>3.16.0</maven-compiler-plugin.version>
     <maven-surefire-plugin.version>3.6.1</maven-surefire-plugin.version>
-    <maven-failsafe-plugin.version>3.6.0</maven-failsafe-plugin.version>
+    <maven-failsafe-plugin.version>3.6.1</maven-failsafe-plugin.version>
 
     <!--
       Security tooling. dependency-check lives in the on-demand `owasp` profile
@@ -115,32 +115,32 @@
 
       <!-- Internal module coordinates. -->
       <dependency>
-        <groupId>space.isohub</groupId>
+        <groupId>ai.meta-agentic</groupId>
         <artifactId>tessera-statemachine</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
-        <groupId>space.isohub</groupId>
+        <groupId>ai.meta-agentic</groupId>
         <artifactId>tessera-observability</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
-        <groupId>space.isohub</groupId>
+        <groupId>ai.meta-agentic</groupId>
         <artifactId>tessera-domain</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
-        <groupId>space.isohub</groupId>
+        <groupId>ai.meta-agentic</groupId>
         <artifactId>tessera-api</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
-        <groupId>space.isohub</groupId>
+        <groupId>ai.meta-agentic</groupId>
         <artifactId>tessera-persistence</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
-        <groupId>space.isohub</groupId>
+        <groupId>ai.meta-agentic</groupId>
         <artifactId>tessera-rest</artifactId>
         <version>${project.version}</version>
       </dependency>

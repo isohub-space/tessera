@@ -26,8 +26,14 @@ Accumulating toward the first release, `26.1.0 "Andromeda"`.
   credential-verification throttle, with Argon2id isolated on a dedicated worker pool.
 - Tamper-evident per-tenant audit log with periodically signed checkpoints.
 - Observability: Micrometer/Prometheus metrics, OpenTelemetry tracing, SmallRye Health.
+- Hosted sign-in page (`GET`/`POST /signin`): `/authorize` with no session validates the client
+  and redirect URI, parks the request and sends the browser there, so clients on any site sign in
+  on tessera's own origin. Bound to the browser by a `SameSite=Lax` cookie, protected by a
+  synchronizer token and Fetch Metadata, answered at most once, with its own
+  Content-Security-Policy. Parked requests live in a shared Infinispan cache, or in process under
+  `singlenode`.
 
 ### Security
 - Fail-closed startup: a production deployment refuses the well-known development master key.
 
-[Unreleased]: https://github.com/isohub-space/tessera/commits/main
+[Unreleased]: https://github.com/meta-agentic/meta-iam/commits/main

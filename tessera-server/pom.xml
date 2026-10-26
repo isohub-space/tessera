@@ -5,7 +5,7 @@
   <modelVersion>4.0.0</modelVersion>
 
   <parent>
-    <groupId>space.isohub</groupId>
+    <groupId>ai.meta-agentic</groupId>
     <artifactId>tessera-parent</artifactId>
     <version>0.1.0-SNAPSHOT</version>
   </parent>
@@ -21,17 +21,17 @@
   <dependencies>
     <!-- Adapters -->
     <dependency>
-      <groupId>space.isohub</groupId>
+      <groupId>ai.meta-agentic</groupId>
       <artifactId>tessera-rest</artifactId>
     </dependency>
     <dependency>
-      <groupId>space.isohub</groupId>
+      <groupId>ai.meta-agentic</groupId>
       <artifactId>tessera-persistence</artifactId>
     </dependency>
 
     <!-- Shared observability: metrics + health bootstrap. -->
     <dependency>
-      <groupId>space.isohub</groupId>
+      <groupId>ai.meta-agentic</groupId>
       <artifactId>tessera-observability</artifactId>
     </dependency>
 
