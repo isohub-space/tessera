@@ -229,7 +229,7 @@ core logic into your own Quarkus application:
 
 ```xml
 <dependency>
-  <groupId>space.isohub</groupId>
+  <groupId>ai.meta-agentic</groupId>
   <artifactId>tessera-api</artifactId>
   <version>0.1.0-SNAPSHOT</version>
 </dependency>
@@ -239,12 +239,12 @@ The full artifact list published to Maven Central:
 
 | Artifact | Use |
 |----------|-----|
-| `space.isohub:tessera-domain` | Domain types only (no Quarkus dependency) |
-| `space.isohub:tessera-api` | Port interfaces + application service |
-| `space.isohub:tessera-persistence` | Bundled Hibernate Reactive / Postgres adapter |
-| `space.isohub:tessera-rest` | Bundled JAX-RS adapter |
-| `space.isohub:tessera-statemachine` | Auth-flow state-machine library |
-| `space.isohub:tessera-observability` | Metrics / tracing / health module |
+| `ai.meta-agentic:tessera-domain` | Domain types only (no Quarkus dependency) |
+| `ai.meta-agentic:tessera-api` | Port interfaces + application service |
+| `ai.meta-agentic:tessera-persistence` | Bundled Hibernate Reactive / Postgres adapter |
+| `ai.meta-agentic:tessera-rest` | Bundled JAX-RS adapter |
+| `ai.meta-agentic:tessera-statemachine` | Auth-flow state-machine library |
+| `ai.meta-agentic:tessera-observability` | Metrics / tracing / health module |
 
 > Snapshots are not yet published. The first tagged release, `26.1.0 "Andromeda"`, is
 > gated on the `tessera-e2e` integration suite passing an end-to-end OIDC flow against a
