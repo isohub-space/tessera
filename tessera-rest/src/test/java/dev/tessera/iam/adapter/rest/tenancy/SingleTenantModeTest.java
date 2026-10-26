@@ -55,7 +55,7 @@ class SingleTenantModeTest {
     @Test
     @DisplayName("/authorize runs under the fixed tenant: the tenant chokepoint no longer refuses, the flow does")
     void authorizeBindsFixedTenant() {
-        // With no session there is no subject, so the flow answers access_denied as JSON —
+        // With no session there is no subject, so the flow sends the browser to sign in —
         // never the problem+json 400 the tenant chokepoint emits for a missing header.
         given().config(noFollow())
                 .header("X-Tenant-Id", UUID.randomUUID().toString())
@@ -68,9 +68,8 @@ class SingleTenantModeTest {
                 .queryParam("code_challenge", "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM")
                 .queryParam("code_challenge_method", "S256")
                 .when().get("/authorize")
-                .then().statusCode(400)
-                .contentType(not(containsString("problem+json")))
-                .body("error", equalTo("access_denied"));
+                .then().statusCode(303)
+                .header("Location", containsString("/signin?txn="));
     }
 
     private static RestAssuredConfig noFollow() {

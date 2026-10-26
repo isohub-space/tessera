@@ -47,6 +47,11 @@ public class SecureRandomIdentifierAdapter implements OpaqueIdentifierPort {
         return TimeOrderedUuid.generate();
     }
 
+    @Override
+    public String newSignInSecret() {
+        return randomToken();
+    }
+
     private String randomToken() {
         byte[] bytes = new byte[IDENTIFIER_BYTES];
         random.nextBytes(bytes);

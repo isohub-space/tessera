@@ -7,7 +7,7 @@ import java.time.Duration;
 /**
  * Lifetimes for the Authorization Code + PKCE flow.
  *
- * <p>All three are deliberately short-lived. The authorization code is single-use and
+ * <p>All of them are deliberately short-lived. The authorization code is single-use and
  * exchanged immediately, so its TTL is tight (RFC 6749 §4.1.2 / §10.5 recommend ≤ 10
  * minutes — this default is far tighter). Access- and ID-token lifetimes are bounded so a
  * leaked token has a small blast radius; longer-lived access is the job of a refresh token,
@@ -22,6 +22,14 @@ public interface AuthFlowConfig {
      */
     @WithDefault("PT1M")
     Duration codeTtl();
+
+    /**
+     * How long an authorization request may wait on the hosted sign-in page for the user to
+     * sign in. Long enough to type a password and fetch it from a manager, short enough that an
+     * abandoned tab does not keep a usable transaction.
+     */
+    @WithDefault("PT10M")
+    Duration signInTtl();
 
     /** The lifetime of an issued RFC 9068 JWT access token. */
     @WithDefault("PT5M")

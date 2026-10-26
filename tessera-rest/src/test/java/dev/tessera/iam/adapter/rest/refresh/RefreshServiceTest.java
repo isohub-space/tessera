@@ -78,6 +78,7 @@ class RefreshServiceTest {
         @Override public String newTokenId() { return "jti"; }
         @Override public String newRefreshToken() { return "new-secret-" + UUID.randomUUID(); }
         @Override public UUID newFamilyId() { return UUID.randomUUID(); }
+        @Override public String newSignInSecret() { return UUID.randomUUID().toString(); }
     };
 
     private RefreshService service() {
