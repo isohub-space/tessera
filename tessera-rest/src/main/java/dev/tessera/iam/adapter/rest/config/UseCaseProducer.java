@@ -10,6 +10,7 @@ import dev.tessera.iam.application.RefreshService;
 import dev.tessera.iam.application.RegisteredClientClaimSource;
 import dev.tessera.iam.application.RevokeService;
 import dev.tessera.iam.application.SessionService;
+import dev.tessera.iam.application.SignInService;
 import dev.tessera.iam.application.TokenService;
 import dev.tessera.iam.application.port.in.AuthorizeUseCase;
 import dev.tessera.iam.application.port.in.ClientCredentialsUseCase;
@@ -19,6 +20,7 @@ import dev.tessera.iam.application.port.in.LoginUseCase;
 import dev.tessera.iam.application.port.in.RefreshUseCase;
 import dev.tessera.iam.application.port.in.RevokeUseCase;
 import dev.tessera.iam.application.port.in.SessionUseCase;
+import dev.tessera.iam.application.port.in.SignInUseCase;
 import dev.tessera.iam.application.port.in.TokenUseCase;
 import dev.tessera.iam.application.port.out.AccessTokenIntrospectorPort;
 import dev.tessera.iam.application.port.out.AuthorizationCodeStorePort;
@@ -30,6 +32,7 @@ import dev.tessera.iam.application.port.out.ConsentStorePort;
 import dev.tessera.iam.application.port.out.DpopProofValidatorPort;
 import dev.tessera.iam.application.port.out.OpaqueIdentifierPort;
 import dev.tessera.iam.application.port.out.PasswordCredentialVerifierPort;
+import dev.tessera.iam.application.port.out.PendingAuthorizationStorePort;
 import dev.tessera.iam.application.port.out.RefreshTokenStorePort;
 import dev.tessera.iam.application.port.out.RefreshTokenTenantResolverPort;
 import dev.tessera.iam.application.port.out.SessionStorePort;
@@ -66,6 +69,20 @@ public class UseCaseProducer {
             Clock clock,
             AuthFlowConfig authFlow) {
         return new AuthorizationService(clients, codeStore, identifiers, clock, authFlow.codeTtl());
+    }
+
+    @Produces
+    @ApplicationScoped
+    SignInUseCase signInUseCase(
+            ClientRepositoryPort clients,
+            AuthorizeUseCase authorize,
+            LoginUseCase login,
+            PendingAuthorizationStorePort pending,
+            OpaqueIdentifierPort identifiers,
+            Clock clock,
+            AuthFlowConfig authFlow) {
+        return new SignInService(
+                clients, authorize, login, pending, identifiers, clock, authFlow.signInTtl());
     }
 
     @Produces

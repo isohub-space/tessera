@@ -116,11 +116,15 @@ public class RateLimitFilter implements ContainerRequestFilter {
                 && "token".equals(segments.get(segments.size() - 1).getPath());
     }
 
-    /** True iff the request targets the login endpoint. Matches the exact last path segment. */
+    /** True iff the request targets the login endpoint or the hosted sign-in page, which
+     *  verifies the same credential. Matches the exact last path segment. */
     private boolean isLogin(ContainerRequestContext request) {
         var segments = request.getUriInfo().getPathSegments();
-        return !segments.isEmpty()
-                && "login".equals(segments.get(segments.size() - 1).getPath());
+        if (segments.isEmpty()) {
+            return false;
+        }
+        String last = segments.get(segments.size() - 1).getPath();
+        return "login".equals(last) || "signin".equals(last);
     }
 
     private static RateLimitPolicy tokenPolicy(RateLimitConfig config) {

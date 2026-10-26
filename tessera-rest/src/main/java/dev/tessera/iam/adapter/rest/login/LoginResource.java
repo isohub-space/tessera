@@ -30,10 +30,11 @@ import org.eclipse.microprofile.openapi.annotations.tags.Tag;
  * {@link dev.tessera.iam.adapter.rest.session.SessionCookieFilter} is what later fills that
  * header from the cookie this endpoint sets.
  *
- * <p>Deliberately minimal: no HTML is served here (this is a JSON protocol server — see the
- * module README on what tessera is not yet) — a real deployment fronts this with its own
- * login page/form that posts here. The response carries no body on success; the session is
- * entirely represented by the cookie.
+ * <p>No HTML is served here. tessera's own page is {@code /signin}
+ * ({@link dev.tessera.iam.adapter.rest.signin.SignInResource}), which {@code /authorize} sends a
+ * browser to; this JSON endpoint remains for a relying party that collects the credential on its
+ * own page. The response carries no body on success; the session is entirely represented by the
+ * cookie.
  */
 @Path("/login")
 @Tag(name = "login", description = "End-user login: verifies a credential and establishes a session.")
