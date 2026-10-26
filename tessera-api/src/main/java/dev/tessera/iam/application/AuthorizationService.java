@@ -5,12 +5,9 @@ import dev.tessera.iam.application.port.in.AuthorizeUseCase;
 import dev.tessera.iam.application.port.out.AuthorizationCodeStorePort;
 import dev.tessera.iam.application.port.out.ClientRepositoryPort;
 import dev.tessera.iam.application.port.out.OpaqueIdentifierPort;
-import dev.tessera.iam.domain.authcode.AuthorizationError;
 import dev.tessera.iam.domain.authcode.AuthorizationGrant;
 import dev.tessera.iam.domain.authcode.AuthorizationRequest;
 import dev.tessera.iam.domain.client.Client;
-import dev.tessera.iam.domain.client.grant.AuthorizationCode;
-import dev.tessera.iam.domain.client.grant.GrantType;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -21,12 +18,11 @@ import java.time.Instant;
  *
  * <p>Framework-free (no CDI annotations): an adapter constructs it from the outbound ports
  * and a {@link Clock} and exposes it as a bean. All reactivity is in the {@link Uni} fold;
- * the security-relevant decisions (registered redirect URI, allowed grant) are explicit
- * branches, and the code/clock/randomness effects are confined to the injected ports.
+ * the security-relevant decisions (registered redirect URI, allowed grant) are made by
+ * {@link ClientRequestCheck}, which the sign-in path applies too, and the
+ * code/clock/randomness effects are confined to the injected ports.
  */
 public final class AuthorizationService implements AuthorizeUseCase {
-
-    private static final GrantType AUTHORIZATION_CODE = new AuthorizationCode();
 
     private final ClientRepositoryPort clients;
     private final AuthorizationCodeStorePort codeStore;
@@ -61,22 +57,9 @@ public final class AuthorizationService implements AuthorizeUseCase {
 
         return clients.findByClientId(request.realm(), request.clientId())
                 .flatMap(client -> {
-                    if (client == null) {
-                        // Unknown client: an error that must NOT be redirected (the redirect
-                        // URI itself is untrusted until the client is validated).
-                        return failed(AuthorizationError.INVALID_REQUEST,
-                                "unknown client", false);
-                    }
-                    if (!client.allowedGrants().contains(AUTHORIZATION_CODE)) {
-                        return failed(AuthorizationError.UNAUTHORIZED_CLIENT,
-                                "client may not use the authorization_code grant", false);
-                    }
-                    if (!client.redirectUris().contains(request.redirectUri())) {
-                        // Unregistered redirect URI: NON-redirectable — delivering an error to an
-                        // unregistered URI would itself be an open redirect. Exact-match check,
-                        // before any code is minted.
-                        return failed(AuthorizationError.INVALID_REQUEST,
-                                "redirect_uri is not registered for this client", false);
+                    AuthorizeResult.Failed refusal = ClientRequestCheck.refusal(client, request);
+                    if (refusal != null) {
+                        return Uni.createFrom().item((AuthorizeResult) refusal);
                     }
                     return issueCode(request, client, subjectId);
                 });
@@ -101,11 +84,6 @@ public final class AuthorizationService implements AuthorizeUseCase {
 
     private static Uni<AuthorizeResult> success(String code, String state) {
         return Uni.createFrom().item(new AuthorizeResult.Issued(code, state));
-    }
-
-    private static Uni<AuthorizeResult> failed(
-            AuthorizationError error, String description, boolean redirectable) {
-        return Uni.createFrom().item(new AuthorizeResult.Failed(error, description, redirectable));
     }
 
     private static <T> T requireNonNull(T value, String name) {

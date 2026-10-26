@@ -68,7 +68,7 @@ class SessionSeamIntegrationTest {
     }
 
     @Test
-    @DisplayName("a stale/unknown session cookie does NOT fill the seam — authorize still refuses")
+    @DisplayName("a stale/unknown session cookie does NOT fill the seam — authorize sends the browser to sign in")
     void unknownSessionCookieDoesNotAuthenticate() {
         String tenant = UUID.randomUUID().toString();
 
@@ -85,7 +85,9 @@ class SessionSeamIntegrationTest {
                 .queryParam("code_challenge_method", "S256")
                 .when().get("/authorize");
 
-        authorize.then().statusCode(400).body("error", org.hamcrest.Matchers.equalTo("access_denied"));
+        authorize.then().statusCode(303)
+                .header("Location", org.hamcrest.Matchers.containsString("/signin?txn="))
+                .header("Location", org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("code=")));
     }
 
     @Test
@@ -106,8 +108,8 @@ class SessionSeamIntegrationTest {
         assertThat(issued).isNotBlank().isNotEqualTo(planted);
 
         // The planted id is still not a session: the attacker holding it is not the victim.
-        authorizeWithSession(tenant, planted).then().statusCode(400)
-                .body("error", org.hamcrest.Matchers.equalTo("access_denied"));
+        authorizeWithSession(tenant, planted).then().statusCode(303)
+                .header("Location", org.hamcrest.Matchers.containsString("/signin?txn="));
         authorizeWithSession(tenant, issued).then().statusCode(302);
     }
 

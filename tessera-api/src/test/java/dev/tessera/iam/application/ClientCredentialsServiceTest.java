@@ -129,6 +129,11 @@ class ClientCredentialsServiceTest {
             public UUID newFamilyId() {
                 return UUID.randomUUID();
             }
+
+            @Override
+            public String newSignInSecret() {
+                return "fixed-sign-in-secret";
+            }
         };
         // Like the key source and the JOSE verifier: only the keyed client has a trust, and only the
         // valid assertion verifies against it.

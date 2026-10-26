@@ -51,7 +51,10 @@ class LogoutResourceTest {
                 .queryParam("code_challenge_method", "S256")
                 .when().get("/authorize");
 
-        authorize.then().statusCode(400).body("error", org.hamcrest.Matchers.equalTo("access_denied"));
+        // No session any more: the browser is sent to sign in, and no code is issued.
+        authorize.then().statusCode(303)
+                .header("Location", org.hamcrest.Matchers.containsString("/signin?txn="))
+                .header("Location", org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("code=")));
     }
 
     @Test

@@ -4,7 +4,8 @@ import java.util.UUID;
 
 /**
  * Outbound port that mints cryptographically-random opaque identifiers — authorization
- * codes, token {@code jti}s, refresh-token secrets, and refresh-family ids.
+ * codes, token {@code jti}s, refresh-token secrets, refresh-family ids, and the secrets of a
+ * pending sign-in.
  *
  * <p>Randomness is an effect: the functional core reads no entropy, so generating an
  * unguessable code or token id lives behind this port and is supplied by an adapter
@@ -37,4 +38,10 @@ public interface OpaqueIdentifierPort {
      *         presented token routes to its family without a request header.
      */
     UUID newFamilyId();
+
+    /**
+     * @return a fresh, unguessable secret for a pending sign-in — its transaction id, its form's
+     *         synchronizer token or its browser-binding secret (base64url, ≥256 bits of entropy)
+     */
+    String newSignInSecret();
 }
