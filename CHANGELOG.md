@@ -30,4 +30,4 @@ Accumulating toward the first release, `26.1.0 "Andromeda"`.
 ### Security
 - Fail-closed startup: a production deployment refuses the well-known development master key.
 
-[Unreleased]: https://github.com/isohub-space/tessera/commits/main
+[Unreleased]: https://github.com/meta-agentic/meta-iam/commits/main

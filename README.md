@@ -168,8 +168,8 @@ The domain already models these concepts; the adapters will follow in later wave
 Tessera is a standard Quarkus application. The fastest path:
 
 ```bash
-git clone https://github.com/isohub-space/tessera.git
-cd tessera
+git clone https://github.com/meta-agentic/meta-iam.git
+cd meta-iam
 
 # Build (unit tests only; integration tests need Docker — see below).
 mvn -DskipITs verify
