@@ -9,6 +9,7 @@ Every tessera decision record lives in this folder, and nowhere else.
 | [003 Tenant tier and per-tenant issuer](ADR-IAM-003-tenant-tier-and-path-scoped-issuer.md) | Where a tenant's tier lives, how tenants stay isolated, what `iss` looks like | Accepted, one open item |
 | [004 Session and consent](ADR-IAM-004-end-user-session-and-consent.md) | The login, session and consent design | Accepted |
 | [005 OIDF conformance in CI](ADR-IAM-005-oidf-basic-op-conformance-in-ci.md) | Not until the hosted login page, session-aware `prompt`/`max_age`/`auth_time`, and `/userinfo` exist | Accepted |
+| [006 Standalone provider for many sites and agents](ADR-IAM-006-standalone-provider-for-many-sites-and-agents.md) | Hosted sign-in for every relying party, brought forward; brokering in scope; sign-up as its own product; production bar before real accounts | Proposed |
 
 ## Convention
 
