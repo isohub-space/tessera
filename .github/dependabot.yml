@@ -1,15 +1,29 @@
 version: 2
 updates:
-  # Keep Maven dependencies patched (opens PRs for security + version updates).
+  # Maven: minor and patch updates together in one PR per run; majors arrive on
+  # their own so a breaking change is reviewed alone. Security updates still open
+  # as soon as they are published.
   - package-ecosystem: maven
     directory: "/"
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+    groups:
+      maven-minor-patch:
+        update-types:
+          - minor
+          - patch
 
-  # Keep GitHub Actions pinned and current.
+  # GitHub Actions, pinned and current, one grouped PR per run. Related actions
+  # must move together: init, analyze and upload-sarif of CodeQL share one
+  # version, or CodeQL fails. A single catch-all group covers them and every
+  # other action, so a half-applied bump cannot land.
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns:
+          - "*"
