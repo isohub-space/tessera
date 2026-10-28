@@ -22,7 +22,7 @@ permissions:
   pull-requests: write   # to hide a flagged comment and post a short note
 
 env:
-  # This repo's own vault/tracker space code. Its ADR-<code>-… prefix names this project's
+  # This repo's own project code. Its ADR-<code>-… prefix names this project's
   # own public decision records, not a leaked reference into someone else's internal space —
   # so it is the one letter-coded ADR prefix this gate lets through. Every other letter-coded
   # ADR-<code>- prefix stays blocked, and this does NOT extend to the bare <code>-<digits>
