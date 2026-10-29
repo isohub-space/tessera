@@ -19,6 +19,7 @@ import org.eclipse.microprofile.openapi.annotations.media.Schema;
  * @param authorizationEndpoint             the authorization endpoint URL
  * @param tokenEndpoint                     the token endpoint URL
  * @param jwksUri                           the JWK Set endpoint URL
+ * @param endSessionEndpoint                the RP-initiated logout endpoint URL
  * @param responseTypesSupported            offered OAuth2 response types
  * @param grantTypesSupported               offered OAuth2 grant types
  * @param subjectTypesSupported             offered subject identifier types
@@ -38,6 +39,7 @@ public record DiscoveryDto(
         @JsonProperty("authorization_endpoint") String authorizationEndpoint,
         @JsonProperty("token_endpoint") String tokenEndpoint,
         @JsonProperty("jwks_uri") String jwksUri,
+        @JsonProperty("end_session_endpoint") String endSessionEndpoint,
         @JsonProperty("response_types_supported") List<String> responseTypesSupported,
         @JsonProperty("grant_types_supported") List<String> grantTypesSupported,
         @JsonProperty("subject_types_supported") List<String> subjectTypesSupported,
@@ -61,6 +63,7 @@ public record DiscoveryDto(
                 doc.authorizationEndpoint(),
                 doc.tokenEndpoint(),
                 doc.jwksUri(),
+                doc.endSessionEndpoint(),
                 doc.responseTypesSupported(),
                 doc.grantTypesSupported(),
                 doc.subjectTypesSupported(),

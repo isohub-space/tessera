@@ -160,6 +160,10 @@ public class FirstBootProvisioner {
                             .map(uris -> String.join(" ", uris))
                             .filter(s -> !s.isBlank())
                             .orElse(null);
+                    entity.postLogoutRedirectUris = cfg.postLogoutRedirectUris()
+                            .map(uris -> String.join(" ", uris))
+                            .filter(s -> !s.isBlank())
+                            .orElse(null);
                     entity.createdAt = Instant.now();
                     LOG.infof("bootstrap: registering confidential client %s (grants %s)",
                             id.get(), entity.allowedGrants);

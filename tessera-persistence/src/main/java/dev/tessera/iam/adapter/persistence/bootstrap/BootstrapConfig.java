@@ -36,6 +36,9 @@ public interface BootstrapConfig {
         /** Registered redirect URIs (comma-separated in configuration), exact-match. */
         Optional<List<String>> redirectUris();
 
+        /** Registered post-logout redirect URIs (comma-separated in configuration), exact-match. */
+        Optional<List<String>> postLogoutRedirectUris();
+
         /** Allowed grants, as wire values. */
         @WithDefault("authorization_code,refresh_token")
         List<String> grants();

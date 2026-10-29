@@ -21,12 +21,21 @@ import java.util.Set;
  *                      (never {@code null} or empty)
  * @param redirectUris  registered redirect URIs (exact-match allow-list); defensively
  *                      copied and exposed unmodifiable (never {@code null}, may be empty)
+ * @param postLogoutRedirectUris registered post-logout redirect URIs (exact-match allow-list
+ *                      for the end-session endpoint); defensively copied and exposed
+ *                      unmodifiable (never {@code null}, may be empty)
  */
 public record PublicClient(
         ClientId id,
         RealmKey realm,
         Set<GrantType> allowedGrants,
-        Set<String> redirectUris) implements Client {
+        Set<String> redirectUris,
+        Set<String> postLogoutRedirectUris) implements Client {
+
+    /** A client with no post-logout redirect URI registered. */
+    public PublicClient(ClientId id, RealmKey realm, Set<GrantType> allowedGrants, Set<String> redirectUris) {
+        this(id, realm, allowedGrants, redirectUris, Set.of());
+    }
 
     public PublicClient {
         if (id == null) {
@@ -41,9 +50,13 @@ public record PublicClient(
         if (redirectUris == null) {
             throw new IllegalArgumentException("PublicClient redirectUris must not be null");
         }
+        if (postLogoutRedirectUris == null) {
+            throw new IllegalArgumentException("PublicClient postLogoutRedirectUris must not be null");
+        }
         // Defensive copy + unmodifiable view: the record stays immutable even if the
         // caller mutates the set it passed in.
         allowedGrants = Collections.unmodifiableSet(new HashSet<>(allowedGrants));
         redirectUris = Collections.unmodifiableSet(new LinkedHashSet<>(redirectUris));
+        postLogoutRedirectUris = Collections.unmodifiableSet(new LinkedHashSet<>(postLogoutRedirectUris));
     }
 }

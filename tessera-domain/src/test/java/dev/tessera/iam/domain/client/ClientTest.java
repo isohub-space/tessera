@@ -54,7 +54,7 @@ class ClientTest {
                 ClientId.generate(), realm(), Set.of(new AuthorizationCode()), Set.of());
         assertThat(publicClient.getClass().getRecordComponents())
                 .extracting(java.lang.reflect.RecordComponent::getName)
-                .containsExactlyInAnyOrder("id", "realm", "allowedGrants", "redirectUris");
+                .containsExactlyInAnyOrder("id", "realm", "allowedGrants", "redirectUris", "postLogoutRedirectUris");
     }
 
     @Test

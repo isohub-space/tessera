@@ -19,7 +19,8 @@ public class FakePasswordCredentialVerifier implements PasswordCredentialVerifie
 
     public static final String USERNAME = "alice";
     public static final String CORRECT_PASSWORD = "correct-horse-battery-staple";
-    public static final String SUBJECT = "user-sub-alice";
+    /** A UUID, as a real deployment's subject is, so the signed-in user can hold a refresh-token family. */
+    public static final String SUBJECT = "5b0f3c2e-8a4d-4c1b-9e7f-2d6a1c3b4e5f";
 
     @Override
     public Uni<Optional<String>> verify(RealmKey realm, String username, String password) {

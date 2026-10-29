@@ -40,6 +40,7 @@ class DiscoveryEndpointTest {
                 .body("issuer", equalTo(CONFIGURED_ISSUER))
                 .body("jwks_uri", equalTo(CONFIGURED_ISSUER + "/jwks"))
                 .body("token_endpoint", equalTo(CONFIGURED_ISSUER + "/token"))
+                .body("end_session_endpoint", equalTo(CONFIGURED_ISSUER + "/end_session"))
                 .body("authorization_endpoint", equalTo(CONFIGURED_ISSUER + "/authorize"));
     }
 

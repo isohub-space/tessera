@@ -36,8 +36,18 @@ class AuthorizeCorsExclusionTest {
 
     @ParameterizedTest(name = "{0}")
     @ValueSource(strings = {
+        "/end_session", "/end_session/", "//end_session", "/end%5Fsession", "/end_session;x=1",
+        "/end_session%2F;x=1", "/realms/r1/end_session"
+    })
+    @DisplayName("every shape that can route to /end_session matches too")
+    void endSessionShapesMatch(String rawPath) {
+        assertThat(matches(rawPath)).isTrue();
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {
         "/", "/token", "/introspect", "/revoke", "/q/health", "/authorizex", "/xauthorize", "/authorize/x",
-        "/authorize;x=1/token", "/.well-known/openid-configuration",
+        "/authorize;x=1/token", "/.well-known/openid-configuration", "/logout", "/end_sessionx", "/end_session/x",
         // Double encoding is decoded once by the router too, so these do not route to /authorize.
         "/authorize%253Bx=1", "/authoriz%2565"
     })

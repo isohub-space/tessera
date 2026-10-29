@@ -7,11 +7,13 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import org.jboss.resteasy.reactive.common.util.Encode;
 import org.jboss.resteasy.reactive.common.util.PathSegmentImpl;
 
 /**
- * Keeps the authorization endpoint outside the CORS policy (RFC 9700 §2.6).
+ * Keeps the authorization endpoint outside the CORS policy (RFC 9700 §2.6), and the end-session
+ * endpoint with it.
  *
  * <p>The Quarkus CORS policy ({@code quarkus.http.cors.*}) is global: once an operator lists an
  * origin in {@code TESSERA_CORS_ORIGINS} so a relying party's page can call {@code /login} or
@@ -22,6 +24,11 @@ import org.jboss.resteasy.reactive.common.util.PathSegmentImpl;
  * preflight nor an actual request from a listed origin is ever allowed. Everything else about
  * the CORS policy is unchanged: an unlisted origin is still refused by the CORS filter, and the
  * other endpoints keep the configured allow-list.
+ *
+ * <p>The end-session endpoint ({@code /end_session}, OpenID Connect RP-Initiated Logout 1.0) is
+ * reached the same way, by top-level navigation that carries the session cookie, and is excluded
+ * on the same terms: a listed origin may not end a user's session, or read the answer, from
+ * script.
  *
  * <p>Registered ahead of the CORS filter (priority 300), which answers a preflight and ends the
  * response itself, so the strip is in place before any CORS header can be written.
@@ -38,8 +45,8 @@ import org.jboss.resteasy.reactive.common.util.PathSegmentImpl;
  *       exactly as they do for the router.</li>
  *   <li>That path is then matched widely: each segment is cut at {@code ;}, decoded, split on
  *       {@code /} again and cut at {@code ;} again, empty names are dropped, and the path matches
- *       when the last name is {@code authorize}. This also covers a trailing slash, a doubled
- *       slash and any realm-scoped {@code …/authorize} route.</li>
+ *       when the last name is {@code authorize} or {@code end_session}. This also covers a
+ *       trailing slash, a doubled slash and any realm-scoped {@code …/authorize} route.</li>
  * </ol>
  *
  * <p>Erring toward a match only removes CORS headers a path never needed; missing one would open
@@ -51,7 +58,8 @@ public class AuthorizeCorsExclusion {
     /** Above the Quarkus CORS filter's priority (300): a higher priority runs first. */
     static final int PRIORITY = 310;
 
-    private static final String AUTHORIZE_SEGMENT = "authorize";
+    /** The endpoints reached only by top-level navigation: never a CORS resource. */
+    private static final Set<String> NAVIGATION_SEGMENTS = Set.of("authorize", "end_session");
 
     private static final List<String> CORS_RESPONSE_HEADERS = List.of(
             "Access-Control-Allow-Origin",
@@ -78,7 +86,7 @@ public class AuthorizeCorsExclusion {
 
     /**
      * @param normalizedPath the router's normalized request path
-     * @return whether the path can route to the authorization endpoint
+     * @return whether the path can route to the authorization or the end-session endpoint
      */
     static boolean isAuthorizeEndpoint(String normalizedPath) {
         if (normalizedPath == null) {
@@ -93,7 +101,7 @@ public class AuthorizeCorsExclusion {
                 }
             }
         }
-        return AUTHORIZE_SEGMENT.equals(lastName);
+        return lastName != null && NAVIGATION_SEGMENTS.contains(lastName);
     }
 
     /**

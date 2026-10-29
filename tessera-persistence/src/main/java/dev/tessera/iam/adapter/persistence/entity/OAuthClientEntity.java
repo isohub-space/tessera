@@ -28,8 +28,9 @@ import java.util.UUID;
  * {@link #allowedGrants} keeps the comma-separated {@code grant_type} values as text;
  * the application layer maps them to/from the domain grant set.
  *
- * <p>Every insert and update checks {@link #redirectUris} against {@link RedirectUriPolicy}, so
- * no registration path can store a redirect URI that would carry a code over plain http.
+ * <p>Every insert and update checks {@link #redirectUris} and {@link #postLogoutRedirectUris}
+ * against {@link RedirectUriPolicy}, so no registration path can store a redirect URI that would
+ * carry a code, or send a signed-out browser, over plain http.
  */
 @Entity
 @Table(name = "oauth_client")
@@ -98,6 +99,13 @@ public class OAuthClientEntity extends PanacheEntityBase {
     @Column(name = "redirect_uris")
     public String redirectUris;
 
+    /**
+     * Whitespace-separated registered post-logout redirect URIs (exact-match allow-list for the
+     * end-session endpoint); {@code null} for a client that is never redirected after logout.
+     */
+    @Column(name = "post_logout_redirect_uris")
+    public String postLogoutRedirectUris;
+
     /** Whitespace-separated scopes the client may be granted by {@code client_credentials}. */
     @Column(name = "allowed_scopes")
     public String allowedScopes;
@@ -117,7 +125,7 @@ public class OAuthClientEntity extends PanacheEntityBase {
     /**
      * Refuses, on insert and on update, a client id reserved for the sentinels unknown clients are
      * verified against ({@link ClientSecretVerifierPort#isReserved}: the nil UUID and name-based
-     * ids), and a redirect URI the policy does not allow (RFC 9700 §2.6). A client registered
+     * ids), and a redirect or post-logout redirect URI the policy does not allow (RFC 9700 §2.6). A client registered
      * under a sentinel id would share its failure budget with every unknown {@code client_id} that
      * maps to it.
      *
@@ -132,10 +140,14 @@ public class OAuthClientEntity extends PanacheEntityBase {
         if (id != null && ClientSecretVerifierPort.isReserved(id)) {
             throw new IllegalArgumentException("client id " + id + " is reserved and cannot be registered");
         }
-        if (redirectUris == null || redirectUris.isBlank()) {
+        requireRegistrable(redirectUris);
+        requireRegistrable(postLogoutRedirectUris);
+    }
+
+    private void requireRegistrable(String uris) {
+        if (uris == null || uris.isBlank()) {
             return;
         }
-        RedirectUriPolicy.requireRegistrable(
-                List.of(redirectUris.trim().split("\\s+")), clientType == ClientType.PUBLIC);
+        RedirectUriPolicy.requireRegistrable(List.of(uris.trim().split("\\s+")), clientType == ClientType.PUBLIC);
     }
 }

@@ -2,6 +2,7 @@ package dev.tessera.iam.adapter.rest.refresh;
 
 import dev.tessera.iam.application.port.out.RefreshTokenStorePort;
 import dev.tessera.iam.application.port.out.RefreshTokenTenantResolverPort;
+import dev.tessera.iam.domain.client.ClientId;
 import dev.tessera.iam.domain.refresh.FamilyId;
 import dev.tessera.iam.domain.refresh.RefreshDecision;
 import dev.tessera.iam.domain.refresh.RefreshReuseDetection;
@@ -85,6 +86,14 @@ public class InMemoryRefreshTokenStore
     public Uni<Void> revokeFamily(FamilyId id, RealmKey authoritativeRealm) {
         families.computeIfPresent(id, (key, fam) ->
                 fam.realm().equals(authoritativeRealm) ? fam.burned() : fam);
+        return Uni.createFrom().voidItem();
+    }
+
+    @Override
+    public Uni<Void> revokeFamiliesOf(RealmKey realm, String userId, ClientId clientId) {
+        families.replaceAll((key, fam) -> fam.realm().equals(realm)
+                && fam.userId().equals(userId)
+                && fam.clientId().equals(clientId) ? fam.burned() : fam);
         return Uni.createFrom().voidItem();
     }
 

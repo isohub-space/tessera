@@ -21,6 +21,7 @@ class DiscoveryDocumentTest {
         assertThat(doc.jwksUri()).isEqualTo(ISSUER + "/jwks");
         assertThat(doc.authorizationEndpoint()).isEqualTo(ISSUER + "/authorize");
         assertThat(doc.tokenEndpoint()).isEqualTo(ISSUER + "/token");
+        assertThat(doc.endSessionEndpoint()).isEqualTo(ISSUER + "/end_session");
     }
 
     @Test
