@@ -230,7 +230,7 @@ public final class TokenService implements TokenUseCase {
         Uni<String> idUni = openId
                 ? signer.sign(command.realm(), "JWT", IssuedTokenClaims.idToken(
                         issuer, grant.subjectId(), command.clientId(), grant.nonce(),
-                        now, now.plus(idTokenTtl), scopes, command.realm()))
+                        now, now.plus(idTokenTtl), command.realm()))
                 : Uni.createFrom().nullItem();
 
         Uni<String> refreshUni = mintRefreshToken(command, grant, client, now);

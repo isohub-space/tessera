@@ -222,9 +222,8 @@ rather than behind an application gateway, and what that costs, is recorded in
 | `TESSERA_SIGN_IN_TTL=PT10M` (`iam.authflow.sign-in-ttl`) | How long an authorization request may wait on the sign-in page. |
 | build with `-Dquarkus.profile=prod,singlenode` | For a deployment that runs exactly one instance: the in-process authorization-code and sign-in stores are used and no Infinispan server is needed. Run more than one instance and codes minted on one node cannot be redeemed on another, nor a sign-in started on one finished on another — use the default profile and a shared cache instead. |
 
-The ID token then carries `realm_tenant` and `realm_baseline` when the `profile` scope is
-granted, which is how a relying party that scopes its own data by tenant learns which tenant
-a signed-in user belongs to without guessing.
+Every ID token carries `realm_tenant` and `realm_baseline`, which is how a relying party that
+scopes its own data by tenant learns which tenant a signed-in user belongs to without guessing.
 
 A relying party sends the browser to `/authorize` and needs no login page of its own. When the
 browser has no `tessera_session`, the client and redirect URI are validated and the request is

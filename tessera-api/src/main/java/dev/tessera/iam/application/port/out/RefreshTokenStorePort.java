@@ -104,17 +104,20 @@ public interface RefreshTokenStorePort {
     Uni<Void> revokeFamily(FamilyId id, RealmKey authoritativeRealm);
 
     /**
-     * Revokes every family that {@code clientId} holds for {@code userId} within {@code realm}
-     * (idempotent). Used when the user ends their session with that client (RP-initiated logout):
-     * a refresh token is not linked to the session it was issued under, so ending the session
-     * revokes the client's families for the user. A user id that cannot own a family (one that is
-     * not a UUID) revokes nothing.
-     * @param realm    the realm to revoke within (never {@code null})
-     * @param userId   the subject the families were issued for (never {@code null})
-     * @param clientId the client the families were issued to (never {@code null})
+     * Revokes every family that {@code clientId} holds for {@code userId} within {@code realm} and
+     * that was created before {@code createdBefore} (idempotent). Used when the user ends their
+     * session with that client (RP-initiated logout): a refresh token is not linked to the session
+     * it was issued under, so ending the session revokes the client's families for the user, but
+     * never one created after the ID token the logout presented, so an old hint cannot end a later
+     * sign-in. A user id that cannot own a family (one that is not a UUID) revokes nothing.
+     * @param realm         the realm to revoke within (never {@code null})
+     * @param userId        the subject the families were issued for (never {@code null})
+     * @param clientId      the client the families were issued to (never {@code null})
+     * @param createdBefore only families created strictly before this instant are revoked
+     *                      (never {@code null})
      * @return a {@link Uni} completing when every matching family is revoked
      */
-    Uni<Void> revokeFamiliesOf(RealmKey realm, String userId, ClientId clientId);
+    Uni<Void> revokeFamiliesOf(RealmKey realm, String userId, ClientId clientId, Instant createdBefore);
 
     /**
      * Reads a family snapshot within {@code realm} (RLS-scoped), or {@code null} if none matches.

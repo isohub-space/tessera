@@ -32,9 +32,8 @@ import org.junit.jupiter.api.Test;
  * default policy. The default ({@code true}) is exercised by
  * {@link AuthorizationCodeFlowTest#confidentialClientMissingCertIsRejected}.
  *
- * <p>Also proves the realm-asserting ID token: with the {@code profile} scope granted the
- * ID token carries {@code realm_tenant} and {@code realm_baseline}, which is what a relying
- * party that scopes its own data by tenant reads.
+ * <p>Also proves the realm-asserting ID token: every ID token carries {@code realm_tenant} and
+ * {@code realm_baseline}, which is what a relying party that scopes its own data by tenant reads.
  */
 @QuarkusTest
 @TestProfile(BearerTokenPolicyTest.BearerAllowed.class)
@@ -91,7 +90,7 @@ class BearerTokenPolicyTest {
         assertThat(cnf.get("x5t#S256")).isEqualTo(TestClientCertificate.X5T_S256);
 
         Map<String, Object> idClaims = jsonPart(token.jsonPath().getString("id_token"), 1);
-        assertThat(idClaims).doesNotContainKey("realm_tenant");
+        assertThat(idClaims.get("realm_tenant")).isEqualTo(TENANT);
     }
 
     // ----------------------------------------------------------------- helpers

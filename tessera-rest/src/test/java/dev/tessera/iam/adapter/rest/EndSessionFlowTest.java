@@ -11,11 +11,18 @@ import dev.tessera.iam.adapter.rest.session.SessionCookies;
 import dev.tessera.iam.adapter.rest.signin.SignInCookies;
 import dev.tessera.iam.adapter.rest.support.FakeClientRepository;
 import dev.tessera.iam.adapter.rest.support.FakePasswordCredentialVerifier;
+import dev.tessera.iam.application.port.out.TokenSignerPort;
+import dev.tessera.iam.domain.token.ClaimSet;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.response.Response;
 import io.restassured.specification.RequestSpecification;
+import jakarta.inject.Inject;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Matcher;
@@ -41,6 +48,9 @@ class EndSessionFlowTest extends AuthorizationCodeFlowSupport {
     private static final String POST_LOGOUT = FakeClientRepository.POST_LOGOUT_REDIRECT_URI;
     private static final Pattern CSRF = Pattern.compile("name=\"csrf\" value=\"([^\"]+)\"");
 
+    @Inject
+    TokenSignerPort signer;
+
     /** What the relying party and the browser hold after a password sign-in. */
     private record SignedIn(String session, String idToken, String accessToken, String refreshToken) {
     }
@@ -52,11 +62,7 @@ class EndSessionFlowTest extends AuthorizationCodeFlowSupport {
     void missingHintIsRefused() {
         SignedIn user = signInWithPassword();
 
-        endSession(user.session(), null, null, POST_LOGOUT, "s1")
-                .then().statusCode(400)
-                .header("Location", nullValue())
-                .header("Cache-Control", "no-store")
-                .body("error", equalTo("invalid_request"));
+        assertRefused(endSession(user.session(), null, null, POST_LOGOUT, "s1"));
 
         assertSessionAlive(user);
     }
@@ -75,10 +81,7 @@ class EndSessionFlowTest extends AuthorizationCodeFlowSupport {
                 "https://client.example.evil.example/signed-out",
                 // Registered as the client's login redirect, not as a post-logout one.
                 REDIRECT_URI}) {
-            endSession(user.session(), user.idToken(), null, uri, "s2")
-                    .then().statusCode(400)
-                    .header("Location", nullValue())
-                    .body("error", equalTo("invalid_request"));
+            assertRefused(endSession(user.session(), user.idToken(), null, uri, "s2"));
         }
 
         assertSessionAlive(user);
@@ -90,9 +93,7 @@ class EndSessionFlowTest extends AuthorizationCodeFlowSupport {
         SignedIn user = signInWithPassword();
         String otherUsersHint = issueTokens(UUID.randomUUID().toString(), null).idToken();
 
-        endSession(user.session(), otherUsersHint, null, POST_LOGOUT, "s3")
-                .then().statusCode(400)
-                .header("Location", nullValue());
+        assertRefused(endSession(user.session(), otherUsersHint, null, POST_LOGOUT, "s3"));
 
         assertSessionAlive(user);
         refresh(user.refreshToken()).then().statusCode(200);
@@ -112,9 +113,7 @@ class EndSessionFlowTest extends AuthorizationCodeFlowSupport {
                 .idToken();
 
         for (String hint : new String[] {tampered, user.accessToken(), otherTenantsHint, "not-a-jwt"}) {
-            endSession(user.session(), hint, null, POST_LOGOUT, "s4")
-                    .then().statusCode(400)
-                    .header("Location", nullValue());
+            assertRefused(endSession(user.session(), hint, null, POST_LOGOUT, "s4"));
         }
 
         assertSessionAlive(user);
@@ -125,11 +124,44 @@ class EndSessionFlowTest extends AuthorizationCodeFlowSupport {
     void clientIdMismatchIsRefused() {
         SignedIn user = signInWithPassword();
 
-        endSession(user.session(), user.idToken(), FakeClientRepository.PUBLIC_CLIENT_ID, POST_LOGOUT, "s5")
-                .then().statusCode(400)
-                .header("Location", nullValue());
+        assertRefused(endSession(user.session(), user.idToken(), FakeClientRepository.PUBLIC_CLIENT_ID, POST_LOGOUT, "s5"));
 
         assertSessionAlive(user);
+    }
+
+    @Test
+    @DisplayName("a form post with an unregistered redirect is refused the same way")
+    void formPostRefusal() {
+        SignedIn user = signInWithPassword();
+
+        assertRefused(endSessionByForm(user.session(), user.idToken(), "https://evil.example/signed-out", "s6"));
+
+        assertSessionAlive(user);
+    }
+
+    @Test
+    @DisplayName("a hint this realm signed is still refused with a wrong iss, foreign or missing realm claims, or too old")
+    void signedButWrongHintsAreRefused() {
+        SignedIn user = signInWithPassword();
+        long now = Instant.now().getEpochSecond();
+
+        assertRefused(endSession(user.session(), signedHint(Map.of("iss", ISSUER + "/other")), null, POST_LOGOUT, "s7"));
+        assertRefused(endSession(user.session(),
+                signedHint(Map.of("realm_baseline", UUID.randomUUID().toString())), null, POST_LOGOUT, "s7"));
+        assertRefused(endSession(user.session(),
+                signedHint(Map.of("realm_tenant", UUID.randomUUID().toString())), null, POST_LOGOUT, "s7"));
+        Map<String, Object> noRealm = new HashMap<>();
+        noRealm.put("realm_tenant", null);
+        noRealm.put("realm_baseline", null);
+        assertRefused(endSession(user.session(), signedHint(noRealm), null, POST_LOGOUT, "s7"));
+        assertRefused(endSession(user.session(),
+                signedHint(Map.of("iat", now - Duration.ofDays(30).toSeconds())), null, POST_LOGOUT, "s7"));
+        assertSessionAlive(user);
+
+        // Control: the same construction with nothing changed is accepted, so each refusal above
+        // is down to the one claim it changed.
+        endSession(user.session(), signedHint(Map.of()), null, POST_LOGOUT, null)
+                .then().statusCode(303).header("Location", equalTo(POST_LOGOUT));
     }
 
     // ------------------------------------------------------------------ acceptance
@@ -165,7 +197,7 @@ class EndSessionFlowTest extends AuthorizationCodeFlowSupport {
     void signOutWithoutRedirect() {
         SignedIn user = signInWithPassword();
 
-        Response out = endSessionByForm(user.session(), user.idToken(), "ignored-without-redirect");
+        Response out = endSessionByForm(user.session(), user.idToken(), null, "ignored-without-redirect");
         out.then().statusCode(200)
                 .header("Location", nullValue())
                 .header("Cache-Control", "no-store")
@@ -202,14 +234,50 @@ class EndSessionFlowTest extends AuthorizationCodeFlowSupport {
         return req.when().get("/end_session");
     }
 
-    private Response endSessionByForm(String session, String hint, String state) {
-        return given().config(noFollow())
+    private Response endSessionByForm(String session, String hint, String redirect, String state) {
+        RequestSpecification req = given().config(noFollow())
                 .header("X-Tenant-Id", TENANT)
                 .cookie(SessionCookies.NAME, session)
                 .contentType("application/x-www-form-urlencoded")
                 .formParam("id_token_hint", hint)
-                .formParam("state", state)
-                .when().post("/end_session");
+                .formParam("state", state);
+        if (redirect != null) {
+            req.formParam("post_logout_redirect_uri", redirect);
+        }
+        return req.when().post("/end_session");
+    }
+
+    /** A refusal: {@code 400 invalid_request}, never redirected, and the cookie left alone. */
+    private static void assertRefused(Response response) {
+        response.then().statusCode(400)
+                .header("Location", nullValue())
+                .header("Set-Cookie", nullValue())
+                .header("Cache-Control", "no-store")
+                .body("error", equalTo("invalid_request"));
+    }
+
+    /**
+     * An ID token for the signed-in user and {@link #CLIENT}, signed by this realm's key exactly as
+     * the server signs one, with {@code overrides} applied (a {@code null} value removes the claim).
+     */
+    private String signedHint(Map<String, Object> overrides) {
+        long now = Instant.now().getEpochSecond();
+        Map<String, Object> claims = new LinkedHashMap<>();
+        claims.put("iss", ISSUER);
+        claims.put("sub", FakePasswordCredentialVerifier.SUBJECT);
+        claims.put("aud", CLIENT);
+        claims.put("iat", now);
+        claims.put("exp", now + 300);
+        claims.put("realm_tenant", REALM.tenant().value().toString());
+        claims.put("realm_baseline", REALM.baseline().value().toString());
+        overrides.forEach((name, value) -> {
+            if (value == null) {
+                claims.remove(name);
+            } else {
+                claims.put(name, value);
+            }
+        });
+        return signer.sign(REALM, "JWT", new ClaimSet(claims)).await().indefinitely();
     }
 
     /** Asserts the session still signs the user in: {@code /authorize} issues a code with no password. */

@@ -113,28 +113,18 @@ class IssuedTokenClaimsTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
     @Test
-    @DisplayName("ID token asserts the realm only when the profile scope was granted")
-    void idTokenAssertsRealmUnderProfileScope() {
+    @DisplayName("every ID token asserts the realm, whatever the scopes")
+    void idTokenAlwaysAssertsRealm() {
         UUID tenant = UUID.fromString("11111111-1111-4111-8111-111111111111");
         UUID baseline = new UUID(0L, 0L);
         RealmKey realm = new RealmKey(new TenantId(tenant), new BaselineId(baseline));
 
-        ClaimSet withProfile = IssuedTokenClaims.idToken(
-                ISSUER, "user-1", "client-abc", "n-1", IAT, EXP, Set.of("openid", "profile"), realm);
-        assertThat(withProfile.claim("realm_tenant")).contains(tenant.toString());
-        assertThat(withProfile.claim("realm_baseline")).contains(baseline.toString());
-        assertThat(withProfile.claim("nonce")).contains("n-1");
+        ClaimSet claims = IssuedTokenClaims.idToken(ISSUER, "user-1", "client-abc", "n-1", IAT, EXP, realm);
+        assertThat(claims.claim("realm_tenant")).contains(tenant.toString());
+        assertThat(claims.claim("realm_baseline")).contains(baseline.toString());
+        assertThat(claims.claim("nonce")).contains("n-1");
 
-        ClaimSet withoutProfile = IssuedTokenClaims.idToken(
-                ISSUER, "user-1", "client-abc", "n-1", IAT, EXP, Set.of("openid"), realm);
-        assertThat(withoutProfile.claim("realm_tenant")).isEmpty();
-        assertThat(withoutProfile.claim("realm_baseline")).isEmpty();
-
-        assertThatThrownBy(() -> IssuedTokenClaims.idToken(
-                ISSUER, "user-1", "client-abc", "n-1", IAT, EXP, null, realm))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> IssuedTokenClaims.idToken(
-                ISSUER, "user-1", "client-abc", "n-1", IAT, EXP, Set.of("openid"), null))
+        assertThatThrownBy(() -> IssuedTokenClaims.idToken(ISSUER, "user-1", "client-abc", "n-1", IAT, EXP, null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }

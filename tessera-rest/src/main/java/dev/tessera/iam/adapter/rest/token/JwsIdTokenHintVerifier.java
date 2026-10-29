@@ -32,7 +32,10 @@ public class JwsIdTokenHintVerifier implements IdTokenHintVerifierPort {
     }
 
     private static VerifiedIdToken claims(JsonNode payload) {
-        return new VerifiedIdToken(text(payload, "iss"), text(payload, "sub"), audience(payload.get("aud")));
+        JsonNode iat = payload.get("iat");
+        return new VerifiedIdToken(text(payload, "iss"), text(payload, "sub"), audience(payload.get("aud")),
+                iat != null && iat.isIntegralNumber() ? iat.asLong() : null,
+                text(payload, "realm_tenant"), text(payload, "realm_baseline"));
     }
 
     /** {@code aud} is a string or an array of strings (RFC 7519 §4.1.3); anything else is no audience. */

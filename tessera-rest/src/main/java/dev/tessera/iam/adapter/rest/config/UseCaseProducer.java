@@ -250,8 +250,11 @@ public class UseCaseProducer {
             IdTokenHintVerifierPort idTokens,
             SessionStorePort sessions,
             RefreshTokenStorePort refreshStore,
-            OidcDiscoveryConfig oidc) {
-        return new EndSessionService(clients, idTokens, sessions, refreshStore, oidc.issuer());
+            OidcDiscoveryConfig oidc,
+            Clock clock,
+            LoginConfig login) {
+        return new EndSessionService(
+                clients, idTokens, sessions, refreshStore, oidc.issuer(), clock, login.sessionTtl());
     }
 
     @Produces
