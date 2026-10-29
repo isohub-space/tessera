@@ -7,7 +7,7 @@
 set -uo pipefail
 
 ai='co-authored-by:[[:space:]]*(claude|anthropic)|claude-session:|claude\.ai/code|generated (with|by) \[?claude|authored (with|by)[^.]*claude|anthropic\.com'
-# This repo's own vault/tracker space code — see the OWN_PROJECT comment in
+# This repo's own project code — see the OWN_PROJECT comment in
 # .github/workflows/pr-hygiene.yml for why its ADR-<code>- prefix (and only that, not the
 # bare <code>-<digits> issue-key form) is exempt from the block, and for why "IAM-002" being
 # a substring of "ADR-IAM-002" means the two have to be classified per occurrence rather than
