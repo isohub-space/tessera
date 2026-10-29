@@ -140,6 +140,8 @@ A resource server, including an MCP gateway acting as a resource server, accepts
 
 ## Follow-up work
 
+This table is superseded by the implementation sequence of the [agent delegation decisions](agent-delegation-decisions.md).
+
 | # | Title | Scope | Size |
 |---|---|---|---|
 | 1 | Decision record: the token exchange grant and the agent delegation profile | Turn D1 to D6 into an ADR. Lift the compile-time exclusion for a delegation-only exchange grant. Record the actor model and the attenuation rules | S |
