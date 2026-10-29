@@ -57,6 +57,13 @@ public class DbRefreshTokenStore implements RefreshTokenStorePort {
                     + " WHERE id = :id"
                     + "   AND baseline_id = :baseline";
 
+    private static final String BURN_OWNED =
+            "UPDATE refresh_token_family"
+                    + " SET reused = true, revoked_at = COALESCE(revoked_at, :now)"
+                    + " WHERE baseline_id = :baseline"
+                    + "   AND user_id = :user"
+                    + "   AND client_id = :client";
+
     private static final String INSERT_DIRECTORY =
             "INSERT INTO refresh_family_directory (family_id, tenant_id, baseline_id)"
                     + " VALUES (:fid, :tid, :bid)";
@@ -149,6 +156,28 @@ public class DbRefreshTokenStore implements RefreshTokenStorePort {
         return scoped.inTenant(authoritativeRealm.tenant().value(),
                 session -> burn(session, id, Instant.now(),
                         authoritativeRealm.baseline().value()).replaceWithVoid());
+    }
+
+    @Override
+    public Uni<Void> revokeFamiliesOf(RealmKey realm, String userId, ClientId clientId) {
+        if (realm == null || userId == null || clientId == null) {
+            throw new IllegalArgumentException("realm, userId and clientId must not be null");
+        }
+        UUID user;
+        try {
+            user = UUID.fromString(userId);
+        } catch (IllegalArgumentException notAUuid) {
+            // Only a UUID subject anchors a family (TokenService), so there is nothing to revoke.
+            return Uni.createFrom().voidItem();
+        }
+        // RLS scopes the update to the tenant; the baseline half of the realm is matched explicitly.
+        return scoped.inTenant(realm.tenant().value(),
+                session -> session.createNativeQuery(BURN_OWNED)
+                        .setParameter("now", Instant.now())
+                        .setParameter("baseline", realm.baseline().value())
+                        .setParameter("user", user)
+                        .setParameter("client", clientId.value())
+                        .executeUpdate()).replaceWithVoid();
     }
 
     @Override

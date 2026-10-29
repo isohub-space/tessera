@@ -81,19 +81,24 @@ public class FakeClientRepository implements ClientRepositoryPort {
     public static final String REDIRECT_URI = "https://client.example/callback";
     private static final Set<String> REDIRECTS = Set.of(REDIRECT_URI);
 
+    /** The post-logout redirect URI registered for the two public clients (and no other URI). */
+    public static final String POST_LOGOUT_REDIRECT_URI = "https://client.example/signed-out";
+    private static final Set<String> POST_LOGOUT_REDIRECTS = Set.of(POST_LOGOUT_REDIRECT_URI);
+
     @Override
     public Uni<Client> findByClientId(RealmKey realm, String clientId) {
         if (realm == null) {
             throw new IllegalArgumentException("realm must not be null");
         }
         Client client = switch (clientId == null ? "" : clientId) {
-            case PUBLIC_CLIENT_ID -> new PublicClient(PUBLIC_IDENTITY, realm, CODE_GRANT, REDIRECTS);
+            case PUBLIC_CLIENT_ID -> new PublicClient(
+                    PUBLIC_IDENTITY, realm, CODE_GRANT, REDIRECTS, POST_LOGOUT_REDIRECTS);
             case CONFIDENTIAL_CLIENT_ID -> new ConfidentialClient(
                     CONFIDENTIAL_IDENTITY, realm, CODE_GRANT, ClientAuthMethod.CLIENT_SECRET, REDIRECTS);
             case NO_CODE_CLIENT_ID -> new ConfidentialClient(
                     NO_CODE_IDENTITY, realm, ONLY_CLIENT_CREDENTIALS, ClientAuthMethod.CLIENT_SECRET, REDIRECTS);
             case REFRESH_CLIENT_ID -> new PublicClient(
-                    REFRESH_IDENTITY, realm, CODE_AND_REFRESH, REDIRECTS);
+                    REFRESH_IDENTITY, realm, CODE_AND_REFRESH, REDIRECTS, POST_LOGOUT_REDIRECTS);
             case MACHINE_CLIENT_ID -> MACHINE_TENANT.equals(realm.tenant().value().toString())
                     ? new ConfidentialClient(MACHINE_IDENTITY, realm, ONLY_CLIENT_CREDENTIALS,
                             ClientAuthMethod.CLIENT_SECRET, Set.of(), MACHINE_SCOPES, MACHINE_AUDIENCES, MACHINE_ROLES)

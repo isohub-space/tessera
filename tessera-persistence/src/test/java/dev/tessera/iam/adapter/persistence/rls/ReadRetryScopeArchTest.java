@@ -48,6 +48,7 @@ class ReadRetryScopeArchTest {
             "DbRefreshTokenStore.createFamily",
             "DbRefreshTokenStore.consumeAndRotate",
             "DbRefreshTokenStore.revokeFamily",
+            "DbRefreshTokenStore.revokeFamiliesOf",
             "AuthSessionRepository.persist",
             "AuthSessionRepository.updateState",
             "ConsentRepository.persist",

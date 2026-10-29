@@ -46,4 +46,16 @@ public sealed interface Client permits ConfidentialClient, PublicClient {
      * @return an immutable view of the registered redirect URIs
      */
     Set<String> redirectUris();
+
+    /**
+     * The post-logout redirect URIs registered for this client (OpenID Connect RP-Initiated
+     * Logout 1.0 §3.1): the exact-match allow-list the end-session endpoint validates a
+     * requested {@code post_logout_redirect_uri} against before redirecting. Separate from
+     * {@link #redirectUris()}: a URI registered to receive a code is not thereby a place the
+     * end-session endpoint may send a browser. Returned as an unmodifiable set; may be empty
+     * (such a client is never redirected after logout).
+     *
+     * @return an immutable view of the registered post-logout redirect URIs
+     */
+    Set<String> postLogoutRedirectUris();
 }

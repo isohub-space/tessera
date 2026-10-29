@@ -81,6 +81,11 @@ class UniformClientAuthenticationTest {
         }
 
         @Override
+        public Uni<Void> revokeFamiliesOf(RealmKey realm, String userId, ClientId clientId) {
+            return Uni.createFrom().voidItem();
+        }
+
+        @Override
         public Uni<RefreshTokenFamily> find(FamilyId id, RealmKey realm) {
             return Uni.createFrom().nullItem();
         }

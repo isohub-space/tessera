@@ -198,6 +198,47 @@ class RefreshTokenStoreIT {
                 o -> assertThat(o.decision()).isInstanceOf(RefreshDecision.Replay.class));
     }
 
+    @Test
+    @RunOnVertxContext
+    @DisplayName("revokeFamiliesOf burns the client's families for the user, and only those")
+    void revokeFamiliesOfBurnsOnlyTheOwnersFamilies(UniAsserter asserter) {
+        UUID tenant = UUID.randomUUID();
+        UUID otherBaseline = UUID.randomUUID();
+        String user = UUID.randomUUID().toString();
+        ClientId client = ClientId.generate();
+        FamilyId owned = new FamilyId(UUID.randomUUID());
+        FamilyId ownedToo = new FamilyId(UUID.randomUUID());
+        FamilyId otherClient = new FamilyId(UUID.randomUUID());
+        FamilyId otherUser = new FamilyId(UUID.randomUUID());
+        FamilyId otherRealm = new FamilyId(UUID.randomUUID());
+        asserter.execute(() -> store.createFamily(owned(owned, realm(tenant), user, client)));
+        asserter.execute(() -> store.createFamily(owned(ownedToo, realm(tenant), user, client)));
+        asserter.execute(() -> store.createFamily(owned(otherClient, realm(tenant), user, ClientId.generate())));
+        asserter.execute(() -> store.createFamily(
+                owned(otherUser, realm(tenant), UUID.randomUUID().toString(), client)));
+        asserter.execute(() -> store.createFamily(owned(otherRealm, realm(tenant, otherBaseline), user, client)));
+
+        asserter.execute(() -> store.revokeFamiliesOf(realm(tenant), user, client));
+        // A subject that cannot own a family is a no-op, not an error.
+        asserter.execute(() -> store.revokeFamiliesOf(realm(tenant), "not-a-uuid", client));
+
+        asserter.assertThat(() -> store.consumeAndRotate(owned, realm(tenant), "h0", "h1", NOW),
+                o -> assertThat(o.decision()).isInstanceOf(RefreshDecision.Replay.class));
+        asserter.assertThat(() -> store.consumeAndRotate(ownedToo, realm(tenant), "h0", "h1", NOW),
+                o -> assertThat(o.decision()).isInstanceOf(RefreshDecision.Replay.class));
+        asserter.assertThat(() -> store.consumeAndRotate(otherClient, realm(tenant), "h0", "h1", NOW),
+                o -> assertThat(o.decision()).isInstanceOf(RefreshDecision.Rotate.class));
+        asserter.assertThat(() -> store.consumeAndRotate(otherUser, realm(tenant), "h0", "h1", NOW),
+                o -> assertThat(o.decision()).isInstanceOf(RefreshDecision.Rotate.class));
+        asserter.assertThat(
+                () -> store.consumeAndRotate(otherRealm, realm(tenant, otherBaseline), "h0", "h1", NOW),
+                o -> assertThat(o.decision()).isInstanceOf(RefreshDecision.Rotate.class));
+    }
+
+    private static RefreshTokenFamily owned(FamilyId id, RealmKey realm, String userId, ClientId clientId) {
+        return new RefreshTokenFamily(id, realm, userId, clientId, "h0", null, 0, false, T0, T0.plusSeconds(3600));
+    }
+
     // -------------------------------------------------------------------------
     // Baseline isolation — the axis RLS does NOT cover.
     //

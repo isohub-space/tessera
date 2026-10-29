@@ -115,6 +115,31 @@ class CorsAllowedOriginTest {
                 .header("Access-Control-Allow-Credentials", nullValue());
     }
 
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"/end_session", "/end_session/", "/end_session;x=1"})
+    @DisplayName("a listed origin gets no allow-origin from /end_session, by preflight or request")
+    void corsNeverOpensEndSession(String path) {
+        given()
+                .urlEncodingEnabled(false)
+                .header("Origin", ALLOWED_ORIGIN)
+                .header("Access-Control-Request-Method", "POST")
+                .when()
+                .options(path)
+                .then()
+                .header("Access-Control-Allow-Origin", nullValue())
+                .header("Access-Control-Allow-Credentials", nullValue());
+        given()
+                .urlEncodingEnabled(false)
+                .header("Origin", ALLOWED_ORIGIN)
+                .header("X-Tenant-Id", java.util.UUID.randomUUID().toString())
+                .when()
+                .get(path)
+                .then()
+                .statusCode(not(404))
+                .header("Access-Control-Allow-Origin", nullValue())
+                .header("Access-Control-Allow-Credentials", nullValue());
+    }
+
     /** Encodings of the endpoint name, crossed with a matrix parameter and a trailing slash. */
     static Stream<String> encodedAuthorizePaths() {
         List<String> names = List.of(

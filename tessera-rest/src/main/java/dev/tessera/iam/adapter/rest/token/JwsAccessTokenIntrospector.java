@@ -57,6 +57,19 @@ public class JwsAccessTokenIntrospector implements AccessTokenIntrospectorPort {
 
     @Override
     public Uni<Optional<VerifiedAccessToken>> verify(RealmKey realm, String token) {
+        return verifiedPayload(realm, token, TYP_ACCESS_TOKEN)
+                .map(payload -> payload.flatMap(this::claims));
+    }
+
+    /**
+     * The verification every token this server signed goes through, whatever its type: the JOSE
+     * header must say {@code alg=EdDSA} and exactly {@code typ}, its {@code kid} must name one of
+     * {@code realm}'s published keys, and the Ed25519 signature must verify. Shared with
+     * {@link JwsIdTokenHintVerifier}, which asks for {@code typ=JWT}.
+     *
+     * @return the verified payload, or {@link Optional#empty()}
+     */
+    Uni<Optional<JsonNode>> verifiedPayload(RealmKey realm, String token, String typ) {
         Jws jws = split(token);
         if (jws == null) {
             return empty();
@@ -64,7 +77,7 @@ public class JwsAccessTokenIntrospector implements AccessTokenIntrospectorPort {
         Header header = header(jws.headerB64());
         if (header == null
                 || !ALG_EDDSA.equals(header.alg())
-                || !TYP_ACCESS_TOKEN.equals(header.typ())
+                || !typ.equals(header.typ())
                 || header.kid() == null) {
             return empty();
         }
@@ -77,7 +90,7 @@ public class JwsAccessTokenIntrospector implements AccessTokenIntrospectorPort {
             if (publicKey == null || !verifySignature(publicKey, jws)) {
                 return Optional.empty();
             }
-            return claims(jws.payloadB64());
+            return payload(jws.payloadB64());
         });
     }
 
@@ -161,19 +174,23 @@ public class JwsAccessTokenIntrospector implements AccessTokenIntrospectorPort {
         }
     }
 
-    private Optional<VerifiedAccessToken> claims(String payloadB64) {
+    private Optional<JsonNode> payload(String payloadB64) {
         try {
             JsonNode c = mapper.readTree(B64URL.decode(payloadB64));
-            return Optional.of(new VerifiedAccessToken(
-                    text(c, "sub"),
-                    text(c, "client_id"),
-                    text(c, "scope"),
-                    text(c, "jti"),
-                    number(c, "iat"),
-                    number(c, "exp")));
+            return c != null && c.isObject() ? Optional.of(c) : Optional.empty();
         } catch (IOException | RuntimeException notJson) {
             return Optional.empty();
         }
+    }
+
+    private Optional<VerifiedAccessToken> claims(JsonNode c) {
+        return Optional.of(new VerifiedAccessToken(
+                text(c, "sub"),
+                text(c, "client_id"),
+                text(c, "scope"),
+                text(c, "jti"),
+                number(c, "iat"),
+                number(c, "exp")));
     }
 
     private static String text(JsonNode node, String field) {
@@ -186,7 +203,7 @@ public class JwsAccessTokenIntrospector implements AccessTokenIntrospectorPort {
         return value != null && value.isNumber() ? value.asLong() : null;
     }
 
-    private static Uni<Optional<VerifiedAccessToken>> empty() {
+    private static <T> Uni<Optional<T>> empty() {
         return Uni.createFrom().item(Optional.empty());
     }
 

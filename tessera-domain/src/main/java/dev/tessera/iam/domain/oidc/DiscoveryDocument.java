@@ -16,6 +16,7 @@ import java.util.List;
  * @param authorizationEndpoint           the authorization endpoint URL
  * @param tokenEndpoint                   the token endpoint URL
  * @param jwksUri                         the JWK Set endpoint URL
+ * @param endSessionEndpoint              the RP-initiated logout endpoint URL
  * @param responseTypesSupported          offered OAuth2 response types
  * @param grantTypesSupported             offered OAuth2 grant types
  * @param subjectTypesSupported           offered subject identifier types
@@ -33,6 +34,7 @@ public record DiscoveryDocument(
         String authorizationEndpoint,
         String tokenEndpoint,
         String jwksUri,
+        String endSessionEndpoint,
         List<String> responseTypesSupported,
         List<String> grantTypesSupported,
         List<String> subjectTypesSupported,
@@ -63,7 +65,9 @@ public record DiscoveryDocument(
      * Assembles the discovery document for a configured {@code issuer} from an enforced
      * capability set. The endpoint URLs are the canonical issuer-relative paths
      * ({@code /authorize}, {@code /token}, {@code /jwks}); advertising them is required by
-     * OIDC Discovery. The {@code *_supported} values are copied verbatim from {@code caps},
+     * OIDC Discovery. {@code /end_session} is advertised as {@code end_session_endpoint}
+     * (OpenID Connect RP-Initiated Logout 1.0 §2.1), which a relying party needs to find to
+     * end the user's session here. The {@code *_supported} values are copied verbatim from {@code caps},
      * so the document can advertise only what the server enforces.
      *
      * <p>No {@code userinfo_endpoint} is advertised. It is OPTIONAL metadata in OIDC
@@ -86,6 +90,7 @@ public record DiscoveryDocument(
                 base + "/authorize",
                 base + "/token",
                 base + "/jwks",
+                base + "/end_session",
                 caps.responseTypesSupported(),
                 caps.grantTypesSupported(),
                 caps.subjectTypesSupported(),

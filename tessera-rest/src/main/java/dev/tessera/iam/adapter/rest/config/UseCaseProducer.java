@@ -4,6 +4,7 @@ import dev.tessera.iam.adapter.rest.login.LoginConfig;
 import dev.tessera.iam.application.AuthorizationService;
 import dev.tessera.iam.application.ClientCredentialsService;
 import dev.tessera.iam.application.ConsentService;
+import dev.tessera.iam.application.EndSessionService;
 import dev.tessera.iam.application.IntrospectService;
 import dev.tessera.iam.application.LoginService;
 import dev.tessera.iam.application.RefreshService;
@@ -15,6 +16,7 @@ import dev.tessera.iam.application.TokenService;
 import dev.tessera.iam.application.port.in.AuthorizeUseCase;
 import dev.tessera.iam.application.port.in.ClientCredentialsUseCase;
 import dev.tessera.iam.application.port.in.ConsentUseCase;
+import dev.tessera.iam.application.port.in.EndSessionUseCase;
 import dev.tessera.iam.application.port.in.IntrospectUseCase;
 import dev.tessera.iam.application.port.in.LoginUseCase;
 import dev.tessera.iam.application.port.in.RefreshUseCase;
@@ -30,6 +32,7 @@ import dev.tessera.iam.application.port.out.ClientRepositoryPort;
 import dev.tessera.iam.application.port.out.ClientSecretVerifierPort;
 import dev.tessera.iam.application.port.out.ConsentStorePort;
 import dev.tessera.iam.application.port.out.DpopProofValidatorPort;
+import dev.tessera.iam.application.port.out.IdTokenHintVerifierPort;
 import dev.tessera.iam.application.port.out.OpaqueIdentifierPort;
 import dev.tessera.iam.application.port.out.PasswordCredentialVerifierPort;
 import dev.tessera.iam.application.port.out.PendingAuthorizationStorePort;
@@ -238,6 +241,17 @@ public class UseCaseProducer {
     @ApplicationScoped
     SessionUseCase sessionUseCase(SessionStorePort sessions) {
         return new SessionService(sessions);
+    }
+
+    @Produces
+    @ApplicationScoped
+    EndSessionUseCase endSessionUseCase(
+            ClientRepositoryPort clients,
+            IdTokenHintVerifierPort idTokens,
+            SessionStorePort sessions,
+            RefreshTokenStorePort refreshStore,
+            OidcDiscoveryConfig oidc) {
+        return new EndSessionService(clients, idTokens, sessions, refreshStore, oidc.issuer());
     }
 
     @Produces

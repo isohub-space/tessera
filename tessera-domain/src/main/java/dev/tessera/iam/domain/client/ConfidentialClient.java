@@ -32,6 +32,9 @@ import java.util.Set;
  * @param roles         the roles its {@code client_credentials} tokens carry, from its
  *                      registration; none blank or containing whitespace, because the registry
  *                      stores them whitespace-separated (never {@code null}, may be empty)
+ * @param postLogoutRedirectUris registered post-logout redirect URIs (exact-match allow-list
+ *                      for the end-session endpoint); defensively copied and exposed
+ *                      unmodifiable (never {@code null}, may be empty)
  */
 public record ConfidentialClient(
         ClientId id,
@@ -41,7 +44,21 @@ public record ConfidentialClient(
         Set<String> redirectUris,
         Set<String> allowedScopes,
         Set<String> audiences,
-        List<String> roles) implements Client {
+        List<String> roles,
+        Set<String> postLogoutRedirectUris) implements Client {
+
+    /** A client with no post-logout redirect URI registered. */
+    public ConfidentialClient(
+            ClientId id,
+            RealmKey realm,
+            Set<GrantType> allowedGrants,
+            ClientAuthMethod authMethod,
+            Set<String> redirectUris,
+            Set<String> allowedScopes,
+            Set<String> audiences,
+            List<String> roles) {
+        this(id, realm, allowedGrants, authMethod, redirectUris, allowedScopes, audiences, roles, Set.of());
+    }
 
     /** A client with no {@code client_credentials} scopes, audiences or roles registered. */
     public ConfidentialClient(
@@ -73,6 +90,9 @@ public record ConfidentialClient(
             throw new IllegalArgumentException(
                     "ConfidentialClient allowedScopes, audiences and roles must not be null");
         }
+        if (postLogoutRedirectUris == null) {
+            throw new IllegalArgumentException("ConfidentialClient postLogoutRedirectUris must not be null");
+        }
         allowedScopes.forEach(scope -> require(isScopeToken(scope), "allowedScopes", scope));
         audiences.forEach(audience -> require(isToken(audience), "audiences", audience));
         roles.forEach(role -> require(isToken(role), "roles", role));
@@ -83,6 +103,7 @@ public record ConfidentialClient(
         allowedScopes = Collections.unmodifiableSet(new LinkedHashSet<>(allowedScopes));
         audiences = Collections.unmodifiableSet(new LinkedHashSet<>(audiences));
         roles = List.copyOf(roles);
+        postLogoutRedirectUris = Collections.unmodifiableSet(new LinkedHashSet<>(postLogoutRedirectUris));
     }
 
     private static void require(boolean valid, String list, String value) {
