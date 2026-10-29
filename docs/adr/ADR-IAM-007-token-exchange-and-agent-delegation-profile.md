@@ -2,8 +2,9 @@
 
 | Field | Value |
 |---|---|
-| Status | **Proposed** |
+| Status | **Accepted** |
 | Date | 2026-10-29 |
+| Ratified | 2026-10-30 |
 | Relates to | [Agent delegation profile](../research/agent-delegation-profile.md) (the first design note), [Agent delegation decisions](../research/agent-delegation-decisions.md) (the second design note: intermediaries, hand-offs, revocation, actor identity and the configuration points), [Agentic IAM landscape, October 2026](../research/agentic-iam-landscape-2026-10.md) (sources), [ADR-IAM-003](ADR-IAM-003-tenant-tier-and-path-scoped-issuer.md) (realm namespace; D3 amended by this record), [ADR-IAM-004](ADR-IAM-004-end-user-session-and-consent.md) (consent), [ADR-IAM-006](ADR-IAM-006-standalone-provider-for-many-sites-and-agents.md) (agents are first-class clients), [threat model](../security/threat-model.md) rows 18 to 25 |
 
 ---

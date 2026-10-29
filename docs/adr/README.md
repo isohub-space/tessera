@@ -10,7 +10,7 @@ Every tessera decision record lives in this folder, and nowhere else.
 | [004 Session and consent](ADR-IAM-004-end-user-session-and-consent.md) | The login, session and consent design | Accepted |
 | [005 OIDF conformance in CI](ADR-IAM-005-oidf-basic-op-conformance-in-ci.md) | Not until the hosted login page, session-aware `prompt`/`max_age`/`auth_time`, and `/userinfo` exist | Accepted |
 | [006 Standalone provider for many sites and agents](ADR-IAM-006-standalone-provider-for-many-sites-and-agents.md) | Hosted sign-in for every relying party, brought forward; brokering in scope; sign-up as its own product; production bar before real accounts | Proposed |
-| [007 Token exchange and the agent delegation profile](ADR-IAM-007-token-exchange-and-agent-delegation-profile.md) | The token exchange grant (RFC 8693) for delegation only: the actor is the key-authenticated client, every hop attenuates, every delegated token is bound and revocable through lineage, and no configuration state weakens security (three declared configuration points); the compile-time exclusion is lifted for this grant | Proposed |
+| [007 Token exchange and the agent delegation profile](ADR-IAM-007-token-exchange-and-agent-delegation-profile.md) | The token exchange grant (RFC 8693) for delegation only: the actor is the key-authenticated client, every hop attenuates, every delegated token is bound and revocable through lineage, and no configuration state weakens security (three declared configuration points); the compile-time exclusion is lifted for this grant | Accepted |
 
 ## Convention
 
