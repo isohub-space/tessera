@@ -36,8 +36,17 @@ public interface IdTokenHintVerifierPort {
      * @param subject  the {@code sub} claim, or {@code null} if absent
      * @param audience the {@code aud} claim as a list (one element for a string {@code aud});
      *                 empty if absent
+     * @param issuedAt the {@code iat} claim (epoch seconds), or {@code null} if absent
+     * @param realmTenant   the {@code realm_tenant} claim, or {@code null} if absent
+     * @param realmBaseline the {@code realm_baseline} claim, or {@code null} if absent
      */
-    record VerifiedIdToken(String issuer, String subject, List<String> audience) {
+    record VerifiedIdToken(
+            String issuer,
+            String subject,
+            List<String> audience,
+            Long issuedAt,
+            String realmTenant,
+            String realmBaseline) {
 
         public VerifiedIdToken {
             audience = audience == null ? List.of() : List.copyOf(audience);

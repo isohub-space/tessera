@@ -284,7 +284,7 @@ public final class RefreshService implements RefreshUseCase {
         Uni<String> idUni = family.grantedScopes().contains("openid")
                 ? signer.sign(authoritativeRealm, "JWT", IssuedTokenClaims.idToken(
                         issuer, family.userId(), command.clientId(), null, now, now.plus(idTokenTtl),
-                        family.grantedScopes(), authoritativeRealm))
+                        authoritativeRealm))
                 : Uni.createFrom().nullItem();
         return Uni.combine().all().unis(accessUni, idUni).asTuple()
                 .map(tuple -> new TokenResult.Issued(

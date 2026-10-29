@@ -33,9 +33,12 @@ Accumulating toward the first release, `26.1.0 "Andromeda"`.
   Content-Security-Policy. Parked requests live in a shared Infinispan cache, or in process under
   `singlenode`.
 - RP-initiated logout (`GET`/`POST /end_session`, advertised as `end_session_endpoint`): with a
-  valid `id_token_hint` it ends tessera's session, clears the session cookie and revokes the
-  client's refresh-token families for the user, then returns to a `post_logout_redirect_uri`
-  registered for the client (exact match, `state` echoed). A missing or foreign hint, a hint for
+  valid `id_token_hint` (this realm's, issued within the session lifetime) it ends the session the
+  browser presents, clears the session cookie and revokes the client's refresh-token families for
+  the user created up to the hint, then returns to a `post_logout_redirect_uri` registered for the
+  client (exact match, `state` echoed). The session cookie is `SameSite=Strict`, so a relying
+  party on another site does not end tessera's session this way; its refresh tokens are still
+  revoked. ID tokens now always carry `realm_tenant` and `realm_baseline`. A missing or foreign hint, a hint for
   another user than the session's, or an unregistered redirect URI is a `400` that ends nothing
   and is never redirected. Kept outside the CORS policy, like `/authorize`.
 

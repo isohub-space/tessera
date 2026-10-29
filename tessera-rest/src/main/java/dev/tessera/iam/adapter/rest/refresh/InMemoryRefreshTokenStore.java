@@ -90,10 +90,11 @@ public class InMemoryRefreshTokenStore
     }
 
     @Override
-    public Uni<Void> revokeFamiliesOf(RealmKey realm, String userId, ClientId clientId) {
+    public Uni<Void> revokeFamiliesOf(RealmKey realm, String userId, ClientId clientId, Instant createdBefore) {
         families.replaceAll((key, fam) -> fam.realm().equals(realm)
                 && fam.userId().equals(userId)
-                && fam.clientId().equals(clientId) ? fam.burned() : fam);
+                && fam.clientId().equals(clientId)
+                && fam.createdAt().isBefore(createdBefore) ? fam.burned() : fam);
         return Uni.createFrom().voidItem();
     }
 

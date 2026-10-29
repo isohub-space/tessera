@@ -21,8 +21,10 @@ import dev.tessera.iam.domain.tenancy.BaselineId;
 import dev.tessera.iam.domain.tenancy.RealmKey;
 import dev.tessera.iam.domain.tenancy.TenantId;
 import io.smallrye.mutiny.Uni;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -44,6 +46,11 @@ class EndSessionServiceTest {
     private static final String SIGNED_OUT = "https://rp.example/signed-out";
     private static final String USER = UUID.randomUUID().toString();
     private static final String HINT = "hint";
+    private static final Instant NOW = Instant.parse("2026-10-29T12:00:00Z");
+    private static final Duration SESSION_TTL = Duration.ofHours(8);
+    private static final long IAT = NOW.minusSeconds(60).getEpochSecond();
+    private static final String TENANT = REALM.tenant().value().toString();
+    private static final String BASELINE = REALM.baseline().value().toString();
 
     private final Map<String, VerifiedIdToken> hints = new HashMap<>();
     private final Map<SessionId, Session> live = new HashMap<>();
@@ -52,7 +59,12 @@ class EndSessionServiceTest {
 
     private final EndSessionService service = new EndSessionService(
             clients(), (realm, token) -> Uni.createFrom().item(Optional.ofNullable(hints.get(token))),
-            sessions(), refreshTokens(), ISSUER);
+            sessions(), refreshTokens(), ISSUER, Clock.fixed(NOW, ZoneOffset.UTC), SESSION_TTL);
+
+    /** A hint as the server issues one: this issuer, this realm, a minute old. */
+    private static VerifiedIdToken hint(String issuer, String subject, List<String> audience) {
+        return new VerifiedIdToken(issuer, subject, audience, IAT, TENANT, BASELINE);
+    }
 
     private EndSessionOutcome run(String hint, String clientId, String redirect, String state, SessionId session) {
         return service.endSession(new EndSessionCommand(REALM, hint, clientId, redirect, state, session))
@@ -74,25 +86,53 @@ class EndSessionServiceTest {
     @Test
     @DisplayName("an accepted request ends the session, revokes the client's families, redirects with state")
     void acceptedEndsSessionAndRevokes() {
-        hints.put(HINT, new VerifiedIdToken(ISSUER, USER, List.of(CLIENT)));
+        hints.put(HINT, hint(ISSUER, USER, List.of(CLIENT)));
         SessionId session = signedIn(USER);
 
         EndSessionOutcome outcome = run(HINT, null, SIGNED_OUT, "a b&c", session);
 
         assertThat(outcome).isEqualTo(new EndSessionOutcome.Redirect(SIGNED_OUT + "?state=a+b%26c"));
         assertThat(invalidated).containsExactly(session);
-        assertThat(revoked).containsExactly(USER + "|" + CLIENT_ID);
+        assertThat(revoked).containsExactly(USER + "|" + CLIENT_ID + "|" + Instant.ofEpochSecond(IAT + 1));
     }
 
     @Test
     @DisplayName("no live session still revokes, and no redirect asked is SignedOut")
     void acceptedWithoutSession() {
-        hints.put(HINT, new VerifiedIdToken(ISSUER, USER, List.of(CLIENT)));
+        hints.put(HINT, hint(ISSUER, USER, List.of(CLIENT)));
 
         assertThat(run(HINT, CLIENT, null, "ignored", SessionId.generate()))
                 .isInstanceOf(EndSessionOutcome.SignedOut.class);
         assertThat(invalidated).isEmpty();
-        assertThat(revoked).containsExactly(USER + "|" + CLIENT_ID);
+        assertThat(revoked).containsExactly(USER + "|" + CLIENT_ID + "|" + Instant.ofEpochSecond(IAT + 1));
+    }
+
+    @Test
+    @DisplayName("a hint older than the session lifetime, or without iat, is refused")
+    void hintAgeBounded() {
+        SessionId session = signedIn(USER);
+        long tooOld = NOW.minus(SESSION_TTL).minusSeconds(1).getEpochSecond();
+        hints.put(HINT, new VerifiedIdToken(ISSUER, USER, List.of(CLIENT), tooOld, TENANT, BASELINE));
+        assertRefusedAndNothingChanged(run(HINT, null, SIGNED_OUT, null, session));
+        hints.put(HINT, new VerifiedIdToken(ISSUER, USER, List.of(CLIENT), null, TENANT, BASELINE));
+        assertRefusedAndNothingChanged(run(HINT, null, SIGNED_OUT, null, session));
+
+        long justInside = NOW.minus(SESSION_TTL).getEpochSecond();
+        hints.put(HINT, new VerifiedIdToken(ISSUER, USER, List.of(CLIENT), justInside, TENANT, BASELINE));
+        assertThat(run(HINT, null, SIGNED_OUT, null, session)).isInstanceOf(EndSessionOutcome.Redirect.class);
+    }
+
+    @Test
+    @DisplayName("a hint from another baseline or tenant, or without realm claims, is refused")
+    void hintRealmChecked() {
+        SessionId session = signedIn(USER);
+        for (VerifiedIdToken foreign : List.of(
+                new VerifiedIdToken(ISSUER, USER, List.of(CLIENT), IAT, TENANT, UUID.randomUUID().toString()),
+                new VerifiedIdToken(ISSUER, USER, List.of(CLIENT), IAT, UUID.randomUUID().toString(), BASELINE),
+                new VerifiedIdToken(ISSUER, USER, List.of(CLIENT), IAT, null, null))) {
+            hints.put(HINT, foreign);
+            assertRefusedAndNothingChanged(run(HINT, null, SIGNED_OUT, null, session));
+        }
     }
 
     @Test
@@ -108,9 +148,9 @@ class EndSessionServiceTest {
     @DisplayName("a hint from another issuer, or without a subject, is refused")
     void issuerAndSubjectChecked() {
         SessionId session = signedIn(USER);
-        hints.put(HINT, new VerifiedIdToken(ISSUER + "/", USER, List.of(CLIENT)));
+        hints.put(HINT, hint(ISSUER + "/", USER, List.of(CLIENT)));
         assertRefusedAndNothingChanged(run(HINT, null, SIGNED_OUT, null, session));
-        hints.put(HINT, new VerifiedIdToken(ISSUER, null, List.of(CLIENT)));
+        hints.put(HINT, hint(ISSUER, null, List.of(CLIENT)));
         assertRefusedAndNothingChanged(run(HINT, null, SIGNED_OUT, null, session));
     }
 
@@ -118,13 +158,13 @@ class EndSessionServiceTest {
     @DisplayName("client_id must be the hint's audience; several audiences need one; an unknown client is refused")
     void clientResolution() {
         SessionId session = signedIn(USER);
-        hints.put(HINT, new VerifiedIdToken(ISSUER, USER, List.of(CLIENT)));
+        hints.put(HINT, hint(ISSUER, USER, List.of(CLIENT)));
         assertRefusedAndNothingChanged(run(HINT, "other", SIGNED_OUT, null, session));
 
-        hints.put(HINT, new VerifiedIdToken(ISSUER, USER, List.of(CLIENT, "other")));
+        hints.put(HINT, hint(ISSUER, USER, List.of(CLIENT, "other")));
         assertRefusedAndNothingChanged(run(HINT, null, SIGNED_OUT, null, session));
 
-        hints.put(HINT, new VerifiedIdToken(ISSUER, USER, List.of("unknown-client")));
+        hints.put(HINT, hint(ISSUER, USER, List.of("unknown-client")));
         assertRefusedAndNothingChanged(run(HINT, null, SIGNED_OUT, null, session));
     }
 
@@ -132,7 +172,7 @@ class EndSessionServiceTest {
     @DisplayName("the redirect must equal a registered post-logout URI exactly")
     void redirectExactMatch() {
         SessionId session = signedIn(USER);
-        hints.put(HINT, new VerifiedIdToken(ISSUER, USER, List.of(CLIENT)));
+        hints.put(HINT, hint(ISSUER, USER, List.of(CLIENT)));
         for (String uri : List.of(SIGNED_OUT + "/", SIGNED_OUT + "?x=1", "https://RP.example/signed-out",
                 "https://rp.example/signed-out-not", "https://rp.example/callback", "")) {
             assertRefusedAndNothingChanged(run(HINT, null, uri, null, session));
@@ -143,7 +183,7 @@ class EndSessionServiceTest {
     @DisplayName("a hint for another user than the session's is refused")
     void hintMustMatchSession() {
         SessionId session = signedIn(UUID.randomUUID().toString());
-        hints.put(HINT, new VerifiedIdToken(ISSUER, USER, List.of(CLIENT)));
+        hints.put(HINT, hint(ISSUER, USER, List.of(CLIENT)));
         assertRefusedAndNothingChanged(run(HINT, null, SIGNED_OUT, null, session));
         assertThat(live).containsKey(session);
     }
@@ -194,8 +234,9 @@ class EndSessionServiceTest {
             }
 
             @Override
-            public Uni<Void> revokeFamiliesOf(RealmKey realm, String userId, ClientId clientId) {
-                revoked.add(userId + "|" + clientId);
+            public Uni<Void> revokeFamiliesOf(
+                    RealmKey realm, String userId, ClientId clientId, Instant createdBefore) {
+                revoked.add(userId + "|" + clientId + "|" + createdBefore);
                 return Uni.createFrom().voidItem();
             }
 

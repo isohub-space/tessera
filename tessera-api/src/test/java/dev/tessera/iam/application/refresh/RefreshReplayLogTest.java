@@ -156,7 +156,7 @@ class RefreshReplayLogTest {
         }
 
         @Override
-        public Uni<Void> revokeFamiliesOf(RealmKey realm, String userId, ClientId clientId) {
+        public Uni<Void> revokeFamiliesOf(RealmKey realm, String userId, ClientId clientId, Instant createdBefore) {
             return Uni.createFrom().voidItem();
         }
 

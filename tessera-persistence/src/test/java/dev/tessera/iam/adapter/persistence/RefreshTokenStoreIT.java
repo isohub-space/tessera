@@ -200,7 +200,7 @@ class RefreshTokenStoreIT {
 
     @Test
     @RunOnVertxContext
-    @DisplayName("revokeFamiliesOf burns the client's families for the user, and only those")
+    @DisplayName("revokeFamiliesOf burns the client's families for the user created before the cut-off, and only those")
     void revokeFamiliesOfBurnsOnlyTheOwnersFamilies(UniAsserter asserter) {
         UUID tenant = UUID.randomUUID();
         UUID otherBaseline = UUID.randomUUID();
@@ -218,9 +218,12 @@ class RefreshTokenStoreIT {
                 owned(otherUser, realm(tenant), UUID.randomUUID().toString(), client)));
         asserter.execute(() -> store.createFamily(owned(otherRealm, realm(tenant, otherBaseline), user, client)));
 
-        asserter.execute(() -> store.revokeFamiliesOf(realm(tenant), user, client));
+        // Created at T0: a cut-off at T0 revokes nothing, one just after revokes the owner's families.
+        asserter.execute(() -> store.revokeFamiliesOf(realm(tenant), user, client, T0));
+        asserter.assertThat(() -> store.find(owned, realm(tenant)), fam -> assertThat(fam.reused()).isFalse());
+        asserter.execute(() -> store.revokeFamiliesOf(realm(tenant), user, client, T0.plusSeconds(1)));
         // A subject that cannot own a family is a no-op, not an error.
-        asserter.execute(() -> store.revokeFamiliesOf(realm(tenant), "not-a-uuid", client));
+        asserter.execute(() -> store.revokeFamiliesOf(realm(tenant), "not-a-uuid", client, NOW));
 
         asserter.assertThat(() -> store.consumeAndRotate(owned, realm(tenant), "h0", "h1", NOW),
                 o -> assertThat(o.decision()).isInstanceOf(RefreshDecision.Replay.class));

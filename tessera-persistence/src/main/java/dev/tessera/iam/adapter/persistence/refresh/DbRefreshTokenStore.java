@@ -62,7 +62,8 @@ public class DbRefreshTokenStore implements RefreshTokenStorePort {
                     + " SET reused = true, revoked_at = COALESCE(revoked_at, :now)"
                     + " WHERE baseline_id = :baseline"
                     + "   AND user_id = :user"
-                    + "   AND client_id = :client";
+                    + "   AND client_id = :client"
+                    + "   AND created_at < :before";
 
     private static final String INSERT_DIRECTORY =
             "INSERT INTO refresh_family_directory (family_id, tenant_id, baseline_id)"
@@ -159,9 +160,9 @@ public class DbRefreshTokenStore implements RefreshTokenStorePort {
     }
 
     @Override
-    public Uni<Void> revokeFamiliesOf(RealmKey realm, String userId, ClientId clientId) {
-        if (realm == null || userId == null || clientId == null) {
-            throw new IllegalArgumentException("realm, userId and clientId must not be null");
+    public Uni<Void> revokeFamiliesOf(RealmKey realm, String userId, ClientId clientId, Instant createdBefore) {
+        if (realm == null || userId == null || clientId == null || createdBefore == null) {
+            throw new IllegalArgumentException("realm, userId, clientId and createdBefore must not be null");
         }
         UUID user;
         try {
@@ -177,6 +178,7 @@ public class DbRefreshTokenStore implements RefreshTokenStorePort {
                         .setParameter("baseline", realm.baseline().value())
                         .setParameter("user", user)
                         .setParameter("client", clientId.value())
+                        .setParameter("before", createdBefore)
                         .executeUpdate()).replaceWithVoid();
     }
 
