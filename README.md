@@ -67,8 +67,9 @@ precise about that boundary matters.
 - **Not yet a delegation server for AI agents.** Agents can authenticate as clients today
   (`client_credentials`, `private_key_jwt`, keyless workload identity), but an agent cannot yet
   act on a person's behalf with a delegated token. The design is written up and planned (Wave 4
-  below): see [agentic IAM landscape](docs/research/agentic-iam-landscape-2026-10.md) and
-  [agent delegation profile](docs/research/agent-delegation-profile.md).
+  below): see [agentic IAM landscape](docs/research/agentic-iam-landscape-2026-10.md),
+  [agent delegation profile](docs/research/agent-delegation-profile.md) and
+  [agent delegation decisions](docs/research/agent-delegation-decisions.md).
 - **Single-node for the ephemeral stores.** The refresh-token family store is durable
   (PostgreSQL, per-tenant RLS), but the authorization-code store and the rate limiter are
   in-process; a shared-cache backend for those is required before a multi-node deployment.
@@ -424,7 +425,9 @@ tagged when the wave's integration test suite passes an end-to-end OIDC flow.
 - [ ] Realm management API
 
 ### Wave 4 — agents acting on a person's behalf
-Planned, following the [agent delegation profile](docs/research/agent-delegation-profile.md); the
+Planned, following the [agent delegation profile](docs/research/agent-delegation-profile.md) and
+the [agent delegation decisions](docs/research/agent-delegation-decisions.md), which settle
+intermediaries, hand-offs, revocation, actor identity and the configuration points; the
 standards behind it are rated in the [agentic IAM landscape](docs/research/agentic-iam-landscape-2026-10.md).
 - [ ] Decision record for the token exchange grant and the delegation profile (token exchange is
   excluded at compile time today, on purpose, until that record is accepted)
