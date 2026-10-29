@@ -64,6 +64,11 @@ precise about that boundary matters.
 - **Not yet self-sufficient for production key protection.** Signing keys are wrapped with a
   development master key that is _refused_ outside dev/test; a KMS-backed wrapping adapter is
   required before a production deployment can boot.
+- **Not yet a delegation server for AI agents.** Agents can authenticate as clients today
+  (`client_credentials`, `private_key_jwt`, keyless workload identity), but an agent cannot yet
+  act on a person's behalf with a delegated token. The design is written up and planned (Wave 4
+  below): see [agentic IAM landscape](docs/research/agentic-iam-landscape-2026-10.md) and
+  [agent delegation profile](docs/research/agent-delegation-profile.md).
 - **Single-node for the ephemeral stores.** The refresh-token family store is durable
   (PostgreSQL, per-tenant RLS), but the authorization-code store and the rate limiter are
   in-process; a shared-cache backend for those is required before a multi-node deployment.
@@ -418,6 +423,27 @@ tagged when the wave's integration test suite passes an end-to-end OIDC flow.
 - [ ] Dynamic client registration — RFC 7591
 - [ ] Key rotation port (scheduled, driven by `KeyRotationPolicy`)
 - [ ] Realm management API
+
+### Wave 4 — agents acting on a person's behalf
+Planned, following the [agent delegation profile](docs/research/agent-delegation-profile.md); the
+standards behind it are rated in the [agentic IAM landscape](docs/research/agentic-iam-landscape-2026-10.md).
+- [ ] Decision record for the token exchange grant and the delegation profile (token exchange is
+  excluded at compile time today, on purpose, until that record is accepted)
+- [ ] Per-resource audience at `/authorize` — an RFC 8707 `resource` indicator, so `aud` names the
+  API a token is for (also required by the MCP authorization specification)
+- [ ] Token exchange grant — RFC 8693, single hop: the acting agent is identified by its own client
+  authentication (mTLS or `private_key_jwt`), never by a separate actor token; the token names the
+  person (`sub`) and the agent (`act`); scope and audience only narrow, expiry never extends, no
+  refresh token
+- [ ] Delegated tokens from the authorization-code flow, with standing delegation grants (resources,
+  scopes, sub-agents, depth, expiry) and per-task approval for sensitive scopes (RFC 9396)
+- [ ] Sub-agent hand-off — a single-use token the sub-agent exchanges for its own; depth cap (default
+  2, at most 4) and no cycles
+- [ ] Delegation lineage and cascading revocation — revoking one link, or withdrawing a grant,
+  deactivates every token derived from it; introspection reports the chain
+- [ ] Proof-of-possession for confidential clients — DPoP on `client_credentials` and token exchange,
+  so every delegated token is bound to its presenter
+- [ ] Validation guide and signed test vectors for resource servers (an MCP gateway or any API)
 
 ### Ongoing
 - [ ] Distributed rate limiting (the shipped ingress limiter and credential-verification throttle are single-node in-memory; a shared-cache backend enforces limits fleet-wide)
