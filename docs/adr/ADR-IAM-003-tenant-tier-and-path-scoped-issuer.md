@@ -66,6 +66,8 @@ Facts the decisions rest on:
 
 **Why one row and not a ledger.** The dangerous cases are rare operator mode switches. A one-row binding plus a startup check blocks them without a ledger of retire and reactivate rules.
 
+**Amendment (2026-10-29): one issuer per `(tenant, baseline)`, not per tenant.** The opaque realm id, and so the issuer `base/realms/<opaque id>`, is minted per realm, `(tenant, baseline)`, not per tenant: each baseline of a tenant gets its own id and its own issuer. Signatures cannot separate two baselines of one tenant, because key sets are per tenant (D4), and the code already treats `(tenant, baseline)` as the isolation unit. ADR-IAM-007 names delegation actors by `(act.iss, act.sub)` with `act.iss` set to this issuer URL from the first delegated token, so a chain cannot cross from one baseline into another (for example from staging into production). The realm-registry slice that mints one opaque id per `(tenant, baseline)` ships before the per-realm issuer, which follows on its own track; actor identifiers do not change when it ships. Where this section says "per tenant", read "per realm". Consequence 2 is unchanged: discovery and key sets stay per tenant until D5 is revisited.
+
 ## D4 — No shared signing keys, and a second check in the token layer
 
 **Decision.** (a) Tenants never share key material, in any tier. (b) Access tokens carry their tenant and baseline, and introspection refuses a token whose realm or `iss` does not match the realm it is presented in.
