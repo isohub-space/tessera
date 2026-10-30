@@ -20,6 +20,7 @@ import com.nimbusds.jwt.SignedJWT;
 import dev.tessera.iam.adapter.rest.config.ClientAssertionConfig;
 import dev.tessera.iam.adapter.rest.config.OidcDiscoveryConfig;
 import dev.tessera.iam.application.port.out.ClientAssertionVerifierPort;
+import dev.tessera.iam.application.port.out.ClientAssertionVerifierPort.ReplayBudget;
 import dev.tessera.iam.application.port.out.ClientKeySourcePort.AssertionTrust;
 import dev.tessera.iam.domain.oidc.OidcCapabilities;
 import dev.tessera.iam.domain.tenancy.RealmKey;
@@ -87,7 +88,12 @@ import org.jboss.logging.Logger;
  * ({@link ClientAssertionConfig#replayCacheMaxEntriesPerClient()}), per realm
  * ({@link ClientAssertionConfig#replayCacheMaxEntriesPerRealm()}) and in total
  * ({@link ClientAssertionConfig#replayCacheMaxEntries()}), like the DPoP proof store and the
- * credential throttles. With several instances, a captured assertion could be replayed once on
+ * credential throttles. The {@code jti} namespace is one for every endpoint, so an assertion spent at
+ * {@code /token} is refused at {@code /introspect} and {@code /revoke} and the other way round, but
+ * those two endpoints count against a budget of their own, with its own per-client cap
+ * ({@link ClientAssertionConfig#introspectionReplayCacheMaxEntriesPerClient()}) and the same
+ * per-realm and total caps counted apart ({@link ReplayBudget}): introspection load, which a
+ * resource server's own callers drive, cannot use up what the client needs at {@code /token}. With several instances, a captured assertion could be replayed once on
  * each other instance within its lifetime, which the maximum lifetime bounds; a shared-cache store
  * with the same contract closes that.
  *
@@ -121,7 +127,8 @@ public class NimbusClientAssertionVerifier implements ClientAssertionVerifierPor
             ClientAssertionConfig config, TrustedIssuerJwks issuers) {
         this(vertx, clock, oidc.issuer(), config.maxLifetime(), config.clockSkew(),
                 new AssertionReplayStore(config.replayCacheMaxEntriesPerClient(),
-                        config.replayCacheMaxEntriesPerRealm(), config.replayCacheMaxEntries()), issuers);
+                        config.introspectionReplayCacheMaxEntriesPerClient(), config.replayCacheMaxEntriesPerRealm(),
+                        config.replayCacheMaxEntries()), issuers);
     }
 
     NimbusClientAssertionVerifier(Vertx vertx, Clock clock, String issuer, Duration maxLifetime, Duration skew,
@@ -142,12 +149,17 @@ public class NimbusClientAssertionVerifier implements ClientAssertionVerifierPor
     }
 
     @Override
-    public Uni<Boolean> verify(RealmKey realm, AssertionTrust trust, String assertion) {
+    public Uni<Boolean> verify(RealmKey realm, AssertionTrust trust, String assertion, ReplayBudget budget) {
         // Signature verification is CPU-bound: run it on a worker, never the event loop.
-        return vertx.executeBlocking(() -> verifyNow(realm, trust, assertion, clock.instant()), false);
+        return vertx.executeBlocking(() -> verifyNow(realm, trust, assertion, budget, clock.instant()), false);
     }
 
+    /** As presented at {@code /token}. */
     boolean verifyNow(RealmKey realm, AssertionTrust trust, String assertion, Instant now) {
+        return verifyNow(realm, trust, assertion, ReplayBudget.TOKEN, now);
+    }
+
+    boolean verifyNow(RealmKey realm, AssertionTrust trust, String assertion, ReplayBudget budget, Instant now) {
         SignedJWT jwt;
         JWTClaimsSet claims;
         try {
@@ -193,7 +205,7 @@ public class NimbusClientAssertionVerifier implements ClientAssertionVerifierPor
                 && (jti == null ? !jtiRequired : !jti.isBlank() && jti.length() <= MAX_JTI_LENGTH
                         && spent.firstUse(realm, trust.issuer(), trust.subject(), jti,
                                 external == null || external.enforceSingleUse(), external != null,
-                                claims.getExpirationTime().toInstant().plus(skew), now));
+                                claims.getExpirationTime().toInstant().plus(skew), now, budget));
     }
 
     private boolean verifySignature(SignedJWT jwt, JWSAlgorithm alg, JWK key) {

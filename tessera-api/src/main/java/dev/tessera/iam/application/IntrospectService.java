@@ -4,6 +4,7 @@ import dev.tessera.iam.application.port.in.IntrospectUseCase;
 import dev.tessera.iam.application.port.out.AccessTokenIntrospectorPort;
 import dev.tessera.iam.application.port.out.AccessTokenIntrospectorPort.VerifiedAccessToken;
 import dev.tessera.iam.application.port.out.ClientAssertionVerifierPort;
+import dev.tessera.iam.application.port.out.ClientAssertionVerifierPort.ReplayBudget;
 import dev.tessera.iam.application.port.out.ClientKeySourcePort;
 import dev.tessera.iam.application.port.out.ClientRepositoryPort;
 import dev.tessera.iam.application.port.out.ClientSecretVerifierPort;
@@ -81,7 +82,7 @@ public final class IntrospectService implements IntrospectUseCase {
         // to invalid_client, the endpoint's only surfaced failure.
         return clients.findByClientId(command.realm(), command.clientId())
                 .flatMap(client -> ClientAuthentication.authenticate(secretVerifier, keySource,
-                                assertionVerifier, command.realm(), command.clientId(), client,
+                                assertionVerifier, ReplayBudget.INTROSPECTION_AND_REVOCATION, command.realm(), command.clientId(), client,
                                 command.clientSecret(), command.clientAssertion(), false)
                         .flatMap(ok -> ok ? classify(command) : authFailed()));
     }

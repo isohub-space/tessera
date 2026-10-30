@@ -1,6 +1,7 @@
 package dev.tessera.iam.application;
 
 import dev.tessera.iam.application.port.out.ClientAssertionVerifierPort;
+import dev.tessera.iam.application.port.out.ClientAssertionVerifierPort.ReplayBudget;
 import dev.tessera.iam.application.port.out.ClientKeySourcePort;
 import dev.tessera.iam.application.port.out.ClientSecretVerifierPort;
 import dev.tessera.iam.domain.client.Client;
@@ -15,9 +16,11 @@ import io.smallrye.mutiny.Uni;
  * The one client-authentication step shared by {@code /token} ({@code client_credentials}),
  * {@code /introspect} and {@code /revoke}, at the same cost whatever the outcome. All three accept
  * a secret or a JWT client assertion through {@link #authenticate(ClientSecretVerifierPort,
- * ClientKeySourcePort, ClientAssertionVerifierPort, RealmKey, String, Client, String, String,
- * boolean)}, so an assertion is verified by the same verifier, with the same single-use rule and
- * within the same request realm, wherever it is presented.
+ * ClientKeySourcePort, ClientAssertionVerifierPort, ReplayBudget, RealmKey, String, Client, String,
+ * String, boolean)}, so an assertion is verified by the same verifier, with the same single-use rule
+ * and within the same request realm, wherever it is presented. Only the replay cap a newly spent
+ * {@code jti} counts against differs ({@link ReplayBudget}): introspection and revocation load
+ * cannot use up the budget a client needs at {@code /token}.
  *
  * <p>The secret verifier runs exactly once on every request: against the client's own id for a
  * confidential client of the realm, and against {@link ClientSecretVerifierPort#unknownClient}
@@ -41,14 +44,16 @@ final class ClientAuthentication {
      * presented ({@link #authenticateAssertion}), otherwise a secret, or for a public client where
      * allowed its {@code client_id} alone. A public client presenting an assertion is refused.
      *
+     * @param budget             the replay budget a presented assertion's {@code jti} counts against
      * @param presentedAssertion the presented {@code client_assertion}, or {@code null}
      */
     static Uni<Boolean> authenticate(
             ClientSecretVerifierPort secrets, ClientKeySourcePort keys, ClientAssertionVerifierPort assertions,
-            RealmKey realm, String presentedClientId, Client client, String presentedSecret,
+            ReplayBudget budget, RealmKey realm, String presentedClientId, Client client, String presentedSecret,
             String presentedAssertion, boolean publicClientsAllowed) {
         if (presentedAssertion != null) {
-            return authenticateAssertion(keys, assertions, realm, presentedClientId, client, presentedAssertion);
+            return authenticateAssertion(keys, assertions, budget, realm, presentedClientId, client,
+                    presentedAssertion);
         }
         return authenticate(secrets, realm, presentedClientId, client, presentedSecret, publicClientsAllowed);
     }
@@ -83,12 +88,12 @@ final class ClientAuthentication {
      * @return {@code true} when the client is authenticated
      */
     static Uni<Boolean> authenticateAssertion(
-            ClientKeySourcePort keys, ClientAssertionVerifierPort assertions, RealmKey realm,
+            ClientKeySourcePort keys, ClientAssertionVerifierPort assertions, ReplayBudget budget, RealmKey realm,
             String presentedClientId, Client client, String assertion) {
         boolean keyed = client instanceof ConfidentialClient c && byAssertion(c);
         ClientId id = keyed ? client.id() : ClientSecretVerifierPort.unknownClient(presentedClientId);
         return keys.trustFor(realm, id)
-                .flatMap(trust -> assertions.verify(realm, keyed ? trust : null, assertion))
+                .flatMap(trust -> assertions.verify(realm, keyed ? trust : null, assertion, budget))
                 .map(verified -> keyed && Boolean.TRUE.equals(verified));
     }
 

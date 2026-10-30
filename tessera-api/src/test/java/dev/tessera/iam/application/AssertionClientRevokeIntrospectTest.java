@@ -9,6 +9,7 @@ import dev.tessera.iam.application.port.in.RevokeUseCase.RevokeCommand;
 import dev.tessera.iam.application.port.in.RevokeUseCase.RevokeResult;
 import dev.tessera.iam.application.port.out.AccessTokenIntrospectorPort;
 import dev.tessera.iam.application.port.out.ClientAssertionVerifierPort;
+import dev.tessera.iam.application.port.out.ClientAssertionVerifierPort.ReplayBudget;
 import dev.tessera.iam.application.port.out.ClientKeySourcePort;
 import dev.tessera.iam.application.port.out.ClientKeySourcePort.AssertionTrust;
 import dev.tessera.iam.application.port.out.ClientRepositoryPort;
@@ -85,8 +86,10 @@ class AssertionClientRevokeIntrospectTest {
     }
 
     private final List<Check> assertionChecks = new ArrayList<>();
-    private final ClientAssertionVerifierPort assertions = (realm, trust, assertion) -> {
+    private final List<ReplayBudget> budgets = new ArrayList<>();
+    private final ClientAssertionVerifierPort assertions = (realm, trust, assertion, budget) -> {
         assertionChecks.add(new Check(realm, trust, assertion));
+        budgets.add(budget);
         return Uni.createFrom().item(trust != null && GOOD.equals(assertion));
     };
 
@@ -145,6 +148,7 @@ class AssertionClientRevokeIntrospectTest {
         secretChecks.clear();
         trustLookups.clear();
         assertionChecks.clear();
+        budgets.clear();
         revoked.clear();
     }
 
@@ -246,5 +250,19 @@ class AssertionClientRevokeIntrospectTest {
         assertThat(introspect(REALM, "keyed", "the-secret", null, token))
                 .isInstanceOf(IntrospectionResult.ClientAuthenticationFailed.class);
         assertThat(revoked).isEmpty();
+    }
+
+    @Test
+    @DisplayName("both endpoints spend the assertion against the introspection-and-revocation budget, never /token's")
+    void introspectionAndRevocationHaveTheirOwnBudget() {
+        String token = refreshTokenOf(KEYED);
+
+        introspect(REALM, "keyed", null, GOOD, token);
+        assertThat(budgets).containsExactly(ReplayBudget.INTROSPECTION_AND_REVOCATION);
+        revoke(REALM, "keyed", null, GOOD, token);
+        assertThat(budgets).containsExactly(ReplayBudget.INTROSPECTION_AND_REVOCATION);
+        // A refused assertion runs the same check against the same budget.
+        revoke(REALM, "secret-client", null, GOOD, token);
+        assertThat(budgets).containsExactly(ReplayBudget.INTROSPECTION_AND_REVOCATION);
     }
 }

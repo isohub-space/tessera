@@ -20,8 +20,10 @@ import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.response.Response;
 import io.restassured.specification.RequestSpecification;
 import jakarta.inject.Inject;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Base64;
 import java.util.UUID;
 import org.hamcrest.Matchers;
 import org.junit.jupiter.api.DisplayName;
@@ -164,6 +166,61 @@ class AssertionClientRevokeIntrospectFlowTest extends AuthorizationCodeFlowSuppo
                 .statusCode(401).body("error", Matchers.equalTo("invalid_client"));
 
         // None of the refused requests revoked the family.
+        introspectAsMachine(refresh).then().statusCode(200).body("active", Matchers.is(true));
+    }
+
+    @Test
+    @DisplayName("an assertion spent at /introspect or /revoke is refused at /token: one jti namespace, either order")
+    void assertionSpentAtIntrospectionIsRefusedAtToken() {
+        String refresh = refreshTokenOf(FakeClientRepository.KEYED_IDENTITY);
+
+        for (String endpoint : new String[] {"/introspect", "/revoke"}) {
+            String spent = assertion();
+            withAssertion(TENANT_OF_CLIENT, endpoint, spent, "a.b.c").then().statusCode(200);
+            form(TENANT_OF_CLIENT)
+                    .header("X-Client-Certificate", TestClientCertificate.PEM)
+                    .formParam("grant_type", "client_credentials")
+                    .formParam("client_assertion_type", JWT_BEARER)
+                    .formParam("client_assertion", spent)
+                    .when().post("/token")
+                    .then().statusCode(401).body("error", Matchers.equalTo("invalid_client"));
+        }
+        introspectAsMachine(refresh).then().statusCode(200).body("active", Matchers.is(true));
+    }
+
+    @Test
+    @DisplayName("HTTP Basic together with a client assertion is invalid_request at /introspect and /revoke")
+    void basicWithAnAssertionIsInvalidRequest() {
+        String basic = "Basic " + Base64.getEncoder().encodeToString(
+                (FakeClientRepository.MACHINE_CLIENT_ID + ":" + FakeClientSecretVerifier.CORRECT_SECRET)
+                        .getBytes(StandardCharsets.UTF_8));
+        String refresh = refreshTokenOf(FakeClientRepository.KEYED_IDENTITY);
+        for (String endpoint : new String[] {"/introspect", "/revoke"}) {
+            form(TENANT_OF_CLIENT)
+                    .header("Authorization", basic)
+                    .formParam("token", refresh)
+                    .formParam("client_assertion_type", JWT_BEARER)
+                    .formParam("client_assertion", assertion())
+                    .when().post(endpoint)
+                    .then().statusCode(400).header("Cache-Control", "no-store")
+                    .body("error", Matchers.equalTo("invalid_request"));
+        }
+        introspectAsMachine(refresh).then().statusCode(200).body("active", Matchers.is(true));
+    }
+
+    @Test
+    @DisplayName("a secret client's client_id with another client's valid assertion is invalid_client at /introspect and /revoke")
+    void anotherClientsAssertionIsInvalidClient() {
+        String refresh = refreshTokenOf(FakeClientRepository.MACHINE_IDENTITY);
+        for (String endpoint : new String[] {"/introspect", "/revoke"}) {
+            form(TENANT_OF_CLIENT)
+                    .formParam("token", refresh)
+                    .formParam("client_id", FakeClientRepository.MACHINE_CLIENT_ID)
+                    .formParam("client_assertion_type", JWT_BEARER)
+                    .formParam("client_assertion", assertion())
+                    .when().post(endpoint)
+                    .then().statusCode(401).body("error", Matchers.equalTo("invalid_client"));
+        }
         introspectAsMachine(refresh).then().statusCode(200).body("active", Matchers.is(true));
     }
 

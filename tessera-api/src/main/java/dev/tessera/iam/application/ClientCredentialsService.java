@@ -4,6 +4,7 @@ import dev.tessera.iam.application.port.in.ClientCredentialsUseCase;
 import dev.tessera.iam.application.port.in.TokenUseCase.TokenResult;
 import dev.tessera.iam.application.port.out.ClaimSourcePort;
 import dev.tessera.iam.application.port.out.ClientAssertionVerifierPort;
+import dev.tessera.iam.application.port.out.ClientAssertionVerifierPort.ReplayBudget;
 import dev.tessera.iam.application.port.out.ClientKeySourcePort;
 import dev.tessera.iam.application.port.out.ClientRepositoryPort;
 import dev.tessera.iam.application.port.out.ClientSecretVerifierPort;
@@ -120,8 +121,9 @@ public final class ClientCredentialsService implements ClientCredentialsUseCase 
 
     /** Only a confidential client with a valid credential for its method authenticates, at uniform cost. */
     private Uni<Boolean> authenticate(ClientCredentialsCommand command, Client client) {
-        return ClientAuthentication.authenticate(secretVerifier, keySource, assertionVerifier, command.realm(),
-                command.clientId(), client, command.clientSecret(), command.clientAssertion(), false);
+        return ClientAuthentication.authenticate(secretVerifier, keySource, assertionVerifier, ReplayBudget.TOKEN,
+                command.realm(), command.clientId(), client, command.clientSecret(), command.clientAssertion(),
+                false);
     }
 
     private Uni<TokenResult> authorize(ClientCredentialsCommand command, ConfidentialClient client) {

@@ -6,6 +6,7 @@ import dev.tessera.iam.application.port.in.ClientCredentialsUseCase.ClientCreden
 import dev.tessera.iam.application.port.in.TokenUseCase.TokenResult;
 import dev.tessera.iam.application.port.out.ClaimSourcePort;
 import dev.tessera.iam.application.port.out.ClientAssertionVerifierPort;
+import dev.tessera.iam.application.port.out.ClientAssertionVerifierPort.ReplayBudget;
 import dev.tessera.iam.application.port.out.ClientKeySourcePort;
 import dev.tessera.iam.application.port.out.ClientKeySourcePort.AssertionTrust;
 import dev.tessera.iam.application.port.out.ClientRepositoryPort;
@@ -63,6 +64,7 @@ class ClientCredentialsServiceTest {
     /** Each key-source lookup, and the trust each assertion verification ran with. */
     private final List<ClientId> keyLookups = new ArrayList<>();
     private final List<AssertionTrust> assertionChecks = new ArrayList<>();
+    private final List<ReplayBudget> assertionBudgets = new ArrayList<>();
 
     /** Every client lives in tenant A only: the registry is realm-scoped like the real one. */
     private Map<String, Client> clientsOfTenantA() {
@@ -142,8 +144,9 @@ class ClientCredentialsServiceTest {
             return Uni.createFrom().item(KEYED.equals(id) ? new AssertionTrust("keyed", "keyed", "{\"keys\":[]}")
                     : WORKLOAD.equals(id) ? AssertionTrust.ofIssuer("https://platform.example", "sa-1") : null);
         };
-        ClientAssertionVerifierPort assertions = (realm, trust, assertion) -> {
+        ClientAssertionVerifierPort assertions = (realm, trust, assertion, budget) -> {
             assertionChecks.add(trust);
+            assertionBudgets.add(budget);
             return Uni.createFrom().item(trust != null && GOOD_ASSERTION.equals(assertion));
         };
         return new ClientCredentialsService(clients, secrets, keys, assertions, claimSource, signer, ids,
@@ -289,6 +292,7 @@ class ClientCredentialsServiceTest {
         assertThat(issueWithAssertion("keyed", GOOD_ASSERTION)).isInstanceOf(TokenResult.Issued.class);
         assertThat(signed.get().claims()).containsEntry("sub", "keyed").containsEntry("client_id", "keyed");
         assertThat(keyLookups).containsExactly(KEYED);
+        assertThat(assertionBudgets).containsExactly(ReplayBudget.TOKEN);
         assertThat(verifierCalls).hasValue(0);
     }
 
