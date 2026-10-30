@@ -44,13 +44,22 @@ public interface IntrospectUseCase {
      * @param clientId      the wire {@code client_id} of the authenticating caller (never {@code null}
      *                      or blank)
      * @param clientSecret  the presented secret, or {@code null} when none was presented (which fails)
+     * @param clientAssertion the presented JWT client assertion (RFC 7523 §2.2), or {@code null};
+     *                      verified exactly as at the token endpoint
      */
     record IntrospectCommand(
             RealmKey realm,
             String token,
             String tokenTypeHint,
             String clientId,
-            String clientSecret) {
+            String clientSecret,
+            String clientAssertion) {
+
+        /** A request authenticated by a secret, or by the {@code client_id} alone. */
+        public IntrospectCommand(
+                RealmKey realm, String token, String tokenTypeHint, String clientId, String clientSecret) {
+            this(realm, token, tokenTypeHint, clientId, clientSecret, null);
+        }
 
         public IntrospectCommand {
             if (realm == null) {
@@ -58,6 +67,9 @@ public interface IntrospectUseCase {
             }
             if (clientId == null || clientId.isBlank()) {
                 throw new IllegalArgumentException("IntrospectCommand clientId must not be blank");
+            }
+            if (clientSecret != null && clientAssertion != null) {
+                throw new IllegalArgumentException("IntrospectCommand takes one client credential");
             }
         }
     }

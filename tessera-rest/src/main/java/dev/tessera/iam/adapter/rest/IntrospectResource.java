@@ -27,16 +27,18 @@ import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 /**
  * The token-introspection endpoint ({@code POST /introspect}, RFC 7662).
  *
- * <p>A thin shell over {@link IntrospectUseCase}: it parses the form-encoded request, authenticates
- * the caller (HTTP Basic or body credentials, same resolution as {@code /token} and {@code /revoke}),
- * and renders the outcome:
+ * <p>A thin shell over {@link IntrospectUseCase}: it parses the form-encoded request, reads the
+ * caller's credential (HTTP Basic, body credentials, or a JWT client assertion, the same reading as
+ * {@code /token} and {@code /revoke}, {@link PresentedClientCredentials}), and renders the outcome:
  * <ul>
  *   <li><strong>active</strong>: {@code 200} with an {@link IntrospectionResponseDto} carrying the
  *       echoable claims;</li>
  *   <li><strong>inactive / unknown / malformed / foreign-tenant</strong>: {@code 200} with exactly
  *       {@code {"active": false}} — the non-oracle response;</li>
  *   <li><strong>client-authentication failure</strong>: {@code 401} {@code invalid_client}, also for
- *       a public client, which cannot introspect (RFC 7662 §4).</li>
+ *       a public client, which cannot introspect (RFC 7662 §4);</li>
+ *   <li><strong>two client credentials in one request</strong>: {@code 400} {@code invalid_request}
+ *       (RFC 6749 §2.3).</li>
  * </ul>
  * All responses carry the {@code no-store} cache headers.
  */
@@ -63,21 +65,28 @@ public class IntrospectResource {
             @FormParam("token") String token,
             @FormParam("token_type_hint") String tokenTypeHint,
             @FormParam("client_id") String clientId,
-            @FormParam("client_secret") String clientSecret) {
+            @FormParam("client_secret") String clientSecret,
+            @FormParam("client_assertion_type") String clientAssertionType,
+            @FormParam("client_assertion") String clientAssertion) {
 
         RealmKey realm = tenantContext.realm();
 
-        BasicCredentials basic = BasicCredentials.parse(authorization);
-        String resolvedClientId = basic != null ? basic.clientId() : clientId;
-        String resolvedSecret = basic != null ? basic.clientSecret() : clientSecret;
+        // The same reading as at the token endpoint: HTTP Basic over the body (RFC 6749 §2.3.1),
+        // or a JWT client assertion (RFC 7523 §2.2), one method per request.
+        PresentedClientCredentials presented = PresentedClientCredentials.read(
+                authorization, clientId, clientSecret, clientAssertionType, clientAssertion);
+        if (presented instanceof PresentedClientCredentials.Refused refused) {
+            return Uni.createFrom().item(refusal(refused.status(), refused.error(), refused.description()));
+        }
+        PresentedClientCredentials.Presented credential = (PresentedClientCredentials.Presented) presented;
 
-        if (isBlank(resolvedClientId)) {
+        if (isBlank(credential.clientId())) {
             // No identifiable caller to authenticate — an invalid_client failure.
             return Uni.createFrom().item(unauthorizedClient());
         }
 
-        IntrospectCommand command =
-                new IntrospectCommand(realm, token, tokenTypeHint, resolvedClientId, resolvedSecret);
+        IntrospectCommand command = new IntrospectCommand(realm, token, tokenTypeHint,
+                credential.clientId(), credential.clientSecret(), credential.clientAssertion());
         return introspect.introspect(command).map(IntrospectResource::render);
     }
 
@@ -109,10 +118,14 @@ public class IntrospectResource {
     }
 
     private static Response unauthorizedClient() {
-        return Response.status(Response.Status.UNAUTHORIZED)
+        return refusal(Response.Status.UNAUTHORIZED, AuthorizationError.INVALID_CLIENT,
+                "client authentication failed");
+    }
+
+    private static Response refusal(Response.Status status, AuthorizationError error, String description) {
+        return Response.status(status)
                 .type(MediaType.APPLICATION_JSON)
-                .entity(new OAuthErrorDto(
-                        AuthorizationError.INVALID_CLIENT.code(), "client authentication failed"))
+                .entity(new OAuthErrorDto(error.code(), description))
                 .header("Cache-Control", "no-store")
                 .header("Pragma", "no-cache")
                 .build();

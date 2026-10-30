@@ -38,13 +38,22 @@ public interface RevokeUseCase {
      *                      server classifies the token itself and may ignore the hint
      * @param clientId     the wire {@code client_id} (never {@code null} or blank)
      * @param clientSecret the presented secret for a confidential client, or {@code null} for a public one
+     * @param clientAssertion the presented JWT client assertion (RFC 7523 §2.2), or {@code null};
+     *                      verified exactly as at the token endpoint
      */
     record RevokeCommand(
             RealmKey realm,
             String token,
             String tokenTypeHint,
             String clientId,
-            String clientSecret) {
+            String clientSecret,
+            String clientAssertion) {
+
+        /** A request authenticated by a secret, or by the {@code client_id} alone. */
+        public RevokeCommand(
+                RealmKey realm, String token, String tokenTypeHint, String clientId, String clientSecret) {
+            this(realm, token, tokenTypeHint, clientId, clientSecret, null);
+        }
 
         public RevokeCommand {
             if (realm == null) {
@@ -52,6 +61,9 @@ public interface RevokeUseCase {
             }
             if (clientId == null || clientId.isBlank()) {
                 throw new IllegalArgumentException("RevokeCommand clientId must not be blank");
+            }
+            if (clientSecret != null && clientAssertion != null) {
+                throw new IllegalArgumentException("RevokeCommand takes one client credential");
             }
         }
     }
