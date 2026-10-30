@@ -135,8 +135,8 @@ called by the REST adapter:
 | `TokenUseCase` | `POST /token` — redeems a single-use authorization code (PKCE verified), issues signed JWT access token + OIDC ID token + opaque refresh token. |
 | `ClientCredentialsUseCase` | `POST /token` (`grant_type=client_credentials`) — authenticates a confidential client and issues an access token for the client itself: its registered scopes and audiences, its roles through the claim pipeline, its tenant in `realm_tenant`/`realm_baseline`; no refresh token. Revoking such a token at `/revoke` is accepted and does nothing: it introspects as active until it expires, so its lifetime is short (5 minutes by default, `iam.client-credentials.access-token-ttl`). |
 | `RefreshUseCase` | `POST /token` (`grant_type=refresh_token`) — rotates a single-use refresh token, detects family reuse (RFC 9700 §4.14) and revokes the family on replay, re-issues the token set. |
-| `IntrospectUseCase` | `POST /introspect` (RFC 7662) — introspection of an access or refresh token by an authenticated confidential client; a public client is refused with `401 invalid_client` (RFC 7662 §4). |
-| `RevokeUseCase` | `POST /revoke` (RFC 7009) — grant-authenticated revocation of a token. |
+| `IntrospectUseCase` | `POST /introspect` (RFC 7662) — introspection of an access or refresh token by an authenticated confidential client, by its secret or its JWT client assertion; a public client is refused with `401 invalid_client` (RFC 7662 §4). |
+| `RevokeUseCase` | `POST /revoke` (RFC 7009) — revocation of a refresh token by the client it was issued to, authenticated by its secret or its JWT client assertion, or a public client by its `client_id`. |
 
 #### Outbound ports (driven adapters)
 
@@ -402,7 +402,7 @@ tagged when the wave's integration test suite passes an end-to-end OIDC flow.
 - [x] RFC 9068 JWT access tokens, OIDC ID tokens
 - [x] Refresh-token grant — single-use rotation with family reuse-detection (RFC 9700 §4.14)
 - [x] `client_credentials` grant (RFC 6749 §4.4) — tenant-bound confidential clients, registered scopes, audiences and roles
-- [x] JWT client assertions (RFC 7523) on `client_credentials`: `private_key_jwt` with a registered JWK Set, and keyless workload identity — a token from a trusted external issuer (a cloud platform, Kubernetes, SPIFFE) whose key set is fetched over https, with a per-issuer maximum lifetime and `jti` rules (`iam.client-assertion.trusted-issuers.*`)
+- [x] JWT client assertions (RFC 7523) on `client_credentials`, `/introspect` and `/revoke`, with one verifier and one single-use rule for all three: `private_key_jwt` with a registered JWK Set, and keyless workload identity — a token from a trusted external issuer (a cloud platform, Kubernetes, SPIFFE) whose key set is fetched over https, with a per-issuer maximum lifetime and `jti` rules (`iam.client-assertion.trusted-issuers.*`)
 - [x] Token introspection — RFC 7662 (`POST /introspect`)
 - [x] Token revocation — RFC 7009 (`POST /revoke`)
 - [x] Confidential (Argon2id) + public (PKCE) client registry with `redirect_uri` allow-list

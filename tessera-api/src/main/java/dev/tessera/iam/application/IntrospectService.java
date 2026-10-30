@@ -3,6 +3,8 @@ package dev.tessera.iam.application;
 import dev.tessera.iam.application.port.in.IntrospectUseCase;
 import dev.tessera.iam.application.port.out.AccessTokenIntrospectorPort;
 import dev.tessera.iam.application.port.out.AccessTokenIntrospectorPort.VerifiedAccessToken;
+import dev.tessera.iam.application.port.out.ClientAssertionVerifierPort;
+import dev.tessera.iam.application.port.out.ClientKeySourcePort;
 import dev.tessera.iam.application.port.out.ClientRepositoryPort;
 import dev.tessera.iam.application.port.out.ClientSecretVerifierPort;
 import dev.tessera.iam.application.port.out.RefreshTokenStorePort;
@@ -20,7 +22,9 @@ import java.util.Optional;
  * <p>Framework-free; the reactive fold is the only control flow. The caller is authenticated first
  * (its failure is the only surfaced error), and only a confidential client authenticated with the
  * method it is registered for may introspect: RFC 7662 §4 requires the endpoint to be protected so
- * it cannot be used to probe tokens, and a public client's {@code client_id} is no secret. Then the
+ * it cannot be used to probe tokens, and a public client's {@code client_id} is no secret. The caller
+ * presents a secret or a JWT client assertion ({@code private_key_jwt} or workload identity), verified
+ * exactly as at the token endpoint ({@link ClientAuthentication}). Then the
  * token is classified and evaluated strictly within the caller's own realm:
  * <ul>
  *   <li><strong>Opaque refresh token</strong> (parses via {@link RefreshTokenCodec}) — active iff its
@@ -44,6 +48,8 @@ public final class IntrospectService implements IntrospectUseCase {
 
     private final ClientRepositoryPort clients;
     private final ClientSecretVerifierPort secretVerifier;
+    private final ClientKeySourcePort keySource;
+    private final ClientAssertionVerifierPort assertionVerifier;
     private final RefreshTokenStorePort refreshStore;
     private final AccessTokenIntrospectorPort accessTokens;
     private final Clock clock;
@@ -51,11 +57,15 @@ public final class IntrospectService implements IntrospectUseCase {
     public IntrospectService(
             ClientRepositoryPort clients,
             ClientSecretVerifierPort secretVerifier,
+            ClientKeySourcePort keySource,
+            ClientAssertionVerifierPort assertionVerifier,
             RefreshTokenStorePort refreshStore,
             AccessTokenIntrospectorPort accessTokens,
             Clock clock) {
         this.clients = requireNonNull(clients, "clients");
         this.secretVerifier = requireNonNull(secretVerifier, "secretVerifier");
+        this.keySource = requireNonNull(keySource, "keySource");
+        this.assertionVerifier = requireNonNull(assertionVerifier, "assertionVerifier");
         this.refreshStore = requireNonNull(refreshStore, "refreshStore");
         this.accessTokens = requireNonNull(accessTokens, "accessTokens");
         this.clock = requireNonNull(clock, "clock");
@@ -67,11 +77,12 @@ public final class IntrospectService implements IntrospectUseCase {
             throw new IllegalArgumentException("command must not be null");
         }
         // Authenticate the caller within its own realm, at the same cost whatever the outcome;
-        // an unknown client, a public client and a failed secret all collapse to invalid_client,
-        // the endpoint's only surfaced failure.
+        // an unknown client, a public client, a failed secret and a failed assertion all collapse
+        // to invalid_client, the endpoint's only surfaced failure.
         return clients.findByClientId(command.realm(), command.clientId())
-                .flatMap(client -> ClientAuthentication.authenticate(secretVerifier, command.realm(),
-                                command.clientId(), client, command.clientSecret(), false)
+                .flatMap(client -> ClientAuthentication.authenticate(secretVerifier, keySource,
+                                assertionVerifier, command.realm(), command.clientId(), client,
+                                command.clientSecret(), command.clientAssertion(), false)
                         .flatMap(ok -> ok ? classify(command) : authFailed()));
     }
 

@@ -1,6 +1,5 @@
 package dev.tessera.iam.adapter.rest;
 
-import com.nimbusds.jwt.SignedJWT;
 import io.smallrye.mutiny.Uni;
 import dev.tessera.iam.adapter.rest.config.ClientCredentialsConfig;
 import dev.tessera.iam.adapter.rest.dto.OAuthErrorDto;
@@ -63,7 +62,6 @@ public class TokenResource {
     private static final String GRANT_AUTHORIZATION_CODE = "authorization_code";
     private static final String GRANT_REFRESH_TOKEN = "refresh_token";
     private static final String GRANT_CLIENT_CREDENTIALS = "client_credentials";
-    private static final String JWT_BEARER_ASSERTION = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
 
     @Inject
     TokenUseCase token;
@@ -110,7 +108,8 @@ public class TokenResource {
         BasicCredentials basic = BasicCredentials.parse(authorization);
         String resolvedClientId = basic != null ? basic.clientId() : clientId;
         String resolvedSecret = basic != null ? basic.clientSecret() : clientSecret;
-        boolean assertionPresented = clientAssertionType != null || clientAssertion != null;
+        boolean assertionPresented =
+                PresentedClientCredentials.assertionPresented(clientAssertionType, clientAssertion);
         if (assertionPresented && !GRANT_CLIENT_CREDENTIALS.equals(grantType)) {
             return error(Response.Status.UNAUTHORIZED, AuthorizationError.INVALID_CLIENT,
                     "a client assertion is accepted only for the client_credentials grant");
@@ -144,27 +143,18 @@ public class TokenResource {
         }
 
         if (GRANT_CLIENT_CREDENTIALS.equals(grantType) && clientCredentialsConfig.enabled()) {
-            if (assertionPresented) {
-                // RFC 6749 §2.3: one authentication method per request.
-                if (basic != null || clientSecret != null) {
-                    return error(Response.Status.BAD_REQUEST, AuthorizationError.INVALID_REQUEST,
-                            "use one client authentication method");
-                }
-                if (!JWT_BEARER_ASSERTION.equals(clientAssertionType) || isBlank(clientAssertion)) {
-                    return error(Response.Status.UNAUTHORIZED, AuthorizationError.INVALID_CLIENT,
-                            "client authentication failed");
-                }
-                // client_id is optional with an assertion (RFC 7521 §4.2); its subject names the client.
-                if (isBlank(resolvedClientId)) {
-                    resolvedClientId = unverifiedSubject(clientAssertion);
-                }
+            PresentedClientCredentials presented = PresentedClientCredentials.read(
+                    authorization, clientId, clientSecret, clientAssertionType, clientAssertion);
+            if (presented instanceof PresentedClientCredentials.Refused refused) {
+                return error(refused.status(), refused.error(), refused.description());
             }
-            if (isBlank(resolvedClientId)) {
+            PresentedClientCredentials.Presented credential = (PresentedClientCredentials.Presented) presented;
+            if (isBlank(credential.clientId())) {
                 return error(Response.Status.UNAUTHORIZED, AuthorizationError.INVALID_CLIENT,
                         "client authentication is required");
             }
             ClientCredentialsCommand command = new ClientCredentialsCommand(
-                    realm, resolvedClientId, resolvedSecret, assertionPresented ? clientAssertion : null, scope,
+                    realm, credential.clientId(), credential.clientSecret(), credential.clientAssertion(), scope,
                     resources,
                     ClientCertificateThumbprint.fromHeader(clientCertificate).orElse(null));
             return clientCredentials.issue(command).map(TokenResource::render);
@@ -220,15 +210,6 @@ public class TokenResource {
             builder.header("WWW-Authenticate", "DPoP algs=\"ES256\"");
         }
         return builder.build();
-    }
-
-    /** The assertion's {@code sub}, read before verification only to look the client up. */
-    private static String unverifiedSubject(String assertion) {
-        try {
-            return SignedJWT.parse(assertion).getJWTClaimsSet().getSubject();
-        } catch (Exception malformed) {
-            return null;
-        }
     }
 
     private static boolean isBlank(String value) {

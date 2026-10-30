@@ -7,6 +7,8 @@ import dev.tessera.iam.application.port.in.IntrospectUseCase.IntrospectionResult
 import dev.tessera.iam.application.port.in.RevokeUseCase.RevokeCommand;
 import dev.tessera.iam.application.port.in.RevokeUseCase.RevokeResult;
 import dev.tessera.iam.application.port.out.AccessTokenIntrospectorPort;
+import dev.tessera.iam.application.port.out.ClientAssertionVerifierPort;
+import dev.tessera.iam.application.port.out.ClientKeySourcePort;
 import dev.tessera.iam.application.port.out.ClientRepositoryPort;
 import dev.tessera.iam.application.port.out.ClientSecretVerifierPort;
 import dev.tessera.iam.application.port.out.RefreshTokenStorePort;
@@ -92,19 +94,27 @@ class UniformClientAuthenticationTest {
         }
     };
 
+    // A request that presents no assertion never reaches these.
+    private final ClientKeySourcePort keys = (realm, id) -> {
+        throw new AssertionError("the key source runs only for an assertion");
+    };
+    private final ClientAssertionVerifierPort assertions = (realm, trust, assertion) -> {
+        throw new AssertionError("the assertion verifier runs only for an assertion");
+    };
+
     private final AccessTokenIntrospectorPort accessTokens =
             (realm, token) -> Uni.createFrom().item(Optional.empty());
 
     private IntrospectionResult introspect(RealmKey realm, String clientId, String secret) {
         verified.clear();
-        return new IntrospectService(clients, verifier, refreshStore, accessTokens, Clock.systemUTC())
+        return new IntrospectService(clients, verifier, keys, assertions, refreshStore, accessTokens, Clock.systemUTC())
                 .introspect(new IntrospectCommand(realm, "a.b.c", null, clientId, secret))
                 .await().indefinitely();
     }
 
     private RevokeResult revoke(RealmKey realm, String clientId, String secret) {
         verified.clear();
-        return new RevokeService(clients, verifier, refreshStore)
+        return new RevokeService(clients, verifier, keys, assertions, refreshStore)
                 .revoke(new RevokeCommand(realm, "a.b.c", null, clientId, secret))
                 .await().indefinitely();
     }

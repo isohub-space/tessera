@@ -120,12 +120,8 @@ public final class ClientCredentialsService implements ClientCredentialsUseCase 
 
     /** Only a confidential client with a valid credential for its method authenticates, at uniform cost. */
     private Uni<Boolean> authenticate(ClientCredentialsCommand command, Client client) {
-        if (command.clientAssertion() != null) {
-            return ClientAuthentication.authenticateAssertion(keySource, assertionVerifier, command.realm(),
-                    command.clientId(), client, command.clientAssertion());
-        }
-        return ClientAuthentication.authenticate(
-                secretVerifier, command.realm(), command.clientId(), client, command.clientSecret(), false);
+        return ClientAuthentication.authenticate(secretVerifier, keySource, assertionVerifier, command.realm(),
+                command.clientId(), client, command.clientSecret(), command.clientAssertion(), false);
     }
 
     private Uni<TokenResult> authorize(ClientCredentialsCommand command, ConfidentialClient client) {

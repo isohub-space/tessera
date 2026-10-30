@@ -7,7 +7,7 @@ import java.util.Base64;
 /**
  * Parsed HTTP Basic client credentials ({@code Authorization: Basic base64(id:secret)},
  * RFC 6749 §2.3.1), shared by the OAuth endpoints that authenticate a client ({@code /token},
- * {@code /revoke}). The {@code client_id} and {@code client_secret} are
+ * {@code /introspect}, {@code /revoke}), through {@link PresentedClientCredentials}. The {@code client_id} and {@code client_secret} are
  * {@code application/x-www-form-urlencoded} per the spec; they are decoded so a credential
  * containing reserved characters round-trips.
  *

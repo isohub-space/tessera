@@ -1,6 +1,8 @@
 package dev.tessera.iam.application;
 
 import dev.tessera.iam.application.port.in.RevokeUseCase;
+import dev.tessera.iam.application.port.out.ClientAssertionVerifierPort;
+import dev.tessera.iam.application.port.out.ClientKeySourcePort;
 import dev.tessera.iam.application.port.out.ClientRepositoryPort;
 import dev.tessera.iam.application.port.out.ClientSecretVerifierPort;
 import dev.tessera.iam.application.port.out.RefreshTokenStorePort;
@@ -20,8 +22,11 @@ import java.util.Optional;
  * empty body, whatever became of the token. The security-relevant invariants:
  * <ul>
  *   <li><strong>Client-authenticated.</strong> The only surfaced failure is a client-authentication
- *       failure ({@code invalid_client}); an unknown client, a missing secret, or a wrong secret all
- *       collapse to it, learning the caller nothing.</li>
+ *       failure ({@code invalid_client}); an unknown client, a missing secret, a wrong secret, or a
+ *       failed client assertion all collapse to it, learning the caller nothing. A confidential
+ *       client presents a secret or a JWT client assertion ({@code private_key_jwt} or workload
+ *       identity), verified exactly as at the token endpoint ({@link ClientAuthentication}); a
+ *       public client is identified by its {@code client_id}.</li>
  *   <li><strong>Realm-scoped, header-bound.</strong> Unlike the refresh grant (which resolves a
  *       token's authoritative realm server-side so a replay is caught under any header), revocation
  *       acts <em>only</em> within the caller's own realm. A token belonging to another tenant is
@@ -41,14 +46,20 @@ public final class RevokeService implements RevokeUseCase {
 
     private final ClientRepositoryPort clients;
     private final ClientSecretVerifierPort secretVerifier;
+    private final ClientKeySourcePort keySource;
+    private final ClientAssertionVerifierPort assertionVerifier;
     private final RefreshTokenStorePort refreshStore;
 
     public RevokeService(
             ClientRepositoryPort clients,
             ClientSecretVerifierPort secretVerifier,
+            ClientKeySourcePort keySource,
+            ClientAssertionVerifierPort assertionVerifier,
             RefreshTokenStorePort refreshStore) {
         this.clients = requireNonNull(clients, "clients");
         this.secretVerifier = requireNonNull(secretVerifier, "secretVerifier");
+        this.keySource = requireNonNull(keySource, "keySource");
+        this.assertionVerifier = requireNonNull(assertionVerifier, "assertionVerifier");
         this.refreshStore = requireNonNull(refreshStore, "refreshStore");
     }
 
@@ -58,11 +69,12 @@ public final class RevokeService implements RevokeUseCase {
             throw new IllegalArgumentException("command must not be null");
         }
         // Authenticate the client within the caller's own realm, at the same cost whatever the
-        // outcome. Unknown client or failed secret both collapse to invalid_client, the endpoint's
-        // only surfaced failure.
+        // outcome. Unknown client, failed secret and failed assertion all collapse to
+        // invalid_client, the endpoint's only surfaced failure.
         return clients.findByClientId(command.realm(), command.clientId())
-                .flatMap(client -> ClientAuthentication.authenticate(secretVerifier, command.realm(),
-                                command.clientId(), client, command.clientSecret(), true)
+                .flatMap(client -> ClientAuthentication.authenticate(secretVerifier, keySource,
+                                assertionVerifier, command.realm(), command.clientId(), client,
+                                command.clientSecret(), command.clientAssertion(), true)
                         .flatMap(ok -> ok
                                 ? revokeIfOwnedRefreshToken(command.realm(), client, command.token())
                                         .replaceWith(done())

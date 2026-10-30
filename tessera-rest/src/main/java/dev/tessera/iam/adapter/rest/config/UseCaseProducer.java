@@ -215,8 +215,12 @@ public class UseCaseProducer {
     RevokeUseCase revokeUseCase(
             ClientRepositoryPort clients,
             ClientSecretVerifierPort secretVerifier,
+            ClientKeySourcePort keySource,
+            ClientAssertionVerifierPort assertionVerifier,
             RefreshTokenStorePort refreshStore) {
-        return new RevokeService(clients, secretVerifier, refreshStore);
+        // The same key source and assertion verifier (and so the same replay store) as the token
+        // endpoint: an assertion is single use across /token, /introspect and /revoke.
+        return new RevokeService(clients, secretVerifier, keySource, assertionVerifier, refreshStore);
     }
 
     @Produces
@@ -224,10 +228,13 @@ public class UseCaseProducer {
     IntrospectUseCase introspectUseCase(
             ClientRepositoryPort clients,
             ClientSecretVerifierPort secretVerifier,
+            ClientKeySourcePort keySource,
+            ClientAssertionVerifierPort assertionVerifier,
             RefreshTokenStorePort refreshStore,
             AccessTokenIntrospectorPort accessTokens,
             Clock clock) {
-        return new IntrospectService(clients, secretVerifier, refreshStore, accessTokens, clock);
+        return new IntrospectService(
+                clients, secretVerifier, keySource, assertionVerifier, refreshStore, accessTokens, clock);
     }
 
     @Produces

@@ -42,6 +42,14 @@ Accumulating toward the first release, `26.1.0 "Andromeda"`.
   another user than the session's, or an unregistered redirect URI is a `400` that ends nothing
   and is never redirected. Kept outside the CORS policy, like `/authorize`.
 
+- JWT client assertion authentication (RFC 7523 §2.2) at `/introspect` and `/revoke`: a
+  `private_key_jwt` or workload-identity client authenticates there exactly as at `/token`, with
+  `client_assertion_type` and `client_assertion` (`client_id` optional), through the same verifier,
+  the same single-use `jti` store and the same request realm, so an assertion spent at one endpoint
+  is refused at the others. An assertion together with a secret is `400 invalid_request`
+  (RFC 6749 §2.3). Revocation still acts only on the refresh families issued to the authenticating
+  client (RFC 7009 §2.1).
+
 ### Security
 - Fail-closed startup: a production deployment refuses the well-known development master key.
 - `/introspect` admits only an authenticated confidential client (RFC 7662 §4). A public client

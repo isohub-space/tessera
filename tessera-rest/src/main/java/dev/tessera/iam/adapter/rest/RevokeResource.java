@@ -25,14 +25,16 @@ import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 /**
  * The token-revocation endpoint ({@code POST /revoke}, RFC 7009).
  *
- * <p>A thin shell over {@link RevokeUseCase}: it parses the form-encoded request, supports the
- * client presenting its secret via the body ({@code client_secret}) or HTTP Basic, and renders the
- * use case's outcome:
+ * <p>A thin shell over {@link RevokeUseCase}: it parses the form-encoded request, reads the client's
+ * credential (its secret via the body or HTTP Basic, or a JWT client assertion, the same reading as
+ * {@code /token}, {@link PresentedClientCredentials}), and renders the use case's outcome:
  * <ul>
  *   <li><strong>success</strong>: a {@code 200} with an <em>empty</em> body (RFC 7009 §2.2),
  *       regardless of whether the token was live, already revoked, unknown, malformed, or belongs
  *       to another tenant — the endpoint is a non-oracle;</li>
- *   <li><strong>client-authentication failure</strong>: a {@code 401} {@code invalid_client}.</li>
+ *   <li><strong>client-authentication failure</strong>: a {@code 401} {@code invalid_client};</li>
+ *   <li><strong>two client credentials in one request</strong>: a {@code 400}
+ *       {@code invalid_request} (RFC 6749 §2.3).</li>
  * </ul>
  * Both responses carry the {@code no-store} cache headers. This is the only endpoint outcome a
  * caller can observe, so a token it does not own is indistinguishable from one it does.
@@ -60,23 +62,28 @@ public class RevokeResource {
             @FormParam("token") String token,
             @FormParam("token_type_hint") String tokenTypeHint,
             @FormParam("client_id") String clientId,
-            @FormParam("client_secret") String clientSecret) {
+            @FormParam("client_secret") String clientSecret,
+            @FormParam("client_assertion_type") String clientAssertionType,
+            @FormParam("client_assertion") String clientAssertion) {
 
         RealmKey realm = tenantContext.realm();
 
-        // HTTP Basic client authentication takes precedence over body params (RFC 6749 §2.3.1),
-        // exactly as at the token endpoint.
-        BasicCredentials basic = BasicCredentials.parse(authorization);
-        String resolvedClientId = basic != null ? basic.clientId() : clientId;
-        String resolvedSecret = basic != null ? basic.clientSecret() : clientSecret;
+        // The same reading as at the token endpoint: HTTP Basic over the body (RFC 6749 §2.3.1),
+        // or a JWT client assertion (RFC 7523 §2.2), one method per request.
+        PresentedClientCredentials presented = PresentedClientCredentials.read(
+                authorization, clientId, clientSecret, clientAssertionType, clientAssertion);
+        if (presented instanceof PresentedClientCredentials.Refused refused) {
+            return Uni.createFrom().item(refusal(refused.status(), refused.error(), refused.description()));
+        }
+        PresentedClientCredentials.Presented credential = (PresentedClientCredentials.Presented) presented;
 
-        if (isBlank(resolvedClientId)) {
-            // No identifiable client to authenticate — an invalid_client failure.
+        if (isBlank(credential.clientId())) {
+            // No identifiable caller to authenticate — an invalid_client failure.
             return Uni.createFrom().item(unauthorizedClient());
         }
 
-        RevokeCommand command =
-                new RevokeCommand(realm, token, tokenTypeHint, resolvedClientId, resolvedSecret);
+        RevokeCommand command = new RevokeCommand(realm, token, tokenTypeHint,
+                credential.clientId(), credential.clientSecret(), credential.clientAssertion());
         return revoke.revoke(command).map(RevokeResource::render);
     }
 
@@ -96,10 +103,14 @@ public class RevokeResource {
     }
 
     private static Response unauthorizedClient() {
-        return Response.status(Response.Status.UNAUTHORIZED)
+        return refusal(Response.Status.UNAUTHORIZED, AuthorizationError.INVALID_CLIENT,
+                "client authentication failed");
+    }
+
+    private static Response refusal(Response.Status status, AuthorizationError error, String description) {
+        return Response.status(status)
                 .type(MediaType.APPLICATION_JSON)
-                .entity(new OAuthErrorDto(
-                        AuthorizationError.INVALID_CLIENT.code(), "client authentication failed"))
+                .entity(new OAuthErrorDto(error.code(), description))
                 .header("Cache-Control", "no-store")
                 .header("Pragma", "no-cache")
                 .build();
