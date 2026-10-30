@@ -35,7 +35,8 @@ import org.eclipse.microprofile.openapi.annotations.tags.Tag;
  *       echoable claims;</li>
  *   <li><strong>inactive / unknown / malformed / foreign-tenant</strong>: {@code 200} with exactly
  *       {@code {"active": false}} — the non-oracle response;</li>
- *   <li><strong>client-authentication failure</strong>: {@code 401} {@code invalid_client}.</li>
+ *   <li><strong>client-authentication failure</strong>: {@code 401} {@code invalid_client}, also for
+ *       a public client, which cannot introspect (RFC 7662 §4).</li>
  * </ul>
  * All responses carry the {@code no-store} cache headers.
  */

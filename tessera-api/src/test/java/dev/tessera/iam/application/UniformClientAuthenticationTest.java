@@ -38,6 +38,7 @@ import org.junit.jupiter.api.Test;
  * {@code /introspect} and {@code /revoke} authenticate the caller at the same cost whatever the
  * outcome: the secret verifier runs exactly once, so the response time does not tell whether a
  * {@code client_id} exists. Unknown and public clients are verified against the per-id sentinel.
+ * Only a confidential client introspects; a public client may still revoke its own tokens.
  */
 @DisplayName("Client authentication on /introspect and /revoke — one verifier call on every path")
 class UniformClientAuthenticationTest {
@@ -124,8 +125,13 @@ class UniformClientAuthenticationTest {
         assertThat(verified).containsExactly(RESOURCE_SERVER);
         assertThat(introspect(REALM, "resource-server", SECRET)).isInstanceOf(IntrospectionResult.Inactive.class);
         assertThat(verified).containsExactly(RESOURCE_SERVER);
-        // A public client may introspect with its client_id alone (RFC 7662 §4), at the same cost.
-        assertThat(introspect(REALM, "spa", null)).isInstanceOf(IntrospectionResult.Inactive.class);
+        // A public client cannot introspect (RFC 7662 §4): refused at the same cost, with or
+        // without a secret, so the refusal does not tell a public client from an unknown one.
+        assertThat(introspect(REALM, "spa", null))
+                .isInstanceOf(IntrospectionResult.ClientAuthenticationFailed.class);
+        assertThat(verified).containsExactly(ClientSecretVerifierPort.unknownClient("spa"));
+        assertThat(introspect(REALM, "spa", SECRET))
+                .isInstanceOf(IntrospectionResult.ClientAuthenticationFailed.class);
         assertThat(verified).containsExactly(ClientSecretVerifierPort.unknownClient("spa"));
     }
 

@@ -24,7 +24,8 @@ import org.junit.jupiter.api.Test;
  * End-to-end {@code POST /introspect} flow over HTTP (Docker-free, in-memory store), RFC 7662: a live
  * JWT access token and a live refresh token are reported active with their claims; expired/superseded/
  * unknown/malformed/cross-tenant/tampered tokens are exactly {@code {"active": false}} (non-oracle);
- * and the only non-{@code 200} is a {@code 401} on client-authentication failure. The access-token
+ * and the only non-{@code 200} is a {@code 401} on client-authentication failure, which is also what a
+ * public client gets: only an authenticated confidential client introspects. The access-token
  * cases exercise the real EdDSA verify path (a token the server signs, then verifies via the JWK).
  */
 @QuarkusTest
@@ -165,6 +166,43 @@ class IntrospectFlowTest {
                 .formParam("token", tokens.accessToken())
                 .when().post("/introspect")
                 .then().statusCode(401).body("error", Matchers.equalTo("invalid_client"));
+    }
+
+    @Test
+    @DisplayName("a public client cannot introspect, not even a token issued to it: 401 invalid_client (RFC 7662 §4)")
+    void publicClientIsRefused() {
+        String tenant = UUID.randomUUID().toString();
+        Tokens tokens = issue(tenant, UUID.randomUUID().toString());
+
+        for (String publicClient : new String[] {TOKEN_CLIENT, FakeClientRepository.PUBLIC_CLIENT_ID}) {
+            for (String token : new String[] {tokens.accessToken(), tokens.refreshToken()}) {
+                introspect(tenant, publicClient, null, token).then()
+                        .statusCode(401).header("Cache-Control", "no-store")
+                        .body("error", Matchers.equalTo("invalid_client"))
+                        .body("active", Matchers.nullValue());
+                introspect(tenant, publicClient, CALLER_SECRET, token).then()
+                        .statusCode(401).body("error", Matchers.equalTo("invalid_client"));
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a confidential client authenticated by HTTP Basic introspects the same tokens as active")
+    void confidentialClientByBasicIsAccepted() {
+        String tenant = UUID.randomUUID().toString();
+        Tokens tokens = issue(tenant, UUID.randomUUID().toString());
+        String basic = "Basic " + Base64.getEncoder().encodeToString(
+                (CALLER + ":" + CALLER_SECRET).getBytes(StandardCharsets.UTF_8));
+
+        for (String token : new String[] {tokens.accessToken(), tokens.refreshToken()}) {
+            given().config(noFollow())
+                    .header("X-Tenant-Id", tenant)
+                    .header("Authorization", basic)
+                    .contentType("application/x-www-form-urlencoded")
+                    .formParam("token", token)
+                    .when().post("/introspect")
+                    .then().statusCode(200).body("active", Matchers.is(true));
+        }
     }
 
     // --------------------------------------------------------------------- helpers

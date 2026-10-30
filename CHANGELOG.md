@@ -44,5 +44,11 @@ Accumulating toward the first release, `26.1.0 "Andromeda"`.
 
 ### Security
 - Fail-closed startup: a production deployment refuses the well-known development master key.
+- `/introspect` admits only an authenticated confidential client (RFC 7662 §4). A public client
+  presenting its `client_id`, with or without a secret, now gets `401 invalid_client`, at the same
+  cost as an unknown client, so the endpoint can no longer be used to probe tokens with a public
+  identifier. A resource server that introspected as a public client must be registered as a
+  confidential client and present its credential. `/revoke` is unchanged: a public client may
+  still revoke the tokens issued to it (RFC 7009 §2.1).
 
 [Unreleased]: https://github.com/meta-agentic/meta-iam/commits/main
