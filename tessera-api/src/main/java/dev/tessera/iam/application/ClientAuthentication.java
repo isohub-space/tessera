@@ -35,7 +35,9 @@ final class ClientAuthentication {
     /**
      * @param client               the client the realm resolved for the presented id, or {@code null}
      * @param publicClientsAllowed whether a public client is identified by its {@code client_id}
-     *                             alone, as introspection and revocation allow (RFC 7662 §4)
+     *                             alone, as revocation allows for the tokens issued to it
+     *                             (RFC 7009 §2.1); introspection and {@code client_credentials}
+     *                             do not
      * @return {@code true} when the client is authenticated
      */
     static Uni<Boolean> authenticate(

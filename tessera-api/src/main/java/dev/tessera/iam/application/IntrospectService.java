@@ -18,8 +18,10 @@ import java.util.Optional;
  * Application service for token introspection ({@code POST /introspect}, RFC 7662).
  *
  * <p>Framework-free; the reactive fold is the only control flow. The caller is authenticated first
- * (its failure is the only surfaced error); then the token is classified and evaluated strictly
- * within the caller's own realm:
+ * (its failure is the only surfaced error), and only a confidential client authenticated with the
+ * method it is registered for may introspect: RFC 7662 §4 requires the endpoint to be protected so
+ * it cannot be used to probe tokens, and a public client's {@code client_id} is no secret. Then the
+ * token is classified and evaluated strictly within the caller's own realm:
  * <ul>
  *   <li><strong>Opaque refresh token</strong> (parses via {@link RefreshTokenCodec}) — active iff its
  *       family is visible in the caller's realm, not revoked, not expired, and the presented secret
@@ -65,11 +67,11 @@ public final class IntrospectService implements IntrospectUseCase {
             throw new IllegalArgumentException("command must not be null");
         }
         // Authenticate the caller within its own realm, at the same cost whatever the outcome;
-        // unknown client or failed secret both collapse to invalid_client, the endpoint's only
-        // surfaced failure.
+        // an unknown client, a public client and a failed secret all collapse to invalid_client,
+        // the endpoint's only surfaced failure.
         return clients.findByClientId(command.realm(), command.clientId())
                 .flatMap(client -> ClientAuthentication.authenticate(secretVerifier, command.realm(),
-                                command.clientId(), client, command.clientSecret(), true)
+                                command.clientId(), client, command.clientSecret(), false)
                         .flatMap(ok -> ok ? classify(command) : authFailed()));
     }
 

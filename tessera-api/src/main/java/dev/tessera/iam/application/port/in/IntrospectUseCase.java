@@ -6,8 +6,8 @@ import io.smallrye.mutiny.Uni;
 /**
  * Inbound port for the token-introspection endpoint ({@code POST /introspect}, RFC 7662).
  *
- * <p>A client (typically a protected resource) authenticates and asks the server whether a token is
- * currently valid. Tessera introspects two token kinds within the caller's own realm:
+ * <p>A confidential client (typically a protected resource) authenticates and asks the server whether
+ * a token is currently valid. A public client cannot introspect (RFC 7662 §4). Tessera introspects two token kinds within the caller's own realm:
  * <ul>
  *   <li>a <strong>JWT access token</strong> — active iff its EdDSA signature verifies against a
  *       published key of the caller's realm and it has not expired;</li>
@@ -43,7 +43,7 @@ public interface IntrospectUseCase {
      *                      server classifies the token itself and may ignore the hint
      * @param clientId      the wire {@code client_id} of the authenticating caller (never {@code null}
      *                      or blank)
-     * @param clientSecret  the presented secret for a confidential caller, or {@code null} for a public one
+     * @param clientSecret  the presented secret, or {@code null} when none was presented (which fails)
      */
     record IntrospectCommand(
             RealmKey realm,
