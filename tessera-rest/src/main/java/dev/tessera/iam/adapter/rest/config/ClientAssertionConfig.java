@@ -6,7 +6,10 @@ import io.smallrye.config.WithDefault;
 import java.time.Duration;
 import java.util.Map;
 
-/** Limits on the JWT client assertions (RFC 7523) accepted at {@code /token}. */
+/**
+ * Limits on the JWT client assertions (RFC 7523) accepted at {@code /token}, {@code /introspect}
+ * and {@code /revoke}.
+ */
 @ConfigMapping(prefix = "iam.client-assertion")
 public interface ClientAssertionConfig {
 
@@ -22,24 +25,39 @@ public interface ClientAssertionConfig {
     Duration clockSkew();
 
     /**
-     * How many live spent {@code jti}s this instance remembers for one client. A client at the cap
-     * has its own new assertions refused, never another client's. The default allows a sustained
-     * three assertions a second for the default maximum lifetime.
+     * How many live spent {@code jti}s this instance remembers for one client at {@code /token}. A
+     * client at the cap has its own new assertions there refused, never another client's. The
+     * default allows a sustained three assertions a second for the default maximum lifetime.
      */
     @WithDefault("1000")
     int replayCacheMaxEntriesPerClient();
 
     /**
-     * How many live spent {@code jti}s this instance remembers for one realm, across its clients. A
-     * realm at the cap has its own new assertions refused, never another realm's.
+     * How many live spent {@code jti}s this instance remembers for one client at {@code /introspect}
+     * and {@code /revoke}, a budget apart from {@code /token}'s: a resource server that introspects
+     * by assertion spends one {@code jti} per call, at a rate its own callers drive, and at this cap
+     * is refused at those two endpoints only, never at {@code /token}. The {@code jti}s are one
+     * namespace all the same: an assertion spent at any of the three endpoints is refused at the
+     * others. The per-realm and total caps apply to this budget separately, so the store holds at
+     * most twice {@link #replayCacheMaxEntries()}. At most {@link #replayCacheMaxEntriesPerRealm()}.
+     * Such a resource server should cache introspection results rather than introspect every
+     * request.
+     */
+    @WithDefault("1000")
+    int introspectionReplayCacheMaxEntriesPerClient();
+
+    /**
+     * How many live spent {@code jti}s this instance remembers for one realm, across its clients, in
+     * each of the two budgets ({@code /token}; {@code /introspect} and {@code /revoke}). A realm at
+     * the cap has its own new assertions in that budget refused, never another realm's.
      */
     @WithDefault("10000")
     int replayCacheMaxEntriesPerRealm();
 
     /**
-     * How many live spent {@code jti}s this instance remembers in total, across realms: it bounds
-     * the memory the store can take. When it is reached, a new assertion is refused rather than
-     * accepted without replay protection.
+     * How many live spent {@code jti}s this instance remembers in total, across realms, in each of
+     * the two budgets: twice this bounds the memory the store can take. When it is reached, a new
+     * assertion in that budget is refused rather than accepted without replay protection.
      */
     @WithDefault("100000")
     int replayCacheMaxEntries();

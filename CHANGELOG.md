@@ -49,6 +49,13 @@ Accumulating toward the first release, `26.1.0 "Andromeda"`.
   is refused at the others. An assertion together with a secret is `400 invalid_request`
   (RFC 6749 §2.3). Revocation still acts only on the refresh families issued to the authenticating
   client (RFC 7009 §2.1).
+  `/introspect` and `/revoke` spend their `jti`s against a replay budget of their own,
+  `iam.client-assertion.introspection-replay-cache-max-entries-per-client` (default `1000` per
+  client, like `/token`'s `replay-cache-max-entries-per-client`; the per-realm and total caps apply
+  to each budget apart), so introspection load, which a resource server's own callers drive, can
+  fill only that budget and never refuses the same client at `/token`. A resource server that
+  authenticates by assertion spends one `jti` per introspection call and should cache
+  introspection results rather than introspect every request.
 
 ### Security
 - Fail-closed startup: a production deployment refuses the well-known development master key.

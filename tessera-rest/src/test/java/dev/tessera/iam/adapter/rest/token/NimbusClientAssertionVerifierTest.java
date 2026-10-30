@@ -17,6 +17,7 @@ import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.PlainJWT;
 import com.nimbusds.jwt.SignedJWT;
 import dev.tessera.iam.adapter.rest.support.AssertionTestClient;
+import dev.tessera.iam.application.port.out.ClientAssertionVerifierPort.ReplayBudget;
 import dev.tessera.iam.application.port.out.ClientKeySourcePort.AssertionTrust;
 import dev.tessera.iam.domain.tenancy.BaselineId;
 import dev.tessera.iam.domain.tenancy.RealmKey;
@@ -117,6 +118,83 @@ class NimbusClientAssertionVerifierTest {
                 .as("a fresh client of the full realm").isFalse();
         assertThat(capped.verifyNow(otherRealm, trustFor("client-9"), signedBy("client-9"), NOW))
                 .as("a client of another realm").isTrue();
+    }
+
+    private static NimbusClientAssertionVerifier verifier(int maxPerClient, int maxPerClientIntrospection,
+            int maxPerRealm, int maxTotal) {
+        return new NimbusClientAssertionVerifier(null, null, ISSUER, Duration.ofMinutes(5), Duration.ofSeconds(30),
+                new AssertionReplayStore(maxPerClient, maxPerClientIntrospection, maxPerRealm, maxTotal), null);
+    }
+
+    private static final ReplayBudget TOKEN = ReplayBudget.TOKEN;
+    private static final ReplayBudget INTROSPECTION = ReplayBudget.INTROSPECTION_AND_REVOCATION;
+
+    @Test
+    @DisplayName("a jti spent at /token is refused at /introspect and /revoke, and one spent there is refused at /token")
+    void oneJtiNamespaceAcrossBudgets() {
+        NimbusClientAssertionVerifier store = verifier(10, 10, 100, 100);
+        String tokenFirst = signed(c -> c.jwtID("token-first"));
+        assertThat(store.verifyNow(REALM, trust, tokenFirst, TOKEN, NOW)).isTrue();
+        assertThat(store.verifyNow(REALM, trust, tokenFirst, INTROSPECTION, NOW)).as("then at /introspect").isFalse();
+
+        String introspectionFirst = signed(c -> c.jwtID("introspection-first"));
+        assertThat(store.verifyNow(REALM, trust, introspectionFirst, INTROSPECTION, NOW)).isTrue();
+        assertThat(store.verifyNow(REALM, trust, introspectionFirst, TOKEN, NOW)).as("then at /token").isFalse();
+        assertThat(store.verifyNow(REALM, trust, introspectionFirst, INTROSPECTION, NOW)).as("again").isFalse();
+    }
+
+    @Test
+    @DisplayName("a client whose introspection budget is full is still served at /token")
+    void fullIntrospectionBudgetDoesNotBlockToken() {
+        NimbusClientAssertionVerifier store = verifier(2, 3, 100, 100);
+        for (int i = 0; i < 3; i++) {
+            assertThat(store.verifyNow(REALM, trust, signed(c -> c), INTROSPECTION, NOW)).as("fill " + i).isTrue();
+        }
+        assertThat(store.verifyNow(REALM, trust, signed(c -> c), INTROSPECTION, NOW))
+                .as("introspection, over its cap").isFalse();
+        assertThat(store.verifyNow(REALM, trust, signed(c -> c), TOKEN, NOW)).as("/token, first").isTrue();
+        assertThat(store.verifyNow(REALM, trust, signed(c -> c), TOKEN, NOW)).as("/token, second").isTrue();
+    }
+
+    @Test
+    @DisplayName("each budget fails closed at its own cap, per client, per realm and in total")
+    void eachBudgetFailsClosedAtItsCap() {
+        NimbusClientAssertionVerifier perClient = verifier(1, 2, 100, 100);
+        assertThat(perClient.verifyNow(REALM, trust, signed(c -> c), TOKEN, NOW)).isTrue();
+        assertThat(perClient.verifyNow(REALM, trust, signed(c -> c), TOKEN, NOW)).as("/token over 1").isFalse();
+        assertThat(perClient.verifyNow(REALM, trust, signed(c -> c), INTROSPECTION, NOW)).isTrue();
+        assertThat(perClient.verifyNow(REALM, trust, signed(c -> c), INTROSPECTION, NOW)).isTrue();
+        assertThat(perClient.verifyNow(REALM, trust, signed(c -> c), INTROSPECTION, NOW))
+                .as("introspection over 2").isFalse();
+        Instant later = NOW.plus(Duration.ofMinutes(6));
+        assertThat(perClient.verifyNow(REALM, trust,
+                client.sign(AssertionTestClient.claims(CLIENT, ISSUER, later).build()), INTROSPECTION, later))
+                .as("introspection, after its entries expire").isTrue();
+
+        // A realm's introspection load, spread over many clients, leaves its /token budget whole.
+        NimbusClientAssertionVerifier perRealm = verifier(2, 2, 4, 4);
+        for (int i = 0; i < 4; i++) {
+            String clientId = "client-" + (i / 2);
+            assertThat(perRealm.verifyNow(REALM, trustFor(clientId), signedBy(clientId), INTROSPECTION, NOW))
+                    .as("fill " + i).isTrue();
+        }
+        assertThat(perRealm.verifyNow(REALM, trustFor("client-9"), signedBy("client-9"), INTROSPECTION, NOW))
+                .as("introspection, a fresh client of the full realm").isFalse();
+        for (String clientId : new String[] {"client-0", "client-9"}) {
+            assertThat(perRealm.verifyNow(REALM, trustFor(clientId), signedBy(clientId), TOKEN, NOW))
+                    .as("/token for " + clientId).isTrue();
+        }
+    }
+
+    @Test
+    @DisplayName("an introspection cap of zero, or above the per-realm cap, is refused at startup")
+    void invalidIntrospectionCapFailsAtStartup() {
+        for (int cap : new int[] {0, 11}) {
+            assertThatThrownBy(() -> verifier(1, cap, 10, 100))
+                    .as("introspection cap " + cap)
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("introspection-replay-cache-max-entries-per-client");
+        }
     }
 
     private AssertionTrust trustFor(String clientId) {

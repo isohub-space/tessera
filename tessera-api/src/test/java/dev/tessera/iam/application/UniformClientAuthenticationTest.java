@@ -98,7 +98,7 @@ class UniformClientAuthenticationTest {
     private final ClientKeySourcePort keys = (realm, id) -> {
         throw new AssertionError("the key source runs only for an assertion");
     };
-    private final ClientAssertionVerifierPort assertions = (realm, trust, assertion) -> {
+    private final ClientAssertionVerifierPort assertions = (realm, trust, assertion, budget) -> {
         throw new AssertionError("the assertion verifier runs only for an assertion");
     };
 
